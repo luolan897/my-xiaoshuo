@@ -1809,6 +1809,60 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
   });
 }
 
+function inputToast(message, { title = "请输入", inputLabel = title, placeholder = "", confirmLabel = "确认", cancelLabel = "取消", maxLength = 500 } = {}) {
+  const region = $("#toast-region");
+  const element = document.createElement("section");
+  element.className = "toast toast-confirmation toast-input-dialog";
+  element.setAttribute("role", "alertdialog");
+  element.setAttribute("aria-label", title);
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  const description = document.createElement("p");
+  description.textContent = message;
+  const input = document.createElement("input");
+  input.className = "toast-input";
+  input.type = "text";
+  input.maxLength = maxLength;
+  input.placeholder = placeholder;
+  input.setAttribute("aria-label", inputLabel);
+  const actions = document.createElement("div");
+  actions.className = "toast-confirmation-actions";
+  const cancel = document.createElement("button");
+  cancel.className = "ghost-button";
+  cancel.type = "button";
+  cancel.textContent = cancelLabel;
+  const confirm = document.createElement("button");
+  confirm.className = "primary-button";
+  confirm.type = "button";
+  confirm.textContent = confirmLabel;
+  actions.append(cancel, confirm);
+  element.append(heading, description, input, actions);
+  region.append(element);
+  raiseToastRegion();
+  input.focus();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      element.remove();
+      if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+      resolve(value);
+    };
+    cancel.addEventListener("click", () => finish(null), { once: true });
+    confirm.addEventListener("click", () => finish(input.value.trim()), { once: true });
+    element.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(null);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        finish(input.value.trim());
+      }
+    });
+  });
+}
+
 document.addEventListener("toggle", (event) => {
   const target = event.target;
   if (target instanceof HTMLDialogElement && target.open && $("#toast-region").childElementCount) {
@@ -4157,8 +4211,6 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   $("#setting-editor-category").value = item?.category ?? "世界规则";
   $("#setting-editor-locked").checked = Boolean(item?.locked);
   $("#setting-editor-body").value = item?.content ?? "";
-  $("#setting-change-note").value = "";
-  $("#setting-change-note-field").classList.toggle("hidden", !item);
   $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
   const viewOnly = readOnly || !canEditModule("settings");
   $("#setting-editor-eyebrow").textContent = readOnly ? "阅读设定" : item ? "编辑设定" : "新建设定";
@@ -4225,6 +4277,13 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
         $("#setting-editor-body").focus();
         return;
       }
+      const changeNote = item ? await inputToast("简要说明这次修改，便于以后查看版本历史。可以留空。", {
+        title: "填写版本说明",
+        inputLabel: "版本说明",
+        placeholder: "例如：补充纪元历法限制",
+        confirmLabel: "保存新版本"
+      }) : "";
+      if (changeNote === null) return;
       const locked = form.get("locked") === "on";
       const body = {
         title,
@@ -4232,7 +4291,7 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
         content,
         locked,
         status: locked ? "confirmed" : (item?.status ?? "draft"),
-        ...(item ? { changeNote: String(form.get("changeNote") ?? "").trim() } : {})
+        ...(item ? { changeNote } : {})
       };
       await api(item ? `/api/settings/${item.id}` : `/api/works/${state.work.id}/settings`, { method: item ? "PATCH" : "POST", body });
       await cleanupPendingMarkdownAttachments(body.content);

@@ -23,8 +23,8 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260724-character-pagination-compact');
-    expect(page.text).toContain('/app.js?v=20260724-setting-editor-labels');
+    expect(page.text).toContain('/styles.css?v=20260724-setting-version-note-toast');
+    expect(page.text).toContain('/app.js?v=20260724-setting-version-note-toast');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -49,6 +49,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('{ readOnly: true }');
     expect(page.text).toContain('id="setting-editor-edit"');
     expect(page.text).toContain('<span id="setting-editor-eyebrow" class="eyebrow">新建设定</span>');
+    expect(page.text).not.toContain('id="setting-change-note-field"');
     expect(page.text).toContain('id="character-editor-edit"');
     expect(page.text).toContain('id="knowledge-editor-edit"');
     expect(application.text).toContain('aria-label="角色列表分页"');
@@ -60,6 +61,8 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
     expect(application.text).not.toContain("人工修正");
     expect(application.text).toContain('item ? "编辑设定" : "新建设定"');
+    expect(application.text).toContain('const changeNote = item ? await inputToast(');
+    expect(application.text).toContain('title: "填写版本说明"');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "设定列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "角色列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "种族列表样式")');

@@ -31,6 +31,7 @@ describe("系统 Toast 图层", () => {
 
     expect(application).not.toContain("window.confirm(");
     expect(application).toContain("function confirmToast(message");
+    expect(application).toContain("function inputToast(message");
     expect(application).toContain("async function confirmDiscardChanges(");
     expect(application).toContain('title: "放弃未保存修改"');
     expect(application).toContain('role", "alertdialog"');
@@ -38,6 +39,7 @@ describe("系统 Toast 图层", () => {
     expect(styles).toContain(".toast-region::backdrop { display: none; }");
     expect(styles).toContain("background: var(--toast-bg)");
     expect(styles).toContain(".toast-confirmation");
+    expect(styles).toContain(".toast-input");
     expect(styles).toContain("white-space: pre-line");
   });
 });
