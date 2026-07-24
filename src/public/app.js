@@ -2937,6 +2937,7 @@ function bindRecordPreview(selector, open) {
     });
     card.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
+      if (event.target.closest("button, a, summary")) return;
       event.preventDefault();
       void open(id);
     });

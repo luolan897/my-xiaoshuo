@@ -280,7 +280,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-character-route-lookup');
+    expect(page.text).toContain('/app.js?v=20260725-record-preview-keyboard');
     expect(page.text).toContain('/styles.css?v=20260724-setting-version-note-toast');
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");

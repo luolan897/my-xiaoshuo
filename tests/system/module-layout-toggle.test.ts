@@ -24,7 +24,7 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260724-setting-version-note-toast');
-    expect(page.text).toContain('/app.js?v=20260725-character-route-lookup');
+    expect(page.text).toContain('/app.js?v=20260725-record-preview-keyboard');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -46,6 +46,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('data-open-character="${esc(item.id)}" role="button" tabindex="0"');
     expect(application.text).toContain('data-open-race="${esc(item.id)}" role="button" tabindex="0"');
     expect(application.text).toContain('function bindRecordPreview(selector, open)');
+    expect(application.text).toContain('if (event.target.closest("button, a, summary")) return;');
     expect(application.text).toContain('{ readOnly: true }');
     expect(page.text).toContain('id="setting-editor-edit"');
     expect(page.text).toContain('<span id="setting-editor-eyebrow" class="eyebrow">新建设定</span>');
