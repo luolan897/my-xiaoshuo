@@ -529,6 +529,7 @@ let settingsReturnContext = null;
 let entityEditorType = null;
 let entityEditorDirty = false;
 let entityEditorReadOnly = false;
+let characterListPage = 1;
 let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
@@ -2416,6 +2417,7 @@ function resetWorkScopedUiCaches() {
   state.models = [];
   state.characters = [];
   state.settings = [];
+  characterListPage = 1;
   state.collapsedVolumeIds.clear();
   lastSavedChapterSnapshot = null;
   if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
@@ -2648,7 +2650,7 @@ async function showModule(module) {
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   try {
     if (module === "settings") await renderSettings();
-    if (module === "characters") await renderCharacters();
+    if (module === "characters") await renderCharacters(characterListPage);
     if (module === "races") await renderRaces();
     if (module === "organizations") await renderOrganizations();
     if (module === "timeline") await renderTimeline();
@@ -2914,12 +2916,15 @@ async function renderSettings() {
   bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
 
-async function renderCharacters() {
-  [state.characters, state.races, state.organizations] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/characters`).then((result) => result.items),
+async function renderCharacters(page = characterListPage) {
+  const [characterPage, races, organizations] = await Promise.all([
+    apiPage(`/api/works/${state.work.id}/characters`, page),
     canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
+  if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
+  characterListPage = characterPage.page;
+  [state.characters, state.races, state.organizations] = [characterPage.items, races, organizations];
   const layout = readModuleLayout();
   const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
   const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
@@ -2954,12 +2959,25 @@ async function renderCharacters() {
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
-  const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>` : "";
+  const hasMultipleCharacters = characterPage.page > 1 || characterPage.hasMore || state.characters.length > 1;
+  const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${hasMultipleCharacters ? "" : "disabled"}>AI 角色查重</button></section>` : "";
+  const pagination = state.characters.length
+    ? `<nav class="module-pagination" aria-label="角色列表分页">
+      <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
+      <span>第 ${characterPage.page} 页 · 本页 ${state.characters.length} 个角色</span>
+      <button type="button" data-character-page="${characterPage.nextPage ?? characterPage.page + 1}" ${characterPage.hasMore ? "" : "disabled"}>下一页</button>
+    </nav>`
+    : "";
   if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
   $("#module-content").innerHTML = auditPanel + (state.characters.length
-    ? `${layout === "rows" ? characterRows() : characterCards()}`
+    ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
+  $("#module-content").querySelectorAll("[data-character-page]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    $("#module-content").querySelectorAll("[data-character-page]").forEach((control) => { control.disabled = true; });
+    await renderCharacters(Number(button.dataset.characterPage));
+  }));
   $("#create-character-audit-task")?.addEventListener("click", async () => {
     const button = $("#create-character-audit-task");
     button.disabled = true;
