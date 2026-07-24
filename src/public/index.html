@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260725-review-detail-dialog">
+    <link rel="stylesheet" href="/styles.css?v=20260725-ui-collaboration">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -73,6 +73,13 @@
         <div id="work-meta" class="work-meta">尚未选择作品</div>
         <div class="top-actions">
           <span id="save-state" class="save-state">就绪</span>
+          <div id="presence-control" class="presence-control hidden">
+            <button id="presence-button" class="presence-button" type="button" aria-expanded="false" aria-controls="presence-panel"><span class="presence-status-dot" aria-hidden="true"></span><span id="presence-count">1 人在线</span></button>
+            <section id="presence-panel" class="presence-panel hidden" aria-label="当前作品在线协作者">
+              <header><strong>正在访问这部作品</strong><small>离开后状态会自动过期</small></header>
+              <div id="presence-list" class="presence-list" aria-live="polite"></div>
+            </section>
+          </div>
           <button id="account-button" class="account-button" type="button" aria-haspopup="menu" aria-expanded="false"><span id="account-avatar" class="user-avatar account-avatar" aria-hidden="true"><span class="user-avatar-fallback">作</span></span><span id="account-name">账户</span></button>
           <div id="account-menu" class="account-menu hidden" role="menu">
             <strong id="account-menu-name" class="account-menu-name"><span id="account-menu-display-name">账户</span><span id="account-menu-username" class="account-menu-username">@account</span></strong><small id="account-menu-role">普通用户</small>
@@ -687,6 +694,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260725-enum-labels-zh"></script>
+    <script type="module" src="/app.js?v=20260725-ui-collaboration"></script>
   </body>
 </html>

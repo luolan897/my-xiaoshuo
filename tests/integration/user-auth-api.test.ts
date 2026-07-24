@@ -99,6 +99,41 @@ describe("用户、作品权限与操作者追踪 API", () => {
   });
   afterEach(() => runtime.close());
 
+  it("仅向作品成员展示在线协作者及其受控页面", async () => {
+    const owner = await register(runtime, "presence_owner");
+    const writer = await register(runtime, "presence_writer");
+    const outsider = await register(runtime, "presence_outsider");
+    const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({ title: "协作作品" }).expect(201);
+    const workId = work.body.data.id;
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: writer.user.userId,
+      role: "editor"
+    }).expect(201);
+
+    await outsider.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", outsider.csrfToken).send({
+      clientId: "9c554179-6a29-46d2-82ca-c3c6cb9858a0",
+      page: { kind: "welcome" }
+    }).expect(403);
+    await owner.agent.post(`/api/works/${workId}/presence`).send({
+      clientId: "4c1c2bbb-4e04-431d-a67c-d834d004a55c",
+      page: { kind: "editor", resourceId: "chapter-secret", label: "不应被接收" }
+    }).expect(403);
+
+    await owner.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", owner.csrfToken).send({
+      clientId: "4c1c2bbb-4e04-431d-a67c-d834d004a55c",
+      page: { kind: "editor", resourceId: "chapter-1" }
+    }).expect(200);
+    const active = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "2f38ed97-e31a-4a16-a599-a94b47a65d35",
+      page: { kind: "editor", resourceId: "chapter-1" }
+    }).expect(200);
+
+    expect(active.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: owner.user.userId, displayName: "presence_owner", page: { key: "editor:chapter-1", label: "正文编辑" } }),
+      expect.objectContaining({ userId: writer.user.userId, displayName: "presence_writer", page: { key: "editor:chapter-1", label: "正文编辑" } })
+    ]));
+  });
+
   it("首个用户成为管理员，并完成作品邀请、共同编辑与越权拦截", async () => {
     await request(runtime.app).get("/api/works").expect(401);
     const initialSession = await request(runtime.app).get("/api/auth/session").expect(200);
