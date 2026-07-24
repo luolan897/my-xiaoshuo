@@ -2025,7 +2025,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   }
   .app-shell.shelf-mode .topbar { grid-template-columns: minmax(0, 1fr) auto; }
   .brand-block { min-width: 0; padding: 0; }
-  .app-shell:not(.shelf-mode):not(.left-panel-collapsed) .topbar .brand-block { visibility: hidden; }
+  .app-shell:not(.shelf-mode):not(.left-panel-collapsed) .topbar .brand-block > div { visibility: hidden; }
   .brand-block .brand-mark { width: 30px; height: 30px; }
   .brand-block strong { font-size: 14px; }
   .brand-block small { display: none; }
