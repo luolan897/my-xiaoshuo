@@ -280,10 +280,15 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-ui-markdown-count');
-    expect(page.text).toContain('/styles.css?v=20260725-ui-markdown-count');
+    expect(page.text).toContain('/app.js?v=20260725-ui-dev-auth-bypass-fix4');
+    expect(page.text).toContain('/styles.css?v=20260725-ui-dev-auth-bypass-fix4');
+    expect(page.text).toContain('<body>');
+    expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
+    expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
+    expect(styles.text).toContain(".dev-auth-bypass .auth-view { display: none !important; }");
+    expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");

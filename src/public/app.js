@@ -1767,7 +1767,11 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
-    if (response.status === 401 && !path.startsWith("/api/auth/")) showAuth(false);
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      state.user = null;
+      state.csrfToken = null;
+      showAuth(false);
+    }
     throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
   }
   if (response.status === 204) return null;
@@ -1848,6 +1852,7 @@ async function refreshAuthCaptcha(target = "login") {
 }
 
 function showAuth(setupRequired, registrationOpen = false) {
+  if (state.user) return;
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
   const canRegister = registrationOpen === true;
@@ -1876,6 +1881,7 @@ function applyAuthenticatedUser(session) {
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.documentElement.classList.remove("login-route");
+  if (!session.csrfToken) document.body.classList.remove("auth-pending");
   // 注意：auth-pending 由 initializePage 路由完成后才移除，
   // 避免会话确认后、目标视图渲染前露出无内容的编辑器外壳
 }
@@ -6742,6 +6748,10 @@ window.addEventListener("beforeunload", (event) => { if (state.dirty || entityEd
 
 initializePage().catch((error) => {
   restoringPageRoute = false;
+  if (state.user) {
+    document.body.classList.remove("auth-pending");
+    $("#auth-view").classList.add("hidden");
+  }
   showShelf();
   toast(`系统初始化失败：${error.message}`, "error");
 });

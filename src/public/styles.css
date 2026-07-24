@@ -65,6 +65,9 @@
 }
 
 .auth-pending .app-shell { pointer-events: none; user-select: none; }
+.dev-auth-bypass .auth-view { display: none !important; }
+.dev-auth-bypass .auth-pending .app-shell { pointer-events: auto; user-select: auto; }
+.dev-auth-bypass .auth-loading { display: none !important; }
 .auth-loading { display: none; }
 .auth-pending .auth-loading { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; pointer-events: none; }
 .auth-loading::before { content: ""; width: 32px; height: 32px; border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: auth-loading-spin .8s linear infinite; }
