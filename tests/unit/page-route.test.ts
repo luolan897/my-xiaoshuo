@@ -31,15 +31,15 @@ describe("页面刷新路由", () => {
   });
 
   it("往返保存设定、角色、种族和组织全屏编辑页", () => {
-    const settingHash = serializePageRoute({ view: "entity-editor", workId: "work-1", entity: "setting", entityId: "setting-2" });
-    expect(parsePageRoute(settingHash)).toEqual({ view: "entity-editor", workId: "work-1", entity: "setting", entityId: "setting-2" });
+    const settingHash = serializePageRoute({ view: "entity-editor", workId: "work-1", entity: "setting", entityId: "setting-2", entityMode: "read" });
+    expect(parsePageRoute(settingHash)).toEqual({ view: "entity-editor", workId: "work-1", entity: "setting", entityId: "setting-2", entityMode: "read" });
 
     const characterHash = serializePageRoute({ view: "entity-editor", workId: "work-1", entity: "character" });
-    expect(parsePageRoute(characterHash)).toEqual({ view: "entity-editor", workId: "work-1", entity: "character", entityId: null });
+    expect(parsePageRoute(characterHash)).toEqual({ view: "entity-editor", workId: "work-1", entity: "character", entityId: null, entityMode: "edit" });
 
     for (const entity of ["race", "organization"]) {
       const hash = serializePageRoute({ view: "entity-editor", workId: "work-1", entity });
-      expect(parsePageRoute(hash)).toEqual({ view: "entity-editor", workId: "work-1", entity, entityId: null });
+      expect(parsePageRoute(hash)).toEqual({ view: "entity-editor", workId: "work-1", entity, entityId: null, entityMode: "edit" });
     }
   });
 
