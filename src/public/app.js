@@ -601,6 +601,10 @@ function loadPanelLayout() {
 }
 
 let panelLayout = loadPanelLayout();
+if (window.matchMedia("(max-width: 850px)").matches) {
+  // 手机上默认收起创作助手，避免遮挡正文；用户可通过底部把手随时展开。
+  panelLayout.aiCollapsed = true;
+}
 
 function constrainPanelLayout() {
   const minimumMainWidth = 480;
