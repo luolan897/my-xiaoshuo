@@ -20,7 +20,7 @@ import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-v
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
-import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout, moduleLayoutLabel } from "/module-layout.js?v=20260723-module-layout-toggle";
+import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 
 const state = {
@@ -2843,13 +2843,19 @@ function moduleRowPreview(text, max = 180) {
   return preview.length > max ? `${preview.slice(0, max)}…` : preview;
 }
 
+function moduleLayoutIconMarkup(layout) {
+  if (layout === "rows") {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 6h13M8 12h13M8 18h13"></path><path d="M3 6h.01M3 12h.01M3 18h.01"></path></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>';
+}
+
 function renderModuleLayoutToggle(layout, ariaLabel = "列表样式") {
   return `<div class="module-layout-toolbar" data-module-header-action="layout-toggle">
     <div class="module-layout-toggle" role="group" aria-label="${esc(ariaLabel)}">
-      <button type="button" data-module-layout="cards" aria-pressed="${layout === "cards"}">卡片</button>
-      <button type="button" data-module-layout="rows" aria-pressed="${layout === "rows"}">列表</button>
+      <button type="button" data-module-layout="cards" aria-label="卡片视图" title="卡片视图" aria-pressed="${layout === "cards"}">${moduleLayoutIconMarkup("cards")}</button>
+      <button type="button" data-module-layout="rows" aria-label="列表视图" title="列表视图" aria-pressed="${layout === "rows"}">${moduleLayoutIconMarkup("rows")}</button>
     </div>
-    <span class="module-layout-hint">当前：${esc(moduleLayoutLabel(layout))}</span>
   </div>`;
 }
 

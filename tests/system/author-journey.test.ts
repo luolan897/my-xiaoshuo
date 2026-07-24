@@ -278,8 +278,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-module-preview-lines');
-    expect(page.text).toContain('/styles.css?v=20260724-module-preview-lines');
+    expect(page.text).toContain('/app.js?v=20260724-layout-toggle-icons');
+    expect(page.text).toContain('/styles.css?v=20260724-layout-toggle-icons');
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
@@ -461,7 +461,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('-webkit-line-clamp: 12;');
     expect(styles.text).toContain('.module-header-actions > [data-module-header-action] { order: 1; }');
     expect(styles.text).toContain('.module-header-actions > #module-create-button { order: 2; min-height: 36px; }');
-    expect(styles.text).toContain('.settings-layout-toggle button, .module-layout-toggle button { min-height: 34px;');
+    expect(styles.text).toContain('.module-layout-toggle button { display: inline-grid; place-items: center; width: 36px; min-height: 34px;');
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
     expect(page.text).toContain('data-testid="relationship-map-expanded"');
     expect(page.text).toContain('class="relationship-map-floating-close"');

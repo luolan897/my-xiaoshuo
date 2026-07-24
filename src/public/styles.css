@@ -896,9 +896,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
 .record-card small { color: var(--accent); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
 .settings-layout-toolbar, .module-layout-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: 0; }
-.settings-layout-hint, .module-layout-hint { color: var(--muted); font-size: 10px; }
+.settings-layout-hint { color: var(--muted); font-size: 10px; }
 .settings-layout-toggle, .module-layout-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--surface); }
-.settings-layout-toggle button, .module-layout-toggle button { min-height: 34px; padding: 0 12px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; }
+.settings-layout-toggle button { min-height: 34px; padding: 0 12px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; }
+.module-layout-toggle button { display: inline-grid; place-items: center; width: 36px; min-height: 34px; padding: 0; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); }
+.module-layout-toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .settings-layout-toggle button:last-child, .module-layout-toggle button:last-child { border-right: 0; }
 .settings-layout-toggle button:hover, .settings-layout-toggle button:focus-visible,
 .module-layout-toggle button:hover, .module-layout-toggle button:focus-visible { color: var(--ink); background: var(--paper-deep); }

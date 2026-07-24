@@ -23,13 +23,17 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260724-module-preview-lines');
-    expect(page.text).toContain('/app.js?v=20260724-module-preview-lines');
+    expect(page.text).toContain('/styles.css?v=20260724-layout-toggle-icons');
+    expect(page.text).toContain('/app.js?v=20260724-layout-toggle-icons');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
     expect(application.text).toContain('data-module-layout="cards"');
     expect(application.text).toContain('data-module-layout="rows"');
+    expect(application.text).toContain('aria-label="卡片视图" title="卡片视图"');
+    expect(application.text).toContain('aria-label="列表视图" title="列表视图"');
+    expect(application.text).toContain('function moduleLayoutIconMarkup(layout)');
+    expect(application.text).not.toContain('class="module-layout-hint"');
     expect(application.text).toContain('class="card-grid"');
     expect(application.text).toContain('class="module-row-list"');
     expect(application.text).toContain("MODULE_LAYOUT_STORAGE_KEY");
@@ -74,6 +78,7 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain("max-height: 2.9em;");
     expect(styles.text).toContain("white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2;");
     expect(styles.text).toContain(".settings-layout-toggle, .module-layout-toggle");
+    expect(styles.text).toContain(".module-layout-toggle svg { width: 16px; height: 16px;");
     expect(styles.text).toContain(".settings-layout-toolbar, .module-layout-toolbar { display: flex;");
     expect(styles.text).toContain(".module-header-actions { display: flex;");
     expect(styles.text).toContain(".module-pagination { display: flex;");
