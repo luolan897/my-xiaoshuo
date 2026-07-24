@@ -24,7 +24,7 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260724-setting-version-note-toast');
-    expect(page.text).toContain('/app.js?v=20260724-setting-version-note-toast');
+    expect(page.text).toContain('/app.js?v=20260725-character-route-lookup');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -59,6 +59,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
+    expect(application.text).toContain('await api(`/api/characters/${encodeURIComponent(route.entityId)}`)');
     expect(application.text).not.toContain("人工修正");
     expect(application.text).toContain('item ? "编辑设定" : "新建设定"');
     expect(application.text).toContain('const changeNote = item ? await inputToast(');

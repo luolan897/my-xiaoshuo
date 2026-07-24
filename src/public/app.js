@@ -2060,7 +2060,11 @@ async function initializePage() {
     if (route.view === "module") return;
     if (route.view === "entity-editor") {
       const records = route.entity === "setting" ? state.settings : route.entity === "character" ? state.characters : route.entity === "race" ? state.races : state.organizations;
-      const item = route.entityId ? records.find((record) => record.id === route.entityId) : null;
+      const item = route.entityId
+        ? route.entity === "character"
+          ? await api(`/api/characters/${encodeURIComponent(route.entityId)}`)
+          : records.find((record) => record.id === route.entityId)
+        : null;
       if (route.entityId && !item) {
         toast(({ setting: "未找到要编辑的设定", character: "未找到要编辑的角色", race: "未找到要编辑的种族", organization: "未找到要编辑的组织" }[route.entity] ?? "未找到要编辑的档案"), "error");
         return;
