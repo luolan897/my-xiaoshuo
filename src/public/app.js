@@ -2249,6 +2249,7 @@ async function initializePage() {
 
     if (route.view === "editor") {
       if (route.chapterId && state.chapter?.id !== route.chapterId) await selectChapter(route.chapterId);
+      if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);
       return;
     }
     if (route.view === "module") return;

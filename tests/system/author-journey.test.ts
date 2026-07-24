@@ -280,8 +280,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-ui-chapter-count-bg');
-    expect(page.text).toContain('/styles.css?v=20260725-ui-chapter-count-bg');
+    expect(page.text).toContain('/app.js?v=20260725-ui-editor-route-fix');
+    expect(page.text).toContain('/styles.css?v=20260725-ui-editor-route-fix');
+    expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
     expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
