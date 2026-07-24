@@ -2028,7 +2028,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .brand-block strong { font-size: 14px; }
   .brand-block small { display: none; }
   .mobile-module-tab { position: fixed; z-index: 32; top: 132px; right: 0; display: grid; width: 34px; height: 42px; padding: 0; place-items: center; border: 1px solid var(--line); border-right: 0; border-radius: 5px 0 0 5px; background: var(--surface-soft); color: var(--accent-dark); font-size: 10px; writing-mode: vertical-rl; }
-  .mobile-module-tab[aria-expanded="true"] { right: auto; left: min(300px, 84vw); border-right: 1px solid var(--line); border-left: 0; border-radius: 0 5px 5px 0; }
   .work-meta {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -2055,20 +2054,20 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
     z-index: 31;
     top: 0;
     bottom: 0;
-    left: 0;
+    right: 0;
     width: min(300px, 84vw);
     grid-column: auto;
     grid-row: auto;
     min-width: 0;
     padding: 76px var(--mobile-gutter) 18px;
-    border-right: 0;
+    border-left: 1px solid var(--line);
     border-bottom: 1px solid var(--line);
-    box-shadow: 12px 0 36px rgba(36, 30, 24, .2);
+    box-shadow: -12px 0 36px rgba(36, 30, 24, .2);
     overflow-y: auto;
     transform: translateX(0);
     transition: transform .2s ease;
   }
-  .app-shell.left-panel-collapsed .left-panel { padding: 76px var(--mobile-gutter) 18px; transform: translateX(-100%); }
+  .app-shell.left-panel-collapsed .left-panel { padding: 76px var(--mobile-gutter) 18px; transform: translateX(100%); }
   .app-shell.left-panel-collapsed .left-panel > :not(.left-actions) { display: block; }
   .app-shell.left-panel-collapsed .left-panel > .module-nav { display: grid; }
   .left-panel > .panel-resize-handle { display: none; }
@@ -2137,8 +2136,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .welcome-grid { grid-template-columns: 1fr; margin-top: 34px; }
 
   .editor-toolbar { padding: 18px var(--mobile-gutter) 14px; }
-  .editor-actions { position: fixed; z-index: 34; right: auto; bottom: 18px; left: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: min(300px, 84vw); max-width: none; gap: 6px; padding: 10px; border: 1px solid var(--line); border-left: 0; border-radius: 0 6px 6px 0; background: var(--panel); box-shadow: 12px 0 36px rgba(36, 30, 24, .2); transform: translateX(0); transition: transform .2s ease; }
-  .app-shell.left-panel-collapsed .editor-actions { transform: translateX(-100%); pointer-events: none; }
+  .editor-actions { position: fixed; z-index: 34; right: 0; bottom: 18px; left: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: min(300px, 84vw); max-width: none; gap: 6px; padding: 10px; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 6px; background: var(--panel); box-shadow: -12px 0 36px rgba(36, 30, 24, .2); transform: translateX(0); transition: transform .2s ease; }
+  .app-shell.left-panel-collapsed .editor-actions { transform: translateX(100%); pointer-events: none; }
   .editor-actions .chapter-stats { grid-column: 1 / -1; }
   .editor-actions > button { min-width: 0; min-height: 36px; padding-inline: 8px; font-size: 11px; }
   .chapter-title { font-size: 23px; }
