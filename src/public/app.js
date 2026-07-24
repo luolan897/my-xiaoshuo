@@ -287,6 +287,10 @@ function hasCompletedOnboarding() {
   return state.user?.onboardingCompleted === true;
 }
 
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 850px)").matches;
+}
+
 function persistOnboardingCompletion() {
   if (!state.user || state.user.onboardingCompleted) return;
   state.user = { ...state.user, onboardingCompleted: true };
@@ -409,6 +413,7 @@ function renderOnboardingStep(step, focusTitle = false) {
 }
 
 function openOnboarding(force = false) {
+  if (isMobileViewport()) return;
   const dialog = $("#onboarding-dialog");
   if (!force && hasCompletedOnboarding()) return;
   onboardingSteps = currentOnboardingSteps();
@@ -427,7 +432,7 @@ function completeOnboarding() {
 }
 
 function scheduleFirstUseOnboarding() {
-  if (onboardingAutoScheduled || hasCompletedOnboarding()) return;
+  if (isMobileViewport() || onboardingAutoScheduled || hasCompletedOnboarding()) return;
   onboardingAutoScheduled = true;
   window.requestAnimationFrame(() => {
     onboardingAutoScheduled = false;
@@ -6490,7 +6495,11 @@ $("#ai-panel-toggle").addEventListener("click", () => {
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
-window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLineNumbers(); });
+window.addEventListener("resize", () => {
+  if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
+  applyPanelLayout();
+  scheduleChapterLineNumbers();
+});
 $("#module-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button || button.id === "module-more-button") return;
