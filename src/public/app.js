@@ -85,6 +85,39 @@ function analysisTaskStatusLabel(status) {
   })[String(status)] ?? String(status);
 }
 
+const reviewItemTypeLabels = new Map([
+  ["consistency", "一致性问题"],
+  ["character-duplicate", "角色重复"],
+  ["timeline-conflict", "时间线冲突"],
+  ["setting-conflict", "设定冲突"],
+  ["relationship-conflict", "关系冲突"],
+  ["character-conflict", "角色冲突"],
+  ["plot-hole", "剧情漏洞"],
+  ["low-confidence", "低置信度结论"],
+  ["chronology", "时间顺序问题"],
+  ["factual", "事实问题"]
+]);
+
+function reviewItemTypeLabel(itemType) {
+  const value = String(itemType ?? "");
+  if (reviewItemTypeLabels.has(value)) return reviewItemTypeLabels.get(value);
+  return /^[a-z][a-z0-9_-]*$/iu.test(value) ? "其他审核问题" : value;
+}
+
+function reviewSeverityLabel(severity) {
+  return ({ low: "低", medium: "中", high: "高" })[String(severity)] ?? String(severity);
+}
+
+function reviewStatusLabel(status) {
+  return ({
+    pending: "待处理",
+    ignored: "已忽略",
+    fixing: "处理中",
+    fixed: "已修复",
+    exception: "例外保留"
+  })[String(status)] ?? String(status);
+}
+
 function canEditWork(work = state.work) {
   return WORK_PERMISSION_MODULES.some((item) => canWritePermissionModule(work, item.id));
 }
@@ -2962,7 +2995,7 @@ function openReviewDetailDialog(item) {
     : "<p>未关联资料</p>";
   openDialog("审核详情",
     `<div class="task-detail review-detail">
-      <p><strong>问题类型</strong> ${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</p>
+      <p><strong>问题类型</strong> ${esc(reviewItemTypeLabel(item.itemType))} · ${esc(reviewSeverityLabel(item.severity))} · ${esc(reviewStatusLabel(item.status))}</p>
       <div><strong>问题说明</strong><pre class="task-detail-result">${esc(item.description || "暂无说明")}</pre></div>
       <div><strong>处理建议</strong><pre class="task-detail-result">${esc(item.suggestion || "暂无建议")}</pre></div>
       <div><strong>相关证据</strong>${evidenceHtml}</div>
@@ -3346,11 +3379,11 @@ async function renderReviews() {
     const actions = mergeActions || keepSeparateAction
       ? `<div class="card-actions character-duplicate-actions">${mergeActions}${keepSeparateAction}</div>`
       : "";
-    return `<article class="record-card character-duplicate-review preview-record-card" data-open-review="${esc(item.id)}" role="button" tabindex="0" aria-label="查看审核建议 ${esc(item.title)}"><small>角色查重 · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3><div class="character-duplicate-pair">${sideHtml}</div><p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>${evidenceHtml ? `<ul class="character-duplicate-evidence">${evidenceHtml}</ul>` : ""}${actions}${item.resolutionNote ? `<p class="review-resolution-note">处理结果：${esc(item.resolutionNote)}</p>` : ""}</article>`;
+    return `<article class="record-card character-duplicate-review preview-record-card" data-open-review="${esc(item.id)}" role="button" tabindex="0" aria-label="查看审核建议 ${esc(item.title)}"><small>角色查重 · ${esc(reviewSeverityLabel(item.severity))} · ${esc(reviewStatusLabel(item.status))}</small><h3>${esc(item.title)}</h3><div class="character-duplicate-pair">${sideHtml}</div><p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>${evidenceHtml ? `<ul class="character-duplicate-evidence">${evidenceHtml}</ul>` : ""}${actions}${item.resolutionNote ? `<p class="review-resolution-note">处理结果：${esc(item.resolutionNote)}</p>` : ""}</article>`;
   };
   const layout = readModuleLayout();
   const reviewCard = (item) => item.itemType === "character-duplicate" ? duplicateCard(item) : `
-    <article class="record-card preview-record-card" data-open-review="${esc(item.id)}" role="button" tabindex="0" aria-label="查看审核建议 ${esc(item.title)}"><small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3>
+    <article class="record-card preview-record-card" data-open-review="${esc(item.id)}" role="button" tabindex="0" aria-label="查看审核建议 ${esc(item.title)}"><small>${esc(reviewItemTypeLabel(item.itemType))} · ${esc(reviewSeverityLabel(item.severity))} · ${esc(reviewStatusLabel(item.status))}</small><h3>${esc(item.title)}</h3>
     <p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>
     ${item.status === "pending" && canResolveReview ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`;
   const reviewRow = (item) => {
@@ -3360,7 +3393,7 @@ async function renderReviews() {
     const preview = moduleRowPreview(`${item.description || ""}${item.suggestion ? ` 建议：${item.suggestion}` : ""}`);
     return `
     <article class="record-card module-row preview-record-card" data-open-review="${esc(item.id)}" role="button" tabindex="0" aria-label="查看审核建议 ${esc(item.title)}">
-      <small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small>
+      <small>${esc(reviewItemTypeLabel(item.itemType))} · ${esc(reviewSeverityLabel(item.severity))} · ${esc(reviewStatusLabel(item.status))}</small>
       <h3>${esc(item.title)}</h3>
       <p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
       <div class="card-actions">${item.status === "pending" && canResolveReview ? `<button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button>` : ""}</div>

@@ -24,7 +24,8 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260725-review-detail-dialog');
-    expect(page.text).toContain('/app.js?v=20260725-review-detail-dialog');
+    expect(page.text).toContain('/app.js?v=20260725-review-labels-zh');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-review-labels-zh"></script>');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -54,6 +55,11 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('bindRecordPreview("[data-open-review]"');
     expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
     expect(application.text).toContain('hideCancel: true');
+    expect(application.text).toContain('function reviewItemTypeLabel(itemType)');
+    expect(application.text).toContain('function reviewSeverityLabel(severity)');
+    expect(application.text).toContain('function reviewStatusLabel(status)');
+    expect(application.text).toContain('["consistency", "一致性问题"]');
+    expect(application.text).toContain('pending: "待处理"');
     expect(application.text).toContain('if (event.target.closest("button, a, summary")) return;');
     expect(application.text).toContain('{ readOnly: true }');
     expect(page.text).toContain('id="setting-editor-edit"');
