@@ -13,7 +13,25 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
-import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
+import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260725-enum-labels-zh";
+import {
+  chapterVersionSourceLabel,
+  characterVisibilityLabel,
+  foreshadowStatusLabel,
+  levelLabel,
+  occurrenceRoleLabel,
+  outlineStatusLabel,
+  providerConnectionLabel,
+  providerStatusLabel,
+  relationshipCategoryLabel,
+  relationshipConfirmationLabel,
+  reviewItemTypeLabel,
+  reviewStatusLabel,
+  searchResultTypeLabel,
+  settingStatusLabel,
+  taskScopeLabel,
+  timelineStatusLabel
+} from "/display-labels.js?v=20260725-enum-labels-zh";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -70,7 +88,7 @@ const analysisTaskTypeLabels = new Map([
 ]);
 
 function analysisTaskTypeLabel(taskType) {
-  return analysisTaskTypeLabels.get(String(taskType)) ?? String(taskType);
+  return analysisTaskTypeLabels.get(String(taskType)) ?? "其他分析";
 }
 
 function analysisTaskStatusLabel(status) {
@@ -82,40 +100,11 @@ function analysisTaskStatusLabel(status) {
     partial: "部分失败",
     expired: "已过期",
     cancelled: "已取消"
-  })[String(status)] ?? String(status);
-}
-
-const reviewItemTypeLabels = new Map([
-  ["consistency", "一致性问题"],
-  ["character-duplicate", "角色重复"],
-  ["timeline-conflict", "时间线冲突"],
-  ["setting-conflict", "设定冲突"],
-  ["relationship-conflict", "关系冲突"],
-  ["character-conflict", "角色冲突"],
-  ["plot-hole", "剧情漏洞"],
-  ["low-confidence", "低置信度结论"],
-  ["chronology", "时间顺序问题"],
-  ["factual", "事实问题"]
-]);
-
-function reviewItemTypeLabel(itemType) {
-  const value = String(itemType ?? "");
-  if (reviewItemTypeLabels.has(value)) return reviewItemTypeLabels.get(value);
-  return /^[a-z][a-z0-9_-]*$/iu.test(value) ? "其他审核问题" : value;
+  })[String(status)] ?? "未知状态";
 }
 
 function reviewSeverityLabel(severity) {
-  return ({ low: "低", medium: "中", high: "高" })[String(severity)] ?? String(severity);
-}
-
-function reviewStatusLabel(status) {
-  return ({
-    pending: "待处理",
-    ignored: "已忽略",
-    fixing: "处理中",
-    fixed: "已修复",
-    exception: "例外保留"
-  })[String(status)] ?? String(status);
+  return levelLabel(severity);
 }
 
 function canEditWork(work = state.work) {
@@ -2326,14 +2315,6 @@ async function openMembersDialog(targetWork = state.work) {
   } catch (error) { $("#members-dialog").close(); toast(error.message, "error"); }
 }
 
-const searchResultTypeLabels = {
-  chapter: "章节",
-  setting: "设定",
-  character: "角色",
-  race: "种族",
-  organization: "组织"
-};
-
 async function openSearchDialog() {
   if (!state.work) {
     toast("请先打开一部作品", "error");
@@ -2358,7 +2339,7 @@ function renderSearchResults(results) {
   }
   $("#search-results").innerHTML = results.map((item) => `
     <button type="button" class="search-result" data-search-type="${esc(item.type)}" data-search-id="${esc(item.id)}">
-      <div class="search-result-meta"><span>${esc(searchResultTypeLabels[item.type] ?? item.type)}</span><strong>${esc(item.title)}</strong></div>
+      <div class="search-result-meta"><span>${esc(searchResultTypeLabel(item.type))}</span><strong>${esc(item.title)}</strong></div>
       <p>${esc(item.snippet || "无摘要")}</p>
     </button>`).join("");
   $("#search-results").querySelectorAll(".search-result").forEach((button) => {
@@ -3020,7 +3001,7 @@ function settingRecordActions(item) {
 
 function renderSettingCards(records) {
   return `<div class="card-grid">${records.map((item) => `
-    <article class="record-card preview-record-card" data-open-setting="${esc(item.id)}" role="button" tabindex="0" aria-label="查看设定 ${esc(item.title)}"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
+    <article class="record-card preview-record-card" data-open-setting="${esc(item.id)}" role="button" tabindex="0" aria-label="查看设定 ${esc(item.title)}"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(settingStatusLabel(item.status))}</small>
     <h3>${esc(item.title)}</h3><div class="record-markdown-preview message-body">${renderMarkdown(item.content) || '<p class="markdown-editor-empty">暂无正文</p>'}</div>
     <div class="card-actions">${settingRecordActions(item)}</div></article>`).join("")}</div>`;
 }
@@ -3029,7 +3010,7 @@ function renderSettingRows(records) {
   return `<div class="module-row-list">${records.map((item) => {
     const preview = moduleRowPreview(item.content);
     return `
-    <article class="record-card module-row preview-record-card" data-open-setting="${esc(item.id)}" role="button" tabindex="0" aria-label="查看设定 ${esc(item.title)}"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
+    <article class="record-card module-row preview-record-card" data-open-setting="${esc(item.id)}" role="button" tabindex="0" aria-label="查看设定 ${esc(item.title)}"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(settingStatusLabel(item.status))}</small>
     <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
     <div class="card-actions">${settingRecordActions(item)}</div></article>`;
   }).join("")}</div>`;
@@ -3063,7 +3044,7 @@ async function renderCharacters(page = characterListPage) {
   const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}<small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
+    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}<small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(characterVisibilityLabel(item.visibility))}</small>
     <h3>${esc(item.name)}</h3>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     ${item.aliases.length ? `<div class="character-aliases">${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
@@ -3086,7 +3067,7 @@ async function renderCharacters(page = characterListPage) {
     const line = meta ? `${meta} · ${preview}` : preview;
     return `
     <article class="record-card module-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
-      <small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
+      <small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(characterVisibilityLabel(item.visibility))}</small>
       <h3>${esc(item.name)}</h3>
       <p class="module-row-preview" title="${esc(line)}">${esc(line)}</p>
       <div class="card-actions">${characterActions(item)}</div>
@@ -3246,7 +3227,7 @@ async function renderTimeline() {
   $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button><button id="timeline-multi-select-toggle" class="ghost-button" type="button" aria-pressed="false">多选</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button" hidden>合并所选事件</button>' : ""}</div>`);
   state.timelineTracks = tracks;
   const lanes = [...tracks, { id: "", name: "未分组时间轴", description: "尚未归入独立大事件的时间节点。", sortOrder: Number.MAX_SAFE_INTEGER }];
-  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
+  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(timelineStatusLabel(item.status))}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
   $("#module-content").innerHTML = `<div class="timeline-kanban" data-testid="timeline-kanban">${lanes.map((track) => {
     const laneEvents = events.filter((item) => (item.trackId ?? "") === track.id);
     return `<section class="timeline-lane" data-track-id="${esc(track.id)}"><header><div><small>${laneEvents.length} 个节点</small><h3>${esc(track.name)}</h3></div>${track.id ? `<div class="timeline-track-actions"><button class="timeline-track-menu" data-edit-timeline-track="${esc(track.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(track.id)}" data-entity-title="${esc(track.name)}" type="button">历史</button></div>` : ""}</header><p class="timeline-track-description">${esc(track.description || "暂无说明")}</p><div class="timeline-lane-events">${laneEvents.map(eventCard).join("") || '<div class="timeline-lane-empty">还没有时间节点</div>'}</div><button class="timeline-add-event" data-add-event-track="${esc(track.id)}" type="button">添加事件</button></section>`;
@@ -3287,19 +3268,19 @@ async function renderOutlines() {
   const foreshadowActions = (item) => `<button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button><button data-entity-history="foreshadow" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button>`;
   const foreshadowCards = () => `<div class="card-grid foreshadow-grid">${foreshadows.map((item) => `
     <article class="record-card foreshadow-card ${item.overdue ? "is-overdue" : ""}">
-      <small>${esc(item.importance)} · ${esc(item.status)}${item.overdue ? " · 已逾期" : ""}</small>
+      <small>${esc(levelLabel(item.importance))} · ${esc(foreshadowStatusLabel(item.status))}${item.overdue ? " · 已逾期" : ""}</small>
       <h3>${esc(item.title)}</h3><p>${esc(item.description || "暂无说明")}</p>
-      <div class="foreshadow-links">${item.occurrences.length ? item.occurrences.map((link) => `<span class="pill">${esc({ setup: "埋设", reminder: "提醒", payoff: "回收" }[link.role] ?? link.role)} · ${esc(link.volumeTitle)} / ${esc(link.chapterTitle)}</span>`).join("") : '<span class="pill">尚未关联章节</span>'}</div>
+      <div class="foreshadow-links">${item.occurrences.length ? item.occurrences.map((link) => `<span class="pill">${esc(occurrenceRoleLabel(link.role))} · ${esc(link.volumeTitle)} / ${esc(link.chapterTitle)}</span>`).join("") : '<span class="pill">尚未关联章节</span>'}</div>
       <div class="card-actions">${foreshadowActions(item)}</div>
     </article>`).join("")}</div>`;
   const foreshadowRows = () => `<div class="module-row-list">${foreshadows.map((item) => {
     const preview = moduleRowPreview(item.description || "暂无说明");
     const links = item.occurrences.length
-      ? item.occurrences.map((link) => `${({ setup: "埋设", reminder: "提醒", payoff: "回收" }[link.role] ?? link.role)} · ${link.volumeTitle} / ${link.chapterTitle}`).join("；")
+      ? item.occurrences.map((link) => `${occurrenceRoleLabel(link.role)} · ${link.volumeTitle} / ${link.chapterTitle}`).join("；")
       : "尚未关联章节";
     return `
     <article class="record-card module-row foreshadow-card ${item.overdue ? "is-overdue" : ""}">
-      <small>${esc(item.importance)} · ${esc(item.status)}${item.overdue ? " · 已逾期" : ""}</small>
+      <small>${esc(levelLabel(item.importance))} · ${esc(foreshadowStatusLabel(item.status))}${item.overdue ? " · 已逾期" : ""}</small>
       <h3>${esc(item.title)}</h3>
       <p class="module-row-preview" title="${esc(`${preview} · ${links}`)}">${esc(preview)} · ${esc(links)}</p>
       <div class="card-actions">${foreshadowActions(item)}</div>
@@ -3311,7 +3292,7 @@ async function renderOutlines() {
   if (foreshadows.length) mountModuleLayoutToggle(layout, "伏笔列表样式");
   const outlineHtml = outlines.length ? `<div class="outline-list">${outlines.map((item) => `
     <article class="outline-row ${item.status === "completed" ? "is-complete" : ""}">
-      <div><small>${esc(item.volumeTitle)} · ${esc(item.status)}</small><h3>${esc(item.chapterTitle)}</h3></div>
+      <div><small>${esc(item.volumeTitle)} · ${esc(outlineStatusLabel(item.status))}</small><h3>${esc(item.chapterTitle)}</h3></div>
       <div><b>目标</b><p>${esc(item.goal || "未填写")}</p></div>
       <div><b>冲突</b><p>${esc(item.conflict || "未填写")}</p></div>
       <div><b>转折</b><p>${esc(item.turningPoint || "未填写")}</p></div>
@@ -3335,7 +3316,7 @@ async function renderRelationships() {
   state.relationshipGraph = graph;
   $("#module-content").innerHTML = `<div id="relationship-map-host"></div>${relationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${relationships.map((item) => `
     <tr><td>${esc(nameOf(item.fromCharacterId))} ${item.directed ? "→" : "—"} ${esc(nameOf(item.toCharacterId))}</td>
-    <td>${esc(item.category)} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(item.confirmationStatus)}</td><td class="relationship-actions"><button data-edit-relationship="${esc(item.id)}">编辑</button><button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
+    <td>${esc(relationshipCategoryLabel(item.category))} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(relationshipConfirmationLabel(item.confirmationStatus))}</td><td class="relationship-actions"><button data-edit-relationship="${esc(item.id)}">编辑</button><button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
   const openGalaxy = () => {
     state.galaxy?.destroy();
     state.galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, { workId: state.work.id });
@@ -3474,8 +3455,8 @@ async function renderTasks() {
     </section>
     ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
-      <td>${esc(analysisTaskTypeLabel(item.taskType))}<br><small>${esc(item.taskType)}</small></td>
-      <td>${esc(item.scopeSummary || item.scope?.type || "book")}</td>
+      <td>${esc(analysisTaskTypeLabel(item.taskType))}</td>
+      <td>${esc(item.scopeSummary || taskScopeLabel(item.scope?.type || "book"))}</td>
       <td>${esc(analysisTaskStatusLabel(item.status))}</td>
       <td>${Number(item.progress ?? 0)}%</td>
       <td class="task-row-actions">
@@ -3583,7 +3564,7 @@ function openTaskDetailDialog(task) {
   openDialog("任务详情",
     `<div class="task-detail">
       <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code></p>
-      <p><strong>类型</strong> ${esc(analysisTaskTypeLabel(task.taskType))}（${esc(task.taskType)}）</p>
+      <p><strong>类型</strong> ${esc(analysisTaskTypeLabel(task.taskType))}</p>
       <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
       <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
       <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
@@ -3598,11 +3579,11 @@ function openTaskDetailDialog(task) {
 
 function renderProviderCards(providers, models) {
   return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => `
-    <article class="record-card provider-card"><small>平台级 · ${esc(provider.status)} · ${esc(provider.connectionStatus)}</small><h3>${esc(provider.name)}</h3>
-    <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · RPM：${provider.rpmLimit} · max_tokens：${provider.maxTokens ?? 32000}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
-    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · Thinking ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} Token · max_tokens ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
+    <article class="record-card provider-card"><small>平台级 · ${esc(providerStatusLabel(provider.status))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><h3>${esc(provider.name)}</h3>
+    <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit} · 最大输出：${provider.maxTokens ?? 32000}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}">测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
-    : emptyModule("尚未配置 AI 供应商", "添加 OpenAI Chat Completions 兼容地址和密钥，测试成功后再添加模型。");
+    : emptyModule("尚未配置 AI 供应商", "添加 OpenAI 兼容接口地址和密钥，测试成功后再添加模型。");
 }
 
 function bindPlatformProviderActions(host, providers, models) {
@@ -3623,10 +3604,10 @@ function renderTaskDefaults(models, providers, taskDefaults) {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   return models.length ? `<section class="config-section">
-    <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带 max_tokens，默认值为 32000。</p></div></div>
+    <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带最大输出令牌数，默认值为 32000。</p></div></div>
     <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody>${taskTypeLabels.map(([taskType, label]) => {
       const currentModelId = defaultModelByTask.get(taskType) ?? "";
-      return `<tr><td>${esc(label)}<br><small>${esc(taskType)}</small></td><td><select class="default-model-select" data-task-default="${esc(taskType)}">
+      return `<tr><td>${esc(label)}</td><td><select class="default-model-select" data-task-default="${esc(taskType)}">
         <option value="" disabled ${currentModelId ? "" : "selected"}>请选择模型</option>
         ${models.map((model) => {
           const provider = providerById.get(model.providerId);
@@ -4415,14 +4396,6 @@ function setCharacterHistoryVisible(visible) {
   $("#character-history-button").setAttribute("aria-expanded", String(visible));
 }
 
-const relationshipCategoryLabels = {
-  family: "亲属",
-  social: "社交",
-  emotional: "情感",
-  conflict: "冲突",
-  uncertain: "未确定"
-};
-
 function renderCharacterEditorRelationships() {
   const host = $("#character-editor-relationships");
   if (!host) return;
@@ -4440,7 +4413,7 @@ function renderCharacterEditorRelationships() {
     const isSource = relationship.fromCharacterId === characterId;
     const otherCharacterId = isSource ? relationship.toCharacterId : relationship.fromCharacterId;
     const direction = relationship.directed ? (isSource ? "→" : "←") : "↔";
-    const category = relationshipCategoryLabels[relationship.category] ?? relationship.category;
+    const category = relationshipCategoryLabel(relationship.category);
     const relationLabel = [category, relationship.subtype].filter(Boolean).join(" · ") || "未细分";
     const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
     return `<article class="character-relationship-row">
@@ -5449,7 +5422,7 @@ function openTaskDialog() {
 }
 
 function openProviderDialog(item) {
-  openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("baseUrl", "Chat Completions 基础地址", "url", item?.baseUrl ?? "https://api.openai.com/v1") + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限（RPM）", "number", item?.rpmLimit ?? 10) + field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
+  openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("baseUrl", "OpenAI 兼容接口地址", "url", item?.baseUrl ?? "https://api.openai.com/v1") + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10) + field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
     const body = { name: form.get("name"), baseUrl: form.get("baseUrl"), concurrencyLimit: Number(form.get("concurrencyLimit")), rpmLimit: Number(form.get("rpmLimit")), maxTokens: Number(form.get("maxTokens")), note: form.get("note"), status: form.get("enabled") === "on" ? "enabled" : "disabled" };
     if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
     await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
@@ -5461,7 +5434,7 @@ function openProviderDialog(item) {
 function openModelDialog(providerId, item = null) {
   const values = modelFormValues(item);
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow) + temperatureField + field("maxTokens", "默认 max_tokens", "number", values.maxTokens) + field("thinkingEnabled", "开启 Thinking（供应商需支持 thinking 参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow) + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
     const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
@@ -5703,7 +5676,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
   message.className = "assistant-message";
   const applicable = suggestion.action !== "note";
   const guard = suggestion.guard;
-  const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(issue.severity)} · ${esc(issue.type)}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
+  const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
   message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, `基于 v${suggestion.chapterVersion ?? "-"}`))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
   attachMessageHeading(message, "助手建议", createdAt ?? undefined);
   attachAssistantCopyAction(message, suggestion.content);
@@ -5736,7 +5709,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
 async function showVersions() {
   if (!state.chapter) return;
   const versions = await api(`/api/chapters/${state.chapter.id}/versions`);
-  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p>${canEditProse() ? `<button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button>` : ""}</div>`).join("");
+  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(chapterVersionSourceLabel(version.source))} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p>${canEditProse() ? `<button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button>` : ""}</div>`).join("");
   $("#versions-list").querySelectorAll("[data-restore-version]").forEach((button) => button.addEventListener("click", async () => {
     if (!(await confirmToast(
       `将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`,

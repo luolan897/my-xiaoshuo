@@ -280,7 +280,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-review-labels-zh');
+    expect(page.text).toContain('/app.js?v=20260725-enum-labels-zh');
     expect(page.text).toContain('/styles.css?v=20260725-review-detail-dialog');
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
@@ -537,10 +537,12 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".chip-picker { display: flex; flex-wrap: wrap;");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");
-    expect(application.text).toContain('field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000)');
-    expect(application.text).toContain('field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow)');
+    expect(application.text).toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
+    expect(application.text).toContain('field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow)');
     expect(application.text).toContain('Kimi 模型必须设置温度为 1。');
-    expect(application.text).toContain('field("thinkingEnabled", "开启 Thinking（供应商需支持 thinking 参数）", "checkbox", values.thinkingEnabled)');
+    expect(application.text).toContain('field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled)');
+    expect(application.text).toContain("所有请求都会携带最大输出令牌数，默认值为 32000。");
+    expect(application.text).not.toContain("所有请求都会携带 max_tokens");
     expect(modelConfig.text).toContain("contextWindow: model?.contextWindow ?? 128000");
     expect(modelConfig.text).toContain("thinkingEnabled: model?.thinkingEnabled ?? true");
     expect(modelConfig.text).toContain("maxTokens: model?.preset?.max_tokens ?? 32000");
