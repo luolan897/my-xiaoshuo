@@ -604,6 +604,7 @@ let panelLayout = loadPanelLayout();
 if (window.matchMedia("(max-width: 850px)").matches) {
   // 手机上默认收起创作助手，避免遮挡正文；用户可通过底部把手随时展开。
   panelLayout.aiCollapsed = true;
+  panelLayout.leftCollapsed = true;
 }
 
 function constrainPanelLayout() {
@@ -628,6 +629,7 @@ function applyPanelLayout(persist = false) {
   $("#left-panel-toggle").textContent = panelLayout.leftCollapsed ? "›" : "‹";
   $("#left-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
   $("#left-panel-toggle").setAttribute("aria-label", panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏");
+  $("#mobile-module-tab").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
   $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
   $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
@@ -6477,6 +6479,10 @@ $("#left-panel-toggle").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
   applyPanelLayout(true);
 });
+$("#mobile-module-tab").addEventListener("click", () => {
+  panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
+  applyPanelLayout(true);
+});
 $("#ai-panel-toggle").addEventListener("click", () => {
   panelLayout.aiCollapsed = !panelLayout.aiCollapsed;
   applyPanelLayout(true);
@@ -6493,7 +6499,14 @@ $("#module-nav").addEventListener("click", (event) => {
     openWorkSettingsDialog(work);
     return;
   }
-  if (button.dataset.module) showModule(button.dataset.module);
+  if (button.dataset.module) {
+    void showModule(button.dataset.module).finally(() => {
+      if (window.matchMedia("(max-width: 850px)").matches) {
+        panelLayout.leftCollapsed = true;
+        applyPanelLayout(true);
+      }
+    });
+  }
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
