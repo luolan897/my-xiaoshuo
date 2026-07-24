@@ -188,7 +188,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="character-editor-form"');
     expect(page.text).toContain('id="knowledge-editor-form"');
     expect(page.text).toContain('id="character-history-button"');
-    expect(page.text).toContain('id="setting-editor-management"');
+    expect(page.text).not.toContain('id="setting-editor-management"');
+    expect(page.text).toContain('<button id="setting-editor-history" class="ghost-button hidden" type="button">版本历史</button>');
+    expect(page.text).toContain('<button id="setting-editor-delete" class="danger-button hidden" type="button">删除设定</button>');
     expect(page.text).toContain('id="character-merge-button"');
     expect(page.text).toContain('id="character-delete-button"');
     expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(5);
@@ -235,7 +237,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".character-editor-workspace");
     expect(styles.text).toContain(".entity-editor-view");
     expect(styles.text).toContain("#setting-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr);");
-    expect(styles.text).toContain(".setting-editor-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; }");
+    expect(styles.text).toContain(".setting-editor-workspace { display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; overflow: hidden; }");
     expect(styles.text).toContain(".setting-editor-content { height: auto; min-height: 70dvh; padding: 16px; }");
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host { width: 100%; max-width: 960px; justify-self: center; }");
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host.vditor:focus-within");
@@ -278,8 +280,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-layout-toggle-icons');
-    expect(page.text).toContain('/styles.css?v=20260724-layout-toggle-icons');
+    expect(page.text).toContain('/app.js?v=20260724-setting-actions-inline');
+    expect(page.text).toContain('/styles.css?v=20260724-setting-actions-inline');
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");

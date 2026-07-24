@@ -4168,11 +4168,12 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   const editButton = $("#setting-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("settings"));
   editButton.onclick = () => openSettingEditor(item);
-  const management = $("#setting-editor-management");
-  management.classList.toggle("hidden", !item || viewOnly);
+  const showManagementActions = Boolean(item && !viewOnly);
   const statusButtons = [$("#setting-editor-confirm"), $("#setting-editor-deprecate")];
-  $("#setting-editor-confirm").classList.toggle("hidden", item?.status !== "pending");
-  $("#setting-editor-deprecate").classList.toggle("hidden", item?.status !== "pending");
+  $("#setting-editor-confirm").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
+  $("#setting-editor-deprecate").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
+  $("#setting-editor-history").classList.toggle("hidden", !showManagementActions);
+  $("#setting-editor-delete").classList.toggle("hidden", !showManagementActions);
   $("#setting-editor-history").onclick = async () => {
     if (!item) return;
     if (!(await closeEntityEditor())) return;
