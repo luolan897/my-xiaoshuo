@@ -4218,6 +4218,7 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   $("#setting-editor-body").value = item?.content ?? "";
   $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
   const viewOnly = readOnly || !canEditModule("settings");
+  $("#setting-editor-form").classList.toggle("is-read-only", viewOnly);
   $("#setting-editor-eyebrow").textContent = readOnly ? "阅读设定" : item ? "编辑设定" : "新建设定";
   $("#setting-editor-form").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = viewOnly; });
   $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });

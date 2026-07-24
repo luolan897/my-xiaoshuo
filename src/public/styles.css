@@ -1659,6 +1659,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .setting-editor-workspace { display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; overflow: hidden; }
 .setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }
 .setting-markdown-field { display: grid; grid-template-rows: minmax(0, 1fr); height: 100%; min-height: 0; }
+.entity-editor-page.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"], .entity-editor-page.is-read-only .vditor-wysiwyg pre.vditor-reset[contenteditable="false"], .entity-editor-page.is-read-only .vditor-sv[contenteditable="false"] { opacity: 1; cursor: default; }
 .setting-markdown-heading, .markdown-editor-field-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; color: var(--ink); font-size: 14px; }
 .setting-markdown-heading small, .markdown-editor-field-heading small { color: var(--muted); font-size: 10px; }
 .markdown-editor-field { display: grid; gap: 10px; min-width: 0; }

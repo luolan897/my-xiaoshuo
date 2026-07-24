@@ -23,8 +23,8 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260724-setting-version-note-toast');
-    expect(page.text).toContain('/app.js?v=20260725-record-preview-keyboard');
+    expect(page.text).toContain('/styles.css?v=20260725-readonly-editor-contrast');
+    expect(page.text).toContain('/app.js?v=20260725-readonly-editor-contrast');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -92,6 +92,7 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain(".module-header-actions { display: flex;");
     expect(styles.text).toContain(".module-pagination { display: flex;");
     expect(styles.text).toContain(".module-pagination button { min-width: 58px; min-height: 28px;");
+    expect(styles.text).toContain('.entity-editor-page.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"]');
     expect(styles.text).toContain(".card-actions .record-card-edit { padding: 0; }");
     expect(styles.text).toContain("body.work-viewer-mode #timeline-multi-select-toggle");
   });
