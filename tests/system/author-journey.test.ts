@@ -278,8 +278,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-account-menu-identity');
-    expect(page.text).toContain('/styles.css?v=20260724-account-menu-identity');
+    expect(page.text).toContain('/app.js?v=20260724-collaboration-presence');
+    expect(page.text).toContain('/styles.css?v=20260724-collaboration-presence');
+    expect(page.text).toContain('id="presence-button"');
+    expect(page.text).toContain('id="presence-list"');
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
@@ -346,6 +348,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
+    expect(application.text).toContain("多人协作，自动保存已关闭");
+    expect(application.text).toContain("if (automatic) {");
+    expect(application.text).toContain("await refreshPresence();");
     expect(application.text).toContain('source: automatic ? "auto" : "manual"');
     expect(markdown.text).toContain("export function renderMarkdown");
     expect(markdown.text).toContain("safeLinkTarget");

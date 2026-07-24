@@ -312,7 +312,24 @@ button { cursor: pointer; }
 .brand-block strong { font-size: 16px; letter-spacing: .16em; }
 .brand-block small { color: var(--muted); font-size: 10px; margin-top: 2px; }
 .work-meta { font-size: 13px; color: var(--muted); padding-left: 26px; }
-.top-actions { display: flex; justify-content: flex-end; gap: 10px; align-items: center; padding-right: 18px; }
+.top-actions { position: relative; display: flex; justify-content: flex-end; gap: 10px; align-items: center; padding-right: 18px; }
+.presence-control { position: relative; }
+.presence-button { display: flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 18px; background: transparent; color: var(--muted); font-size: 11px; }
+.presence-button:hover, .presence-button:focus-visible, .presence-button[aria-expanded="true"] { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); outline: none; }
+.presence-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 16%, transparent); }
+.presence-panel { position: absolute; top: calc(100% + 10px); right: 0; z-index: 12; width: min(340px, calc(100vw - 24px)); padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); box-shadow: 0 14px 38px rgba(36, 30, 24, .16); }
+.presence-panel > header { display: grid; gap: 3px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.presence-panel > header strong { font-size: 12px; }
+.presence-panel > header small { color: var(--muted); font-size: 10px; }
+.presence-list { display: grid; gap: 5px; padding-top: 8px; }
+.presence-person { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 7px; border-radius: 4px; }
+.presence-person.is-same-page { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.presence-person .user-avatar { width: 30px; height: 30px; }
+.presence-person-copy { min-width: 0; }
+.presence-person-copy strong, .presence-person-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.presence-person-copy strong { font-size: 11px; }
+.presence-person-copy small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.presence-same-page { color: var(--accent-dark); font-size: 9px; white-space: nowrap; }
 .theme-toggle, .settings-button, .topbar-icon-button {
   display: grid;
   flex: 0 0 34px;

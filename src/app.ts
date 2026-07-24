@@ -27,6 +27,7 @@ import { accountReference, logger, sanitizeError } from "./logger.js";
 import { runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
 import { fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
+import { CollaborationPresence, presencePageKinds } from "./collaboration-presence.js";
 import {
   clearSessionCookie,
   createCliApiScopeMiddleware,
@@ -98,6 +99,16 @@ const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), ne
 });
 const changeNoteSchema = z.string().trim().max(500).optional();
 const expectedVersionNoSchema = z.coerce.number().int().positive().optional();
+const presenceHeartbeatSchema = z.object({
+  clientId: z.string().uuid(),
+  page: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal(presencePageKinds[0]) }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[1]), resourceId: identifier }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["settings", "characters", "races", "organizations", "timeline", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[3]), module: z.enum(["setting", "character", "race", "organization"]), resourceId: identifier.optional() }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[4]) }).strict()
+  ])
+}).strict();
 
 function validateImportedText(text: string): string {
   if (text.length > maximumImportedTextLength) throw new AppError(413, "IMPORT_TEXT_TOO_LARGE", "导入文件解压后的文本超过 2000 万字符限制");
@@ -496,6 +507,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   );
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
+  const collaborationPresence = new CollaborationPresence();
   const getDevelopmentUser = (): AuthUser | null => options.devAuthBypass
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
@@ -717,6 +729,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.getWorkDirectoryPage(request.params.workId, pagination) : store.getWorkDirectory(request.params.workId));
+  });
+  app.post("/api/works/:workId/presence", (request, response) => {
+    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话上报协作状态");
+    const input = parse(presenceHeartbeatSchema, request.body);
+    data(response, collaborationPresence.heartbeat(request.params.workId, input.clientId, {
+      userId: request.authUser.userId,
+      username: request.authUser.username,
+      displayName: request.authUser.displayName,
+      avatarUrl: request.authUser.avatarUrl
+    }, input.page));
   });
   app.get("/api/works/:workId/members", (request, response) => {
     const pagination = parsePagination(request.query);

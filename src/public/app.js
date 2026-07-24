@@ -53,6 +53,23 @@ const state = {
   contextChapterId: null
 };
 
+function createPresenceClientId() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const value = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+
+const presenceClientId = createPresenceClientId();
+const presenceHeartbeatInterval = 12_000;
+let presenceParticipants = [];
+let presenceHeartbeatTimer = null;
+let presenceHeartbeatQueued = null;
+let presenceHeartbeatRequest = 0;
+let collaborationAutoSaveDisabled = false;
+
 let timelineMultiSelectEnabled = false;
 
 const chapterTypes = ["正文", "设定", "作者的话", "其他"];
@@ -409,6 +426,127 @@ function replacePageRoute(route) {
   if (restoringPageRoute) return;
   const hash = serializePageRoute(route);
   if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
+  schedulePresenceHeartbeat();
+}
+
+function presencePageForRoute(route = currentPageRoute()) {
+  if (!state.work || route.view === "shelf" || route.view === "platform-ai") return null;
+  if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
+  if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
+  if (route.view === "module") return { kind: "module", module: route.module };
+  if (route.view === "settings" || route.view === "platform-ai") return { kind: "settings" };
+  return { kind: "welcome" };
+}
+
+function presencePageKey(page) {
+  if (!page) return "";
+  if (page.kind === "editor") return `editor:${page.resourceId ?? ""}`;
+  if (page.kind === "entity-editor") return `entity-editor:${page.module ?? ""}:${page.resourceId ?? ""}`;
+  if (page.kind === "module") return `module:${page.module ?? ""}`;
+  return page.kind;
+}
+
+function groupedPresenceParticipants() {
+  const groups = new Map();
+  for (const participant of presenceParticipants) {
+    const current = groups.get(participant.userId) ?? { ...participant, pages: [], clientIds: [] };
+    if (!current.pages.some((page) => page.key === participant.page.key)) current.pages.push(participant.page);
+    current.clientIds.push(participant.clientId);
+    groups.set(participant.userId, current);
+  }
+  return [...groups.values()];
+}
+
+function hasOtherCollaborators() {
+  return presenceParticipants.some((participant) => participant.userId !== state.user?.userId);
+}
+
+function syncChapterAutoSaveWithPresence() {
+  const wasDisabled = collaborationAutoSaveDisabled;
+  collaborationAutoSaveDisabled = hasOtherCollaborators();
+  if (collaborationAutoSaveDisabled) {
+    cancelChapterAutoSave();
+    if (state.chapter && canEditProse()) {
+      setSaveState(state.dirty ? "多人协作，自动保存已关闭" : "自动保存已关闭", state.dirty);
+    }
+    return;
+  }
+  if (wasDisabled && state.dirty && state.chapter && canEditProse()) scheduleChapterAutoSave(250);
+}
+
+function renderPresence() {
+  const control = $("#presence-control");
+  if (!state.work || !presenceParticipants.length) {
+    syncChapterAutoSaveWithPresence();
+    control.classList.add("hidden");
+    $("#presence-panel").classList.add("hidden");
+    $("#presence-button").setAttribute("aria-expanded", "false");
+    return;
+  }
+  const groups = groupedPresenceParticipants();
+  const localKey = presencePageKey(presencePageForRoute());
+  syncChapterAutoSaveWithPresence();
+  control.classList.remove("hidden");
+  $("#presence-count").textContent = `${groups.length} 人在线`;
+  $("#presence-list").innerHTML = groups.map((participant) => {
+    const isCurrent = participant.userId === state.user?.userId;
+    const samePage = !isCurrent && participant.pages.some((page) => page.key === localKey);
+    const pageLabels = participant.pages.map((page) => page.label).join("、");
+    const avatar = participant.avatarUrl
+      ? `<span class="user-avatar"><span class="user-avatar-fallback">${esc(Array.from(participant.displayName || participant.username)[0] ?? "作")}</span><img src="${esc(participant.avatarUrl)}" alt=""></span>`
+      : `<span class="user-avatar"><span class="user-avatar-fallback">${esc(Array.from(participant.displayName || participant.username)[0] ?? "作")}</span></span>`;
+    return `<div class="presence-person${samePage ? " is-same-page" : ""}">${avatar}<div class="presence-person-copy"><strong>${esc(participant.displayName)}${isCurrent ? "（你）" : ""}</strong><small>${esc(pageLabels)}</small></div>${samePage ? '<span class="presence-same-page">同一页面</span>' : ""}</div>`;
+  }).join("");
+}
+
+async function refreshPresence() {
+  const requestId = ++presenceHeartbeatRequest;
+  if (presenceHeartbeatTimer !== null) clearTimeout(presenceHeartbeatTimer);
+  presenceHeartbeatTimer = null;
+  const workId = state.work?.id;
+  const page = presencePageForRoute();
+  if (!workId || !page || !state.user) {
+    presenceParticipants = [];
+    renderPresence();
+    return [];
+  }
+  try {
+    const participants = await api(`/api/works/${encodeURIComponent(workId)}/presence`, {
+      method: "POST",
+      body: { clientId: presenceClientId, page },
+      skipOptimisticVersion: true
+    });
+    if (state.work?.id === workId && presenceHeartbeatRequest === requestId) {
+      presenceParticipants = participants;
+      renderPresence();
+    }
+  } catch {
+    if (state.work?.id === workId) renderPresence();
+  } finally {
+    if (state.work?.id === workId && presenceHeartbeatRequest === requestId) presenceHeartbeatTimer = setTimeout(refreshPresence, presenceHeartbeatInterval);
+  }
+  return presenceParticipants;
+}
+
+function schedulePresenceHeartbeat() {
+  if (presenceHeartbeatQueued !== null) clearTimeout(presenceHeartbeatQueued);
+  presenceHeartbeatQueued = setTimeout(() => {
+    presenceHeartbeatQueued = null;
+    void refreshPresence();
+  }, 80);
+}
+
+async function confirmConcurrentSave() {
+  await refreshPresence();
+  const localKey = presencePageKey(presencePageForRoute());
+  const peers = presenceParticipants.filter((participant) => participant.clientId !== presenceClientId && participant.page.key === localKey);
+  if (!peers.length) return true;
+  const names = [...new Set(peers.map((participant) => participant.displayName))];
+  return confirmToast(`${names.join("、")}也停留在这个编辑页面。当前项目尚未适配多人同时编辑，继续保存可能覆盖对方的修改。`, {
+    title: "检测到同页协作",
+    confirmLabel: "仍然保存",
+    cancelLabel: "暂不保存"
+  });
 }
 
 function currentPageRoute() {
@@ -520,6 +658,7 @@ let chapterLineDrag = null;
 let chapterWhitespaceVisible = true;
 let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
+let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
 let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
@@ -1587,7 +1726,7 @@ function attachOptimisticVersion(path, method, body) {
 
 async function api(path, options = {}) {
   const method = String(options.method ?? "GET").toUpperCase();
-  const body = attachOptimisticVersion(path, method, options.body);
+  const body = options.skipOptimisticVersion ? options.body : attachOptimisticVersion(path, method, options.body);
   const headers = { ...(options.headers ?? {}) };
   if (state.csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)) headers["X-CSRF-Token"] = state.csrfToken;
   if (!(body instanceof FormData)) headers["Content-Type"] = "application/json";
@@ -1839,6 +1978,10 @@ function cancelChapterAutoSave() {
 function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
   if (!state.chapter || !canEditProse()) return;
   cancelChapterAutoSave();
+  if (collaborationAutoSaveDisabled) {
+    setSaveState("多人协作，自动保存已关闭", true);
+    return;
+  }
   setSaveState("等待自动保存", true);
   chapterAutoSaveTimer = setTimeout(() => {
     chapterAutoSaveTimer = null;
@@ -1853,11 +1996,22 @@ async function persistChapter({ automatic = false } = {}) {
     return null;
   }
   cancelChapterAutoSave();
+  if (automatic) {
+    await refreshPresence();
+    if (collaborationAutoSaveDisabled) {
+      setSaveState("多人协作，自动保存已关闭", true);
+      return null;
+    }
+  }
   if (chapterSaveInFlight) {
     await chapterSaveInFlight;
     const pendingDraft = chapterDraftSnapshot();
     if (!sameChapterSnapshot(pendingDraft, lastSavedChapterSnapshot)) return persistChapter({ automatic });
     return state.chapter;
+  }
+  if (chapterSaveGuardInFlight) {
+    await chapterSaveGuardInFlight;
+    return persistChapter({ automatic });
   }
   const draft = chapterDraftSnapshot();
   if (!draft?.title) {
@@ -1871,8 +2025,16 @@ async function persistChapter({ automatic = false } = {}) {
     scheduleChapterLineNumbers();
   }
   if (sameChapterSnapshot(draft, lastSavedChapterSnapshot)) {
-    setSaveState(automatic ? "已自动保存" : "已保存");
+    setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
     return state.chapter;
+  }
+  const saveGuard = confirmConcurrentSave();
+  chapterSaveGuardInFlight = saveGuard;
+  const confirmed = await saveGuard;
+  if (chapterSaveGuardInFlight === saveGuard) chapterSaveGuardInFlight = null;
+  if (!confirmed) {
+    setSaveState("检测到同页协作，未保存", true);
+    return null;
   }
   setSaveState(automatic ? "自动保存中" : "保存中", true);
   const workId = state.work.id;
@@ -1895,7 +2057,7 @@ async function persistChapter({ automatic = false } = {}) {
     updateChapterStats();
     const currentDraft = chapterDraftSnapshot();
     if (sameChapterSnapshot(currentDraft, draft)) {
-      setSaveState(automatic ? "已自动保存" : "已保存");
+      setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
       if (!automatic) toast(`正文已保存为 v${state.chapter.versionNo}`);
     } else {
       scheduleChapterAutoSave(250);
@@ -4192,6 +4354,7 @@ function openSettingEditor(item = null) {
         status: locked ? "confirmed" : (item?.status ?? "draft"),
         ...(item ? { changeNote: String(form.get("changeNote") ?? "").trim() } : {})
       };
+      if (!(await confirmConcurrentSave())) return;
       await api(item ? `/api/settings/${item.id}` : `/api/works/${state.work.id}/settings`, { method: item ? "PATCH" : "POST", body });
       await cleanupPendingMarkdownAttachments(body.content);
       entityEditorDirty = false;
@@ -4632,6 +4795,10 @@ async function openCharacterSectionEditor(section = null) {
     button.disabled = true;
     const contentMarkdown = characterSectionVditor?.getValue() ?? "";
     try {
+      if (!(await confirmConcurrentSave())) {
+        button.disabled = false;
+        return;
+      }
       const saved = await api(section ? `/api/character-sections/${section.id}` : `/api/characters/${characterEditorItem.id}/sections`, {
         method: section ? "PATCH" : "POST",
         body: {
@@ -4966,6 +5133,7 @@ async function openCharacterEditor(item = null) {
       const wasEditing = Boolean(characterEditorItem);
       const previousVersion = characterEditorItem?.versionNo;
       if (!wasEditing) delete body.changeNote;
+      if (!(await confirmConcurrentSave())) return;
       const saved = await api(wasEditing ? `/api/characters/${characterEditorItem.id}` : `/api/works/${state.work.id}/characters`, { method: wasEditing ? "PATCH" : "POST", body });
       entityEditorDirty = false;
       await loadAiReferences();
@@ -5108,6 +5276,7 @@ async function openKnowledgeEditor(kind, item) {
         : { name, description: data.get("description"), settingsMarkdown, settingsSections };
       if (canReadModule("characters")) body.memberIds = data.getAll("memberIds").map(String);
       const wasEditing = Boolean(knowledgeEditorItem);
+      if (!(await confirmConcurrentSave())) return;
       await api(wasEditing ? `/api/${module}/${knowledgeEditorItem.id}` : `/api/works/${state.work.id}/${module}`, { method: wasEditing ? "PATCH" : "POST", body });
       await cleanupPendingMarkdownAttachments(settingsMarkdown);
       entityEditorDirty = false;
@@ -5956,6 +6125,11 @@ $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch(
 $("#user-management-button").addEventListener("click", openUsersDialog);
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
+$("#presence-button").addEventListener("click", () => {
+  const panel = $("#presence-panel");
+  const open = panel.classList.toggle("hidden") === false;
+  $("#presence-button").setAttribute("aria-expanded", String(open));
+});
 $("#users-dialog-close").addEventListener("click", () => $("#users-dialog").close());
 $("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
@@ -6270,6 +6444,10 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
     $("#account-menu").classList.add("hidden");
     $("#account-button").setAttribute("aria-expanded", "false");
+  }
+  if (!event.target.closest("#presence-control")) {
+    $("#presence-panel").classList.add("hidden");
+    $("#presence-button").setAttribute("aria-expanded", "false");
   }
 });
 document.addEventListener("keydown", (event) => {
