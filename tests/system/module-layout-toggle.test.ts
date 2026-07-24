@@ -23,13 +23,14 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-checkbox-controls');
+    expect(page.text).toContain('/styles.css?v=20260725-checkbox-label-alignment');
     expect(page.text).toContain('/app.js?v=20260725-readonly-editor-contrast');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
     expect(styles.text).toContain('input[type="checkbox"] {');
     expect(styles.text).toContain('input[type="checkbox"]:checked::before');
+    expect(styles.text).toContain('.setting-editor-lock span { display: inline-flex; align-items: center; min-height: 16px; line-height: 16px; }');
     expect(application.text).toContain('data-module-layout="cards"');
     expect(application.text).toContain('data-module-layout="rows"');
     expect(application.text).toContain('aria-label="卡片视图" title="卡片视图"');

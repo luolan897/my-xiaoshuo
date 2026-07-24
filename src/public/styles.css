@@ -1692,8 +1692,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .setting-editor-header-fields select { min-width: 0; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; }
 .setting-editor-lock { display: inline-flex; grid-template-columns: none; align-items: center; gap: 6px; padding: 0; border: 0; background: transparent; white-space: nowrap; }
 .setting-editor-lock input { width: 16px; margin: 0; }
-.setting-editor-lock span { display: block; }
-.setting-editor-lock b { color: var(--ink); font-size: 10px; }
+.setting-editor-lock span { display: inline-flex; align-items: center; min-height: 16px; line-height: 16px; }
+.setting-editor-lock b { display: block; color: var(--ink); font-size: 10px; line-height: 16px; }
 .setting-editor-lock small { display: none; }
 .setting-editor-workspace { display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; overflow: hidden; }
 .setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }
