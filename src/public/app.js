@@ -2967,7 +2967,7 @@ async function renderCharacters(page = characterListPage) {
   }).join("")}</div>`;
   const hasMultipleCharacters = characterPage.page > 1 || characterPage.hasMore || state.characters.length > 1;
   const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${hasMultipleCharacters ? "" : "disabled"}>AI 角色查重</button></section>` : "";
-  const pagination = state.characters.length
+  const pagination = state.characters.length && (characterPage.page > 1 || characterPage.hasMore)
     ? `<nav class="module-pagination" aria-label="角色列表分页">
       <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
       <span>第 ${characterPage.page} 页 · 本页 ${state.characters.length} 个角色</span>
