@@ -929,6 +929,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-duplicate-actions { flex-wrap: wrap; }
 .card-actions { display: flex; gap: 6px; margin-top: 15px; }
 .card-actions button { border: 1px solid var(--line); background: transparent; border-radius: 3px; font-size: 10px; padding: 5px 8px; }
+.card-actions .record-card-edit { padding: 0; }
 .danger-button { border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line)); border-radius: 4px; background: transparent; color: var(--accent-dark); padding: 8px 13px; font-size: 12px; }
 .danger-button:hover, .danger-button:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); outline: none; }
 .card-actions .danger-button { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); color: var(--accent-dark); }
