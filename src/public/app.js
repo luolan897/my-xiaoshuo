@@ -4152,7 +4152,7 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   destroyVditorEditor(settingEditorVditor);
   settingEditorVditor = null;
   settingEditorItem = item;
-  $("#setting-editor-eyebrow").textContent = item ? "人工修正" : "作者事实";
+  $("#setting-editor-eyebrow").textContent = item ? "编辑设定" : "新建设定";
   $("#setting-editor-name").value = item?.title ?? "";
   $("#setting-editor-category").value = item?.category ?? "世界规则";
   $("#setting-editor-locked").checked = Boolean(item?.locked);
@@ -4161,7 +4161,7 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   $("#setting-change-note-field").classList.toggle("hidden", !item);
   $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
   const viewOnly = readOnly || !canEditModule("settings");
-  $("#setting-editor-eyebrow").textContent = readOnly ? "阅读设定" : item ? "人工修正" : "作者事实";
+  $("#setting-editor-eyebrow").textContent = readOnly ? "阅读设定" : item ? "编辑设定" : "新建设定";
   $("#setting-editor-form").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = viewOnly; });
   $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });
   $("#setting-editor-submit").classList.toggle("hidden", viewOnly);
