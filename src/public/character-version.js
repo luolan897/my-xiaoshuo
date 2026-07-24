@@ -29,5 +29,5 @@ export function characterVersionSourceLabel(source) {
     race: "种族变更",
     organization: "组织变更",
     migration: "历史基线"
-  })[String(source)] ?? String(source || "未知来源");
+  })[String(source)] ?? "其他来源";
 }

@@ -1,0 +1,16 @@
+export function settingStatusLabel(value: unknown): string;
+export function characterVisibilityLabel(value: unknown): string;
+export function timelineStatusLabel(value: unknown): string;
+export function levelLabel(value: unknown): string;
+export function foreshadowStatusLabel(value: unknown): string;
+export function outlineStatusLabel(value: unknown): string;
+export function relationshipCategoryLabel(value: unknown): string;
+export function relationshipConfirmationLabel(value: unknown): string;
+export function reviewItemTypeLabel(value: unknown): string;
+export function reviewStatusLabel(value: unknown): string;
+export function taskScopeLabel(value: unknown): string;
+export function providerStatusLabel(value: unknown): string;
+export function providerConnectionLabel(value: unknown): string;
+export function chapterVersionSourceLabel(value: unknown): string;
+export function occurrenceRoleLabel(value: unknown): string;
+export function searchResultTypeLabel(value: unknown): string;
