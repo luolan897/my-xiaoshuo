@@ -23,8 +23,8 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260724-account-menu-identity');
-    expect(page.text).toContain('/app.js?v=20260724-account-menu-identity');
+    expect(page.text).toContain('/styles.css?v=20260724-record-reading-mode');
+    expect(page.text).toContain('/app.js?v=20260724-record-reading-mode');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -38,6 +38,14 @@ describe("知识模块布局切换", () => {
     const characterCardsSource = application.text.slice(characterCardsStart, characterRowsStart);
     expect(characterCardsSource).toContain('recordCardEditButton("edit-character", item.id');
     expect(characterCardsSource).not.toContain('<div class="card-actions">${characterActions(item)}</div>');
+    expect(application.text).toContain('data-open-setting="${esc(item.id)}" role="button" tabindex="0"');
+    expect(application.text).toContain('data-open-character="${esc(item.id)}" role="button" tabindex="0"');
+    expect(application.text).toContain('data-open-race="${esc(item.id)}" role="button" tabindex="0"');
+    expect(application.text).toContain('function bindRecordPreview(selector, open)');
+    expect(application.text).toContain('{ readOnly: true }');
+    expect(page.text).toContain('id="setting-editor-edit"');
+    expect(page.text).toContain('id="character-editor-edit"');
+    expect(page.text).toContain('id="knowledge-editor-edit"');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "设定列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "角色列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "种族列表样式")');

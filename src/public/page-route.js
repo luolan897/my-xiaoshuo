@@ -47,6 +47,7 @@ export function serializePageRoute(route = {}) {
     params.set("work", workId);
     params.set("entity", route.entity);
     if (route.entityId) params.set("id", String(route.entityId));
+    if (route.entityMode === "read") params.set("mode", "read");
   } else if (view === "welcome" && workId) {
     params.set("view", "welcome");
     params.set("work", workId);
@@ -80,7 +81,8 @@ export function parsePageRoute(hash = "") {
     const entity = value(params, "entity");
     if (!entityEditorSet.has(entity)) return { view: "shelf" };
     const entityId = value(params, "id");
-    return { view, workId, entity, entityId: entityId || null };
+    const entityMode = value(params, "mode") === "read" ? "read" : "edit";
+    return { view, workId, entity, entityId: entityId || null, entityMode };
   }
   if (view === "welcome" && workId) return { view, workId };
   if (view === "settings" || view === "platform-ai") {

@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260724-account-menu-identity">
+    <link rel="stylesheet" href="/styles.css?v=20260724-record-reading-mode">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -375,7 +375,10 @@
               <label id="setting-change-note-field" class="setting-editor-change-note">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
             </div>
           </div>
-          <button id="setting-editor-submit" class="primary-button" type="submit">保存设定</button>
+          <div class="entity-editor-mode-actions">
+            <button id="setting-editor-edit" class="ghost-button hidden" type="button">编辑设定</button>
+            <button id="setting-editor-submit" class="primary-button" type="submit">保存设定</button>
+          </div>
         </header>
         <div class="setting-editor-workspace">
           <section id="setting-editor-management" class="entity-editor-management hidden" aria-label="设定档案操作">
@@ -399,6 +402,7 @@
             <div class="character-editor-title-row"><h1 id="character-editor-title">新建角色</h1><span id="character-editor-version" class="character-version-badge">新档案</span></div>
           </div>
           <div class="character-editor-header-actions">
+            <button id="character-editor-edit" class="primary-button hidden" type="button">编辑角色</button>
             <button id="character-history-button" class="ghost-button" type="button" aria-controls="character-history-panel" aria-expanded="false">版本历史</button>
             <button id="character-merge-button" class="ghost-button hidden" type="button">合并角色</button>
             <button id="character-delete-button" class="danger-button hidden" type="button">删除角色</button>
@@ -433,6 +437,7 @@
           </div>
           <div class="character-editor-header-actions">
             <span id="knowledge-editor-header-note" class="knowledge-editor-header-note">独立资料页</span>
+            <button id="knowledge-editor-edit" class="primary-button hidden" type="button">编辑档案</button>
             <button id="knowledge-editor-history" class="ghost-button hidden" type="button">版本历史</button>
             <button id="knowledge-editor-merge" class="ghost-button hidden" type="button">合并档案</button>
             <button id="knowledge-editor-delete" class="danger-button hidden" type="button">删除档案</button>
@@ -683,6 +688,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260724-account-menu-identity"></script>
+    <script type="module" src="/app.js?v=20260724-record-reading-mode"></script>
   </body>
 </html>
