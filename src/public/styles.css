@@ -970,6 +970,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-row-path { display: block; margin-top: 2px; color: var(--accent); font-family: var(--font-latin), monospace; font-size: 11px; font-weight: 500; }
 .module-row-span { grid-column: 1 / -1; }
 .setting-row .card-actions, .module-row .card-actions { margin-top: 0; flex-wrap: wrap; justify-content: flex-end; }
+.module-row .card-actions > .record-card-edit { position: static; }
 .character-card { cursor: pointer; }
 .character-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .character-audit-panel { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 15px 17px; border: 1px solid var(--line); background: var(--surface-soft); }
