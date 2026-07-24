@@ -23,8 +23,8 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-checkbox-label-alignment');
-    expect(page.text).toContain('/app.js?v=20260725-readonly-editor-contrast');
+    expect(page.text).toContain('/styles.css?v=20260725-review-detail-dialog');
+    expect(page.text).toContain('/app.js?v=20260725-review-detail-dialog');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -49,6 +49,11 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('data-open-character="${esc(item.id)}" role="button" tabindex="0"');
     expect(application.text).toContain('data-open-race="${esc(item.id)}" role="button" tabindex="0"');
     expect(application.text).toContain('function bindRecordPreview(selector, open)');
+    expect(application.text).toContain('function openReviewDetailDialog(item)');
+    expect(application.text).toContain('data-open-review="${esc(item.id)}" role="button" tabindex="0"');
+    expect(application.text).toContain('bindRecordPreview("[data-open-review]"');
+    expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
+    expect(application.text).toContain('hideCancel: true');
     expect(application.text).toContain('if (event.target.closest("button, a, summary")) return;');
     expect(application.text).toContain('{ readOnly: true }');
     expect(page.text).toContain('id="setting-editor-edit"');

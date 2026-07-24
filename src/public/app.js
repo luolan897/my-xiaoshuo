@@ -2931,7 +2931,7 @@ function bindModuleLayoutToggle(refresh) {
 
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
-    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace;
+    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openReview;
     card.addEventListener("click", (event) => {
       if (!event.target.closest("button, a, summary")) void open(id);
     });
@@ -2942,6 +2942,41 @@ function bindRecordPreview(selector, open) {
       void open(id);
     });
   });
+}
+
+function openReviewDetailDialog(item) {
+  if (!item) return;
+  const evidence = Array.isArray(item.evidence) ? item.evidence : [];
+  const entityRefs = Array.isArray(item.entityRefs) ? item.entityRefs : [];
+  const evidenceHtml = evidence.length
+    ? `<ul>${evidence.map((entry) => {
+      if (!entry || typeof entry !== "object") return `<li>${esc(String(entry))}</li>`;
+      const source = entry.chapterTitle || entry.chapterId || "相关证据";
+      const quote = entry.quote ? `<blockquote>${esc(entry.quote)}</blockquote>` : "";
+      const supports = entry.supports ? `<small>${esc(entry.supports)}</small>` : "";
+      return `<li><strong>${esc(source)}</strong>${quote}${supports}</li>`;
+    }).join("")}</ul>`
+    : "<p>暂无证据</p>";
+  const entityRefsHtml = entityRefs.length
+    ? `<ul>${entityRefs.map((reference) => `<li><code>${esc(JSON.stringify(reference))}</code></li>`).join("")}</ul>`
+    : "<p>未关联资料</p>";
+  openDialog("审核详情",
+    `<div class="task-detail review-detail">
+      <p><strong>问题类型</strong> ${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</p>
+      <div><strong>问题说明</strong><pre class="task-detail-result">${esc(item.description || "暂无说明")}</pre></div>
+      <div><strong>处理建议</strong><pre class="task-detail-result">${esc(item.suggestion || "暂无建议")}</pre></div>
+      <div><strong>相关证据</strong>${evidenceHtml}</div>
+      <div><strong>关联资料</strong>${entityRefsHtml}</div>
+      ${item.resolutionNote ? `<div><strong>处理结果</strong><pre class="task-detail-result">${esc(item.resolutionNote)}</pre></div>` : ""}
+    </div>`,
+    async () => undefined,
+    "审核建议",
+    {
+      submitLabel: "关闭",
+      wide: true,
+      hideCancel: true,
+      meta: `创建于 ${formatDateTime(item.createdAt)} · 更新于 ${formatDateTime(item.updatedAt)}`
+    });
 }
 
 function settingRecordActions(item) {
@@ -3311,11 +3346,11 @@ async function renderReviews() {
     const actions = mergeActions || keepSeparateAction
       ? `<div class="card-actions character-duplicate-actions">${mergeActions}${keepSeparateAction}</div>`
       : "";
-    return `<article class="record-card character-duplicate-review"><small>角色查重 · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3><div class="character-duplicate-pair">${sideHtml}</div><p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>${evidenceHtml ? `<ul class="character-duplicate-evidence">${evidenceHtml}</ul>` : ""}${actions}${item.resolutionNote ? `<p class="review-resolution-note">处理结果：${esc(item.resolutionNote)}</p>` : ""}</article>`;
+    return `<article class="record-card character-duplicate-review preview-record-card" data-open-review="${esc(item.id)}" role="button" tabindex="0" aria-label="查看审核建议 ${esc(item.title)}"><small>角色查重 · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3><div class="character-duplicate-pair">${sideHtml}</div><p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>${evidenceHtml ? `<ul class="character-duplicate-evidence">${evidenceHtml}</ul>` : ""}${actions}${item.resolutionNote ? `<p class="review-resolution-note">处理结果：${esc(item.resolutionNote)}</p>` : ""}</article>`;
   };
   const layout = readModuleLayout();
   const reviewCard = (item) => item.itemType === "character-duplicate" ? duplicateCard(item) : `
-    <article class="record-card"><small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3>
+    <article class="record-card preview-record-card" data-open-review="${esc(item.id)}" role="button" tabindex="0" aria-label="查看审核建议 ${esc(item.title)}"><small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3>
     <p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>
     ${item.status === "pending" && canResolveReview ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`;
   const reviewRow = (item) => {
@@ -3324,7 +3359,7 @@ async function renderReviews() {
     }
     const preview = moduleRowPreview(`${item.description || ""}${item.suggestion ? ` 建议：${item.suggestion}` : ""}`);
     return `
-    <article class="record-card module-row">
+    <article class="record-card module-row preview-record-card" data-open-review="${esc(item.id)}" role="button" tabindex="0" aria-label="查看审核建议 ${esc(item.title)}">
       <small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small>
       <h3>${esc(item.title)}</h3>
       <p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
@@ -3336,6 +3371,7 @@ async function renderReviews() {
     ? `${layout === "rows" ? `<div class="module-row-list">${reviews.map(reviewRow).join("")}</div>` : `<div class="card-grid">${reviews.map(reviewCard).join("")}</div>`}`
     : emptyModule("没有待审核事项", "候选设定、冲突与低置信度结论会集中显示在这里。");
   bindModuleLayoutToggle(renderReviews);
+  bindRecordPreview("[data-open-review]", (id) => openReviewDetailDialog(reviews.find((item) => item.id === id)));
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
     await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
     await renderReviews();
@@ -4029,8 +4065,11 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   void discardPendingMarkdownAttachments();
   $("#dialog-title").textContent = title;
   $("#dialog-eyebrow").textContent = eyebrow;
+  $("#dialog-meta").textContent = options.meta ?? "";
+  $("#dialog-meta").classList.toggle("hidden", !options.meta);
   $("#dialog-fields").innerHTML = fields;
   $("#dialog-submit").textContent = options.submitLabel ?? "保存";
+  $("#dynamic-form .dialog-actions [value='cancel']").classList.toggle("hidden", Boolean(options.hideCancel));
   $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
