@@ -278,8 +278,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-character-pagination');
-    expect(page.text).toContain('/styles.css?v=20260724-character-pagination');
+    expect(page.text).toContain('/app.js?v=20260724-vditor-readonly-ready');
+    expect(page.text).toContain('/styles.css?v=20260724-vditor-readonly-ready');
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
@@ -287,6 +287,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain('在这里完整记录设定内容');
     expect(application.text).not.toContain('支持标题、列表、引用、表格、链接和图片');
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
+    expect(application.text).toContain("if (readOnly) editor?.disabled();");
+    expect(application.text).not.toContain("if (readOnly) editor.disabled();");
     expect(application.text).toContain('/relationship-graph.js?v=20260724-relationship-density');
     expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
     expect(application.text).not.toContain('${item.evidence.length} 条');

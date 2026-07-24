@@ -4459,7 +4459,6 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
   attachmentObserver.observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ["src"] });
   editor.__attachmentObserver = attachmentObserver;
   host.__vditor = editor;
-  if (readOnly) editor.disabled();
   return editor;
 }
 
