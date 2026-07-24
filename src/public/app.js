@@ -4732,10 +4732,12 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     },
     input: (markdown) => {
       normalizeVditorAttachmentImages(editor);
+      updateVditorWordCount(editor, markdown);
       onInput(markdown);
     },
     after: () => {
       normalizeVditorAttachmentImages(editor);
+      updateVditorWordCount(editor, value);
       if (readOnly) editor?.disabled();
     }
   });
@@ -4744,6 +4746,23 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
   editor.__attachmentObserver = attachmentObserver;
   host.__vditor = editor;
   return editor;
+}
+
+function updateVditorWordCount(editor, markdown) {
+  const toolbar = editor?.vditor?.toolbar?.element;
+  if (!toolbar) return;
+  let counter = toolbar.querySelector("[data-markdown-word-count]");
+  if (!counter) {
+    counter = document.createElement("span");
+    counter.className = "markdown-word-count";
+    counter.dataset.markdownWordCount = "true";
+    counter.setAttribute("role", "status");
+    counter.setAttribute("aria-live", "polite");
+    counter.title = "当前 Markdown 正文的字数，不计空白字符";
+    toolbar.append(counter);
+  }
+  const count = Array.from(String(markdown ?? "").replace(/\s/gu, "")).length;
+  counter.textContent = `${count.toLocaleString("zh-CN")} 字`;
 }
 
 function transformVditorPreview(html) {
