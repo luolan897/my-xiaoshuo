@@ -26,7 +26,7 @@ describe("作品工作台按需加载", () => {
     );
 
     expect(showModuleSource).toContain('if (module === "settings") await renderSettings()');
-    expect(showModuleSource).toContain('if (module === "characters") await renderCharacters()');
+    expect(showModuleSource).toContain('if (module === "characters") await renderCharacters(characterListPage)');
     expect(showModuleSource).toContain('if (module === "timeline") await renderTimeline()');
     expect(showModuleSource).toContain('if (module === "relationships") await renderRelationships()');
     expect(application).toContain('$("#ai-prompt").addEventListener("focus"');
