@@ -348,6 +348,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
+    expect(application.text).toContain("多人协作，自动保存已关闭");
+    expect(application.text).toContain("if (automatic) {");
+    expect(application.text).toContain("await refreshPresence();");
     expect(application.text).toContain('source: automatic ? "auto" : "manual"');
     expect(markdown.text).toContain("export function renderMarkdown");
     expect(markdown.text).toContain("safeLinkTarget");

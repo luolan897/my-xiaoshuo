@@ -68,6 +68,7 @@ let presenceParticipants = [];
 let presenceHeartbeatTimer = null;
 let presenceHeartbeatQueued = null;
 let presenceHeartbeatRequest = 0;
+let collaborationAutoSaveDisabled = false;
 
 let timelineMultiSelectEnabled = false;
 
@@ -429,7 +430,7 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work) return null;
+  if (!state.work || route.view === "shelf" || route.view === "platform-ai") return null;
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
   if (route.view === "module") return { kind: "module", module: route.module };
@@ -456,9 +457,27 @@ function groupedPresenceParticipants() {
   return [...groups.values()];
 }
 
+function hasOtherCollaborators() {
+  return presenceParticipants.some((participant) => participant.userId !== state.user?.userId);
+}
+
+function syncChapterAutoSaveWithPresence() {
+  const wasDisabled = collaborationAutoSaveDisabled;
+  collaborationAutoSaveDisabled = hasOtherCollaborators();
+  if (collaborationAutoSaveDisabled) {
+    cancelChapterAutoSave();
+    if (state.chapter && canEditProse()) {
+      setSaveState(state.dirty ? "多人协作，自动保存已关闭" : "自动保存已关闭", state.dirty);
+    }
+    return;
+  }
+  if (wasDisabled && state.dirty && state.chapter && canEditProse()) scheduleChapterAutoSave(250);
+}
+
 function renderPresence() {
   const control = $("#presence-control");
   if (!state.work || !presenceParticipants.length) {
+    syncChapterAutoSaveWithPresence();
     control.classList.add("hidden");
     $("#presence-panel").classList.add("hidden");
     $("#presence-button").setAttribute("aria-expanded", "false");
@@ -466,6 +485,7 @@ function renderPresence() {
   }
   const groups = groupedPresenceParticipants();
   const localKey = presencePageKey(presencePageForRoute());
+  syncChapterAutoSaveWithPresence();
   control.classList.remove("hidden");
   $("#presence-count").textContent = `${groups.length} 人在线`;
   $("#presence-list").innerHTML = groups.map((participant) => {
@@ -1958,6 +1978,10 @@ function cancelChapterAutoSave() {
 function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
   if (!state.chapter || !canEditProse()) return;
   cancelChapterAutoSave();
+  if (collaborationAutoSaveDisabled) {
+    setSaveState("多人协作，自动保存已关闭", true);
+    return;
+  }
   setSaveState("等待自动保存", true);
   chapterAutoSaveTimer = setTimeout(() => {
     chapterAutoSaveTimer = null;
@@ -1972,6 +1996,13 @@ async function persistChapter({ automatic = false } = {}) {
     return null;
   }
   cancelChapterAutoSave();
+  if (automatic) {
+    await refreshPresence();
+    if (collaborationAutoSaveDisabled) {
+      setSaveState("多人协作，自动保存已关闭", true);
+      return null;
+    }
+  }
   if (chapterSaveInFlight) {
     await chapterSaveInFlight;
     const pendingDraft = chapterDraftSnapshot();
@@ -1994,7 +2025,7 @@ async function persistChapter({ automatic = false } = {}) {
     scheduleChapterLineNumbers();
   }
   if (sameChapterSnapshot(draft, lastSavedChapterSnapshot)) {
-    setSaveState(automatic ? "已自动保存" : "已保存");
+    setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
     return state.chapter;
   }
   const saveGuard = confirmConcurrentSave();
@@ -2026,7 +2057,7 @@ async function persistChapter({ automatic = false } = {}) {
     updateChapterStats();
     const currentDraft = chapterDraftSnapshot();
     if (sameChapterSnapshot(currentDraft, draft)) {
-      setSaveState(automatic ? "已自动保存" : "已保存");
+      setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
       if (!automatic) toast(`正文已保存为 v${state.chapter.versionNo}`);
     } else {
       scheduleChapterAutoSave(250);
