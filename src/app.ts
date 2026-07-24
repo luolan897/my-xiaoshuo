@@ -1589,6 +1589,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const authenticated = options.disableUserAuth === true || auth.authenticate(request) !== null;
       let html = readFileSync(join(publicPath, "index.html"), "utf8");
       if (!authenticated) html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="login-route">');
+      if (options.disableUserAuth === true) {
+        html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="dev-auth-bypass">');
+        html = html.replace('<body class="auth-pending">', '<body>');
+        html = html.replace('id="auth-view" class="auth-view"', 'id="auth-view" class="auth-view hidden"');
+      }
       response.setHeader("Cache-Control", "no-store");
       response.type("text/html").send(html);
     };

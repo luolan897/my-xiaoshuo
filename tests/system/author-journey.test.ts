@@ -280,10 +280,16 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-ui-collaboration');
-    expect(page.text).toContain('/styles.css?v=20260725-ui-collaboration');
+    expect(page.text).toContain('/app.js?v=20260725-ui-mobile-drawer-logo');
+    expect(page.text).toContain('/styles.css?v=20260725-ui-mobile-drawer-logo');
+    expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
+    expect(page.text).toContain('<body>');
+    expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
+    expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
+    expect(styles.text).toContain(".dev-auth-bypass .auth-view { display: none !important; }");
+    expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
@@ -463,7 +469,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('selector: "[data-module=\\"tasks\\"]"');
     expect(styles.text).toContain(".module-nav .ai-analysis-entry");
     expect(styles.text).toContain(".module-nav .ai-analysis-entry,\n.module-nav .ai-analysis-entry:hover,\n.module-nav .ai-analysis-entry.active { background: transparent;");
-    expect(styles.text).toContain('.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: 100%; padding: 9px 0 9px 20px;');
+    expect(styles.text).toContain('.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: calc(100% + 6px); padding: 9px 6px 9px 20px;');
     expect(styles.text).toContain('.record-markdown-preview { display: -webkit-box;');
     expect(styles.text).toContain('-webkit-line-clamp: 12;');
     expect(styles.text).toContain('.module-header-actions > [data-module-header-action] { order: 1; }');

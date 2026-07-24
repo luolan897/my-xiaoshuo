@@ -287,6 +287,10 @@ function hasCompletedOnboarding() {
   return state.user?.onboardingCompleted === true;
 }
 
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 850px)").matches;
+}
+
 function persistOnboardingCompletion() {
   if (!state.user || state.user.onboardingCompleted) return;
   state.user = { ...state.user, onboardingCompleted: true };
@@ -409,6 +413,7 @@ function renderOnboardingStep(step, focusTitle = false) {
 }
 
 function openOnboarding(force = false) {
+  if (isMobileViewport()) return;
   const dialog = $("#onboarding-dialog");
   if (!force && hasCompletedOnboarding()) return;
   onboardingSteps = currentOnboardingSteps();
@@ -427,7 +432,7 @@ function completeOnboarding() {
 }
 
 function scheduleFirstUseOnboarding() {
-  if (onboardingAutoScheduled || hasCompletedOnboarding()) return;
+  if (isMobileViewport() || onboardingAutoScheduled || hasCompletedOnboarding()) return;
   onboardingAutoScheduled = true;
   window.requestAnimationFrame(() => {
     onboardingAutoScheduled = false;
@@ -601,6 +606,11 @@ function loadPanelLayout() {
 }
 
 let panelLayout = loadPanelLayout();
+if (window.matchMedia("(max-width: 850px)").matches) {
+  // 手机上默认收起创作助手，避免遮挡正文；用户可通过底部把手随时展开。
+  panelLayout.aiCollapsed = true;
+  panelLayout.leftCollapsed = true;
+}
 
 function constrainPanelLayout() {
   const minimumMainWidth = 480;
@@ -621,9 +631,13 @@ function applyPanelLayout(persist = false) {
   app.style.setProperty("--ai-panel-width", `${panelLayout.aiWidth}px`);
   app.classList.toggle("left-panel-collapsed", panelLayout.leftCollapsed);
   app.classList.toggle("ai-panel-collapsed", panelLayout.aiCollapsed);
-  $("#left-panel-toggle").textContent = panelLayout.leftCollapsed ? "›" : "‹";
+  const mobileViewport = isMobileViewport();
+  $("#left-panel-toggle").textContent = mobileViewport ? "›" : (panelLayout.leftCollapsed ? "›" : "‹");
   $("#left-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
-  $("#left-panel-toggle").setAttribute("aria-label", panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏");
+  $("#left-panel-toggle").setAttribute("aria-label", mobileViewport
+    ? (panelLayout.leftCollapsed ? "打开作品模块" : "关闭作品模块")
+    : (panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏"));
+  $("#mobile-module-tab").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
   $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
   $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
@@ -1763,7 +1777,11 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
-    if (response.status === 401 && !path.startsWith("/api/auth/")) showAuth(false);
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      state.user = null;
+      state.csrfToken = null;
+      showAuth(false);
+    }
     throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
   }
   if (response.status === 204) return null;
@@ -1844,6 +1862,7 @@ async function refreshAuthCaptcha(target = "login") {
 }
 
 function showAuth(setupRequired, registrationOpen = false) {
+  if (state.user) return;
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
   const canRegister = registrationOpen === true;
@@ -1872,6 +1891,7 @@ function applyAuthenticatedUser(session) {
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.documentElement.classList.remove("login-route");
+  if (!session.csrfToken) document.body.classList.remove("auth-pending");
   // 注意：auth-pending 由 initializePage 路由完成后才移除，
   // 避免会话确认后、目标视图渲染前露出无内容的编辑器外壳
 }
@@ -2239,6 +2259,7 @@ async function initializePage() {
 
     if (route.view === "editor") {
       if (route.chapterId && state.chapter?.id !== route.chapterId) await selectChapter(route.chapterId);
+      if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);
       return;
     }
     if (route.view === "module") return;
@@ -4728,10 +4749,12 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     },
     input: (markdown) => {
       normalizeVditorAttachmentImages(editor);
+      updateVditorWordCount(editor, markdown);
       onInput(markdown);
     },
     after: () => {
       normalizeVditorAttachmentImages(editor);
+      updateVditorWordCount(editor, value);
       if (readOnly) editor?.disabled();
     }
   });
@@ -4740,6 +4763,23 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
   editor.__attachmentObserver = attachmentObserver;
   host.__vditor = editor;
   return editor;
+}
+
+function updateVditorWordCount(editor, markdown) {
+  const toolbar = editor?.vditor?.toolbar?.element;
+  if (!toolbar) return;
+  let counter = toolbar.querySelector("[data-markdown-word-count]");
+  if (!counter) {
+    counter = document.createElement("span");
+    counter.className = "markdown-word-count";
+    counter.dataset.markdownWordCount = "true";
+    counter.setAttribute("role", "status");
+    counter.setAttribute("aria-live", "polite");
+    counter.title = "当前 Markdown 正文的字数，不计空白字符";
+    toolbar.append(counter);
+  }
+  const count = Array.from(String(markdown ?? "").replace(/\s/gu, "")).length;
+  counter.textContent = `${count.toLocaleString("zh-CN")} 字`;
 }
 
 function transformVditorPreview(html) {
@@ -6447,6 +6487,14 @@ $("#left-panel-toggle").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
   applyPanelLayout(true);
 });
+$("#mobile-module-tab").addEventListener("click", () => {
+  panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
+  applyPanelLayout(true);
+});
+$("#mobile-panel-backdrop").addEventListener("click", () => {
+  panelLayout.leftCollapsed = true;
+  applyPanelLayout(true);
+});
 $("#ai-panel-toggle").addEventListener("click", () => {
   panelLayout.aiCollapsed = !panelLayout.aiCollapsed;
   applyPanelLayout(true);
@@ -6454,7 +6502,11 @@ $("#ai-panel-toggle").addEventListener("click", () => {
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
-window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLineNumbers(); });
+window.addEventListener("resize", () => {
+  if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
+  applyPanelLayout();
+  scheduleChapterLineNumbers();
+});
 $("#module-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button || button.id === "module-more-button") return;
@@ -6463,7 +6515,14 @@ $("#module-nav").addEventListener("click", (event) => {
     openWorkSettingsDialog(work);
     return;
   }
-  if (button.dataset.module) showModule(button.dataset.module);
+  if (button.dataset.module) {
+    void showModule(button.dataset.module).finally(() => {
+      if (window.matchMedia("(max-width: 850px)").matches) {
+        panelLayout.leftCollapsed = true;
+        applyPanelLayout(true);
+      }
+    });
+  }
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
@@ -6719,6 +6778,10 @@ window.addEventListener("beforeunload", (event) => { if (state.dirty || entityEd
 
 initializePage().catch((error) => {
   restoringPageRoute = false;
+  if (state.user) {
+    document.body.classList.remove("auth-pending");
+    $("#auth-view").classList.add("hidden");
+  }
   showShelf();
   toast(`系统初始化失败：${error.message}`, "error");
 });
