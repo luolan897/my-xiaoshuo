@@ -356,6 +356,7 @@ input[type="checkbox"][hidden] { display: none; }
 .work-meta { font-size: 13px; color: var(--muted); padding-left: 26px; }
 .top-actions { position: relative; display: flex; justify-content: flex-end; gap: 10px; align-items: center; padding-right: 18px; }
 .mobile-module-tab { display: none; }
+.mobile-panel-backdrop { display: none; }
 .presence-control { position: relative; }
 .presence-button { display: flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 18px; background: transparent; color: var(--muted); font-size: 11px; }
 .presence-button:hover, .presence-button:focus-visible, .presence-button[aria-expanded="true"] { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); outline: none; }
@@ -2028,6 +2029,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .brand-block strong { font-size: 14px; }
   .brand-block small { display: none; }
   .mobile-module-tab { position: fixed; z-index: 32; top: 132px; right: 0; display: grid; width: 34px; height: 42px; padding: 0; place-items: center; border: 1px solid var(--line); border-right: 0; border-radius: 5px 0 0 5px; background: var(--surface-soft); color: var(--accent-dark); font-size: 10px; writing-mode: vertical-rl; }
+  .mobile-panel-backdrop { position: fixed; z-index: 30; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(20, 17, 14, .28); }
+  .app-shell:not(.shelf-mode):not(.left-panel-collapsed) .mobile-panel-backdrop { display: block; }
   .work-meta {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -2074,7 +2077,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .left-actions { margin: 0 0 8px; }
   .left-primary-actions { gap: 6px; }
   .left-primary-actions .file-button { display: none; }
-  .left-primary-actions #left-panel-toggle { display: none; }
+  .left-primary-actions #left-panel-toggle { position: absolute; top: 14px; right: 14px; display: grid; place-items: center; width: 32px; height: 32px; font-size: 22px; }
   .module-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin: 0; padding: 0 0 8px; overflow: visible; }
   .module-nav > button {
     flex: 0 0 auto;

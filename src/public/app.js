@@ -631,9 +631,12 @@ function applyPanelLayout(persist = false) {
   app.style.setProperty("--ai-panel-width", `${panelLayout.aiWidth}px`);
   app.classList.toggle("left-panel-collapsed", panelLayout.leftCollapsed);
   app.classList.toggle("ai-panel-collapsed", panelLayout.aiCollapsed);
-  $("#left-panel-toggle").textContent = panelLayout.leftCollapsed ? "›" : "‹";
+  const mobileViewport = isMobileViewport();
+  $("#left-panel-toggle").textContent = mobileViewport ? "›" : (panelLayout.leftCollapsed ? "›" : "‹");
   $("#left-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
-  $("#left-panel-toggle").setAttribute("aria-label", panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏");
+  $("#left-panel-toggle").setAttribute("aria-label", mobileViewport
+    ? (panelLayout.leftCollapsed ? "打开作品模块" : "关闭作品模块")
+    : (panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏"));
   $("#mobile-module-tab").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
   $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
@@ -6486,6 +6489,10 @@ $("#left-panel-toggle").addEventListener("click", () => {
 });
 $("#mobile-module-tab").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
+  applyPanelLayout(true);
+});
+$("#mobile-panel-backdrop").addEventListener("click", () => {
+  panelLayout.leftCollapsed = true;
   applyPanelLayout(true);
 });
 $("#ai-panel-toggle").addEventListener("click", () => {
