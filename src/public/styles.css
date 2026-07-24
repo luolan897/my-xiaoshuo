@@ -908,7 +908,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .setting-row, .module-row { display: grid; grid-template-columns: minmax(108px, .2fr) minmax(120px, .24fr) minmax(0, 1fr) auto; gap: 10px 16px; align-items: center; min-height: 0; padding: 12px 16px; }
 .setting-row h3, .module-row h3 { margin: 0; font-size: 14px; line-height: 1.35; }
 .setting-row p, .module-row p, .module-row-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.module-row-preview { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.module-row .module-row-preview { display: -webkit-box; max-height: 2.9em; margin: 0; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 1.45; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .module-row-path { display: block; margin-top: 2px; color: var(--accent); font-family: var(--font-latin), monospace; font-size: 11px; font-weight: 500; }
 .module-row-span { grid-column: 1 / -1; }
 .setting-row .card-actions, .module-row .card-actions { margin-top: 0; flex-wrap: wrap; justify-content: flex-end; }

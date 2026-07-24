@@ -23,8 +23,8 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260724-record-edit-center');
-    expect(page.text).toContain('/app.js?v=20260724-record-edit-center');
+    expect(page.text).toContain('/styles.css?v=20260724-module-preview-lines');
+    expect(page.text).toContain('/app.js?v=20260724-module-preview-lines');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -70,6 +70,9 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain(".card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 13px; }");
     expect(styles.text).toContain(".settings-row-list, .module-row-list { display: grid; gap: 8px; }");
     expect(styles.text).toContain(".setting-row, .module-row {");
+    expect(styles.text).toContain(".module-row .module-row-preview { display: -webkit-box;");
+    expect(styles.text).toContain("max-height: 2.9em;");
+    expect(styles.text).toContain("white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2;");
     expect(styles.text).toContain(".settings-layout-toggle, .module-layout-toggle");
     expect(styles.text).toContain(".settings-layout-toolbar, .module-layout-toolbar { display: flex;");
     expect(styles.text).toContain(".module-header-actions { display: flex;");
