@@ -3273,11 +3273,14 @@ async function renderCharacters(page = characterListPage) {
   state.characters = characterPage.items;
   const layout = readModuleLayout();
   const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
+  const characterLockBadge = (item) => item.lockedFields.length
+    ? `<span class="character-lock-badge" aria-label="${item.lockedFields.length} 个锁定字段" title="锁定字段：${esc(item.lockedFields.join("、"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>${item.lockedFields.length}</span></span>`
+    : "";
   const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}${item.lockedFields.length ? `<small>锁定 ${item.lockedFields.length} 项</small>` : ""}
-    <h3>${esc(item.name)}</h3>
+    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
+    <div class="character-card-heading"><h3>${esc(item.name)}</h3>${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     ${item.aliases.length ? `<div class="character-aliases">${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
     ${item.code ? `<div class="character-code"><b>编号</b><span class="pill">${esc(item.code)}</span></div>` : ""}
@@ -3298,9 +3301,8 @@ async function renderCharacters(page = characterListPage) {
     ].filter(Boolean).join(" · ");
     const line = meta ? `${meta} · ${preview}` : preview;
     return `
-    <article class="record-card module-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
-      ${item.lockedFields.length ? `<small>锁定 ${item.lockedFields.length} 项</small>` : ""}
-      <h3>${esc(item.name)}</h3>
+    <article class="record-card module-row character-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
+      <div class="character-card-heading"><h3>${esc(item.name)}</h3>${characterLockBadge(item)}</div>
       <p class="module-row-preview" title="${esc(line)}">${esc(line)}</p>
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;

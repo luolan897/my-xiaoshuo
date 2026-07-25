@@ -982,6 +982,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .setting-row .card-actions, .module-row .card-actions { margin-top: 0; flex-wrap: wrap; justify-content: flex-end; }
 .module-row .card-actions > .record-card-edit { position: static; }
 .character-card { cursor: pointer; }
+.character-row { grid-template-columns: minmax(140px, .28fr) minmax(0, 1fr) auto; }
+.character-card-heading { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.character-card-heading h3 { min-width: 0; }
+.record-card.has-card-edit .character-card-heading { padding-right: 34px; }
+.record-card.has-card-edit .character-card-heading h3 { padding-right: 0; }
+.character-lock-badge { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; min-height: 20px; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-size: 9px; font-variant-numeric: tabular-nums; line-height: 1; }
+.character-lock-badge svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .character-filter-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; gap: 12px; align-items: start; width: 100%; min-width: 0; box-sizing: border-box; margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface-soft); }
 .character-filter-dropdown { position: relative; min-width: 0; }
 .character-filter-dropdown summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); cursor: pointer; list-style: none; }
