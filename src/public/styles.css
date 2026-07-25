@@ -1322,6 +1322,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 }
 .relationship-network .mind-node,
 .relationship-network .obsidian-node {
+  --node-color: var(--node-color-light, #626b78);
+  --node-glow: var(--node-glow-light, rgba(98,107,120,.42));
   width: var(--node-size);
   height: var(--node-size);
   min-height: 0;
@@ -1337,6 +1339,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   line-height: 1;
   transition: opacity .12s ease, transform .12s ease, box-shadow .12s ease;
   will-change: left, top;
+}
+:root[data-theme="dark"] .relationship-network .mind-node,
+:root[data-theme="dark"] .relationship-network .obsidian-node {
+  --node-color: var(--node-color-dark, #aab3c0);
+  --node-glow: var(--node-glow-dark, rgba(170,179,192,.56));
 }
 .relationship-network .mind-node span {
   position: absolute;

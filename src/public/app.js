@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260725-galaxy-ripple";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260726-network-theme-palette";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
@@ -35,7 +35,7 @@ import {
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
-import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
+import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260726-race-filter-order";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
@@ -3501,7 +3501,7 @@ async function renderCharacters(page = characterListPage) {
     return `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedIds.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`;
   }).join("");
   const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
-    <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(races, selectedRaceIds)}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)}</div></details>
     <details class="character-filter-dropdown"><summary><span>按组织筛选</span><strong>${selectedOrganizationNames.length ? `已选 ${selectedOrganizationNames.length} 项` : "全部组织"}</strong></summary><div id="character-organization-filter" class="character-filter-options">${filterOptionList(organizations, selectedOrganizationIds, "id")}</div></details>
     <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
@@ -3541,10 +3541,7 @@ async function renderCharacters(page = characterListPage) {
 }
 
 async function renderRaces() {
-  [state.races, state.characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/races`),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
   mountModuleCount(state.races.length);
   const layout = readModuleLayout();
   const canEditRaces = canEditModule("races");
