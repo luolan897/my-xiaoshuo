@@ -5942,7 +5942,7 @@ async function openTaskDialog() {
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
     <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。</span></p>
-    <div class="relationship-overwrite-card is-disabled">
+    <div class="relationship-overwrite-card hidden">
       <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
       <p>任务成功后，会先删除所有涉及所选角色的旧关系，再写入本次分析结果。</p>
     </div>
@@ -6029,7 +6029,7 @@ async function openTaskDialog() {
     if (!enabled) setRelationshipCharacterBubbleOpen(false);
     const hasSelectedCharacters = enabled && relationshipCharacterInputs.some((input) => input.checked);
     replaceRelationships.disabled = !hasSelectedCharacters;
-    relationshipOverwriteCard.classList.toggle("is-disabled", !hasSelectedCharacters);
+    relationshipOverwriteCard.classList.toggle("hidden", !hasSelectedCharacters);
     if (!hasSelectedCharacters) replaceRelationships.checked = false;
     syncRelationshipCharacterPicker();
     filterRelationshipCharacters();

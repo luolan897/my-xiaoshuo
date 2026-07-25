@@ -23,12 +23,12 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('data-relationship-character-clear');
     expect(application).toContain('input[name="characterIds"]');
     expect(application).toContain('class="relationship-analysis-helper"');
-    expect(application).toContain('class="relationship-overwrite-card is-disabled"');
+    expect(application).toContain('class="relationship-overwrite-card hidden"');
     expect(application).toContain('name="replaceExistingRelationships" type="checkbox" disabled');
     expect(application).toContain('relationshipOptions.classList.toggle("hidden", !enabled)');
     expect(application).toContain("relationshipCharacterInputs.some((input) => input.checked)");
     expect(application).toContain("replaceRelationships.disabled = !hasSelectedCharacters");
-    expect(application).toContain('relationshipOverwriteCard.classList.toggle("is-disabled", !hasSelectedCharacters)');
+    expect(application).toContain('relationshipOverwriteCard.classList.toggle("hidden", !hasSelectedCharacters)');
     expect(application).toContain('relationshipCharacterTrigger.addEventListener("click"');
     expect(application).toContain('relationshipCharacterSearch.addEventListener("input", filterRelationshipCharacters)');
     expect(application).toContain('setRelationshipCharacterBubbleOpen(false)');
