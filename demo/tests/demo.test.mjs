@@ -26,6 +26,19 @@ test("两本作品都覆盖主要知识模块", () => {
   }
 });
 
+test("两本作品的人物关系图都具有足够密度", () => {
+  for (const work of works) {
+    assert.ok(work.characters.length >= 16, `${work.title} 的人物数量不足`);
+    assert.ok(work.relations.length >= 24, `${work.title} 的关系数量不足`);
+    const characterIds = new Set(work.characters.map((character) => character.id));
+    for (const relationship of work.relations) {
+      assert.ok(characterIds.has(relationship.from), `${work.title} 的关系起点不存在：${relationship.from}`);
+      assert.ok(characterIds.has(relationship.to), `${work.title} 的关系终点不存在：${relationship.to}`);
+    }
+    assert.ok(new Set(work.relations.map((relationship) => relationship.kind)).size >= 4, `${work.title} 的关系类型不够丰富`);
+  }
+});
+
 test("开发服务器直接复用正式站点前端资源", async () => {
   const server = await readFile(new URL("../scripts/serve.mjs", import.meta.url), "utf8");
   assert.match(server, /src\/public/);
