@@ -1786,7 +1786,9 @@ async function api(path, options = {}) {
       state.csrfToken = null;
       showAuth(false);
     }
-    throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
+    const error = new Error(payload.error?.message ?? `请求失败：${response.status}`);
+    error.code = payload.error?.code;
+    throw error;
   }
   if (response.status === 204) return null;
   const payload = await response.json();
@@ -6232,7 +6234,9 @@ $("#profile-form").addEventListener("submit", async (event) => {
     state.user = updated;
     applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
     toast("显示名称已更新");
-  } catch (error) { toast(error.message, "error"); }
+  } catch (error) {
+    toast(error.code === "INVALID_CURRENT_PASSWORD" ? "当前密码错误，请重新输入" : error.message, "error");
+  }
 });
 $("#password-form").addEventListener("submit", async (event) => {
   event.preventDefault();

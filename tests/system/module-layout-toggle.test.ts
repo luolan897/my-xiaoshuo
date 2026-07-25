@@ -30,6 +30,7 @@ describe("知识模块布局切换", () => {
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
     expect(styles.text).toContain('.entity-editor-readonly-badge');
+    expect(application.text).toContain('error.code === "INVALID_CURRENT_PASSWORD" ? "当前密码错误，请重新输入"');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
