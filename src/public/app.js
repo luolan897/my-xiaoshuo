@@ -104,6 +104,8 @@ let peerPageStale = false;
 let collaborationAutoSaveDisabled = false;
 
 let timelineMultiSelectEnabled = false;
+let taskProgressRefreshTimer = null;
+const taskProgressRefreshInterval = 2_500;
 
 const chapterTypes = ["正文", "设定", "作者的话", "其他"];
 
@@ -2989,6 +2991,7 @@ async function showModule(module) {
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
+  if (module !== "tasks") stopTaskProgressRefresh();
   applyWorkAccessMode();
   markActiveModule(module);
   if (module === "editor") {
@@ -3870,6 +3873,7 @@ async function renderReviews() {
 }
 
 async function renderTasks() {
+  stopTaskProgressRefresh();
   const [tasks, settings] = await Promise.all([
     apiAllPages(`/api/works/${state.work.id}/tasks?view=summary`),
     canReadModule("ai-settings")
@@ -3879,7 +3883,12 @@ async function renderTasks() {
   mountModuleCount(tasks.length);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
   const pendingCount = tasks.filter((item) => item.status === "pending").length;
-  const runningCount = tasks.filter((item) => item.status === "running").length;
+  const runningTasks = tasks.filter((item) => item.status === "running");
+  const runningCount = runningTasks.length;
+  const activeTaskCount = pendingCount + runningCount;
+  const runningProgress = runningCount
+    ? Math.round(runningTasks.reduce((total, item) => total + Math.min(100, Math.max(0, Number(item.progress) || 0)), 0) / runningCount)
+    : 0;
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel ${canConfigureAutoRun ? "" : "hidden"}" aria-labelledby="task-auto-run-title">
       <div class="task-auto-run-copy">
@@ -3895,6 +3904,10 @@ async function renderTasks() {
         <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>开始下一轮</button>
       </div>
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
+      <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
+        <div class="task-auto-run-progress-label"><span>${runningCount ? "运行中任务平均进度" : "等待任务开始"}</span><strong>${runningProgress}%</strong></div>
+        <progress class="task-auto-run-progress-bar" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
+      </div>
     </section>
     ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
@@ -3958,6 +3971,7 @@ async function renderTasks() {
       button.textContent = "运行中";
       const cancel = button.parentElement.querySelector("[data-cancel-task]");
       if (cancel) cancel.textContent = "取消运行";
+      scheduleTaskProgressRefresh(workId, 1);
       const completed = await api(`/api/tasks/${button.dataset.runTask}/run`, { method: "POST", body: { modelId: $("#ai-model").value || undefined } });
       toast(completed.status === "cancelled" ? "分析任务已取消" : completed.status === "expired" ? "正文已变化，本次分析已过期" : "分析已完成");
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
@@ -3977,6 +3991,32 @@ async function renderTasks() {
       button.disabled = false;
     }
   }));
+  scheduleTaskProgressRefresh(state.work.id, runningCount);
+}
+
+function stopTaskProgressRefresh() {
+  if (taskProgressRefreshTimer === null) return;
+  window.clearTimeout(taskProgressRefreshTimer);
+  taskProgressRefreshTimer = null;
+}
+
+function scheduleTaskProgressRefresh(workId, runningCount) {
+  stopTaskProgressRefresh();
+  if (runningCount === 0) return;
+  taskProgressRefreshTimer = window.setTimeout(async () => {
+    taskProgressRefreshTimer = null;
+    if (state.module !== "tasks" || state.work?.id !== workId) return;
+    if ($(".task-auto-run-controls")?.contains(document.activeElement)) {
+      scheduleTaskProgressRefresh(workId, runningCount);
+      return;
+    }
+    try {
+      await renderTasks();
+    } catch (error) {
+      console.error("Failed to refresh task progress", error);
+      scheduleTaskProgressRefresh(workId, runningCount);
+    }
+  }, taskProgressRefreshInterval);
 }
 
 function openTaskDetailDialog(task) {
