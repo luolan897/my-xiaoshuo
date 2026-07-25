@@ -657,6 +657,7 @@ describe("AI 供应商、模型与建议 API", () => {
           controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"飞船"}}]}\n\n'));
           setTimeout(() => {
             controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"离港"},"finish_reason":"stop"}]}\n\n'));
+            controller.enqueue(encoder.encode('data: {"choices":[],"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":75},"completion_tokens":4}}\n\n'));
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
           }, 5);
@@ -677,6 +678,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain('"content":"现有上下文。"');
     expect(streamed.text.indexOf('"飞船"')).toBeLessThan(streamed.text.indexOf('"离港"'));
     expect(streamed.text).toContain("event: complete");
+    expect(streamed.text).toContain('"outputTokens":4,"cacheHitPercent":75');
     expect(streamed.text).toContain('"processSteps":[{"id":"process_');
     expect(streamed.text).toContain('"content":"先读取现有上下文。"');
 
@@ -694,11 +696,11 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       if (completionCount === 1) {
-        return new Response(JSON.stringify({ choices: [{ message: { content: "我先读取作品目录。", reasoning_content: "需要先确认作品结构。", tool_calls: [{ id: "stream-tool", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200 });
+        return new Response(JSON.stringify({ choices: [{ message: { content: "我先读取作品目录。", reasoning_content: "需要先确认作品结构。", tool_calls: [{ id: "stream-tool", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }], usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 50 } } }), { status: 200 });
       }
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; reasoning_content?: string | null }> };
       expect(body.messages.find((message) => message.role === "assistant")?.reasoning_content).toBe("需要先确认作品结构。");
-      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取目录。", reasoning_content: "目录结果足以回答。" } }], usage: { completion_tokens: 8 } }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取目录。", reasoning_content: "目录结果足以回答。" } }], usage: { prompt_tokens: 200, prompt_tokens_details: { cached_tokens: 150 }, completion_tokens: 8 } }), { status: 200 });
     });
 
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
@@ -718,6 +720,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toMatch(/"calledAt":"\d{4}-\d{2}-\d{2}T/u);
     expect(streamed.text).toContain('"result":{"ok":true');
     expect(streamed.text).toContain('event: complete');
+    expect(streamed.text).toContain('"outputTokens":8,"cacheHitPercent":66.7');
     expect(streamed.text).toContain('"toolCalls":[{"id":"stream-tool"');
     expect(streamed.text).toContain('"processSteps":[{"id":"process_');
 
@@ -730,12 +733,13 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
       role: "assistant",
       content: "已读取目录。",
-      metadata: { modelDisplayName: "小说模型", outputTokens: 8, processDurationMs: 1450, toolCalls, processSteps }
+      metadata: { modelDisplayName: "小说模型", outputTokens: 8, cacheHitPercent: 66.7, processDurationMs: 1450, toolCalls, processSteps }
     }).expect(201);
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
     expect(reloaded.body.data.messages[0].metadata.toolCalls).toEqual(toolCalls);
     expect(reloaded.body.data.messages[0].metadata.processSteps).toEqual(processSteps);
     expect(reloaded.body.data.messages[0].metadata.processDurationMs).toBe(1450);
+    expect(reloaded.body.data.messages[0].metadata.cacheHitPercent).toBe(66.7);
   });
 
   it("完整读取响应正文前不释放供应商并发槽", async () => {

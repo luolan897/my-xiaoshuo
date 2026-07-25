@@ -87,6 +87,7 @@ type GenerateResult = {
   callId: string;
   content: string;
   outputTokens: number;
+  cacheHitPercent?: number;
   provider: Record<string, unknown>;
   model: Record<string, unknown>;
   context: string;
@@ -365,6 +366,43 @@ export function resolveOutputTokens(usage: unknown, content: string): number {
     if (typeof reported === "number" && Number.isFinite(reported)) return Math.max(0, Math.round(reported));
   }
   return estimateAiTokens(content);
+}
+
+type InputCacheUsage = { inputTokens: number; cachedInputTokens: number };
+
+function resolveInputCacheUsage(usage: unknown): InputCacheUsage | null {
+  if (!usage || typeof usage !== "object") return null;
+  const record = usage as Record<string, unknown>;
+  const promptDetails = record.prompt_tokens_details && typeof record.prompt_tokens_details === "object"
+    ? record.prompt_tokens_details as Record<string, unknown>
+    : {};
+  const inputDetails = record.input_tokens_details && typeof record.input_tokens_details === "object"
+    ? record.input_tokens_details as Record<string, unknown>
+    : {};
+  const cached = promptDetails.cached_tokens
+    ?? inputDetails.cached_tokens
+    ?? record.prompt_cache_hit_tokens
+    ?? record.cache_read_input_tokens
+    ?? record.cached_input_tokens;
+  if (typeof cached !== "number" || !Number.isFinite(cached)) return null;
+  const reportedInput = record.prompt_tokens ?? record.input_tokens;
+  const missed = record.prompt_cache_miss_tokens;
+  const inputTokens = typeof reportedInput === "number" && Number.isFinite(reportedInput)
+    ? Math.max(0, Math.round(reportedInput))
+    : typeof missed === "number" && Number.isFinite(missed)
+      ? Math.max(0, Math.round(cached)) + Math.max(0, Math.round(missed))
+      : 0;
+  if (inputTokens <= 0) return null;
+  return {
+    inputTokens,
+    cachedInputTokens: Math.min(inputTokens, Math.max(0, Math.round(cached)))
+  };
+}
+
+export function resolveCacheHitPercent(usage: unknown): number | undefined {
+  const resolved = resolveInputCacheUsage(usage);
+  if (!resolved) return undefined;
+  return Math.round(resolved.cachedInputTokens / resolved.inputTokens * 1_000) / 10;
 }
 
 function normalizeModelPreset(input: Record<string, unknown>, modelId = ""): Record<string, unknown> {
@@ -1315,7 +1353,7 @@ export class AiManager {
       currentRequestActor()?.userId ?? null
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls, processSteps: generated.processSteps };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }), toolCalls: generated.toolCalls, processSteps: generated.processSteps };
   }
 
   async createStreamingChat(
@@ -1342,7 +1380,7 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls, processSteps: generated.processSteps };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }), toolCalls: generated.toolCalls, processSteps: generated.processSteps };
   }
 
   async runSuggestionGuard(suggestionId: string, candidateContent?: string): Promise<Record<string, unknown>> {
@@ -2073,13 +2111,17 @@ export class AiManager {
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       type CompletionPayload = {
-        usage?: { completion_tokens?: number; output_tokens?: number };
+        usage?: Record<string, unknown>;
         choices?: Array<{
           finish_reason?: string | null;
           message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: CompletionToolCall[] };
         }>;
       };
       type CompletionChoice = NonNullable<CompletionPayload["choices"]>[number];
+      let completionRequestCount = 0;
+      let cacheUsageComplete = true;
+      let totalInputTokens = 0;
+      let totalCachedInputTokens = 0;
       const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
@@ -2120,7 +2162,15 @@ export class AiManager {
             });
             if (candidate.ok) {
               try {
-                return JSON.parse(candidate.body) as CompletionPayload;
+                const parsed = JSON.parse(candidate.body) as CompletionPayload;
+                completionRequestCount += 1;
+                const cacheUsage = resolveInputCacheUsage(parsed.usage);
+                if (!cacheUsage) cacheUsageComplete = false;
+                else {
+                  totalInputTokens += cacheUsage.inputTokens;
+                  totalCachedInputTokens += cacheUsage.cachedInputTokens;
+                }
+                return parsed;
               } catch {
                 throw new Error(`Chat Completions returned invalid JSON: ${candidate.body.slice(0, 500)}`);
               }
@@ -2224,6 +2274,9 @@ export class AiManager {
         callId
       );
       const outputTokens = resolveOutputTokens(payload.usage, content);
+      const cacheHitPercent = cacheUsageComplete && completionRequestCount > 0 && totalInputTokens > 0
+        ? Math.round(totalCachedInputTokens / totalInputTokens * 1_000) / 10
+        : undefined;
       logger.info("ai.call.completed", {
         callId,
         workId: input.workId,
@@ -2234,7 +2287,7 @@ export class AiManager {
         outputTokens,
         toolCallCount: executedToolCalls.length
       });
-      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
+      return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -2289,7 +2342,7 @@ export class AiManager {
       const apiKey = this.decryptKey(provider);
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let streamedResult: { content: string; reasoning: string; outputTokens: number } | null = null;
+      let streamedResult: { content: string; reasoning: string; outputTokens: number; cacheHitPercent?: number } | null = null;
       let lastFailure: unknown = null;
       let emitted = false;
       const thinkingStepId = id("process");
@@ -2358,7 +2411,7 @@ export class AiManager {
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
       }
       if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
-      const { content, reasoning, outputTokens } = streamedResult;
+      const { content, reasoning, outputTokens, cacheHitPercent } = streamedResult;
       const processSteps: AiProcessStep[] = reasoning.trim()
         ? [{ id: thinkingStepId, type: "thinking", round: 1, content: reasoning, createdAt: thinkingCreatedAt }]
         : [];
@@ -2377,7 +2430,7 @@ export class AiManager {
         outputChars: content.length,
         outputTokens
       });
-      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
+      return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -2397,7 +2450,7 @@ export class AiManager {
     response: Response,
     onDelta: (delta: string) => void,
     onThinkingDelta: (delta: string) => void
-  ): Promise<{ content: string; reasoning: string; outputTokens: number }> {
+  ): Promise<{ content: string; reasoning: string; outputTokens: number; cacheHitPercent?: number }> {
     if (!response.body) throw new Error("Chat Completions 流式响应缺少正文");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -2415,7 +2468,7 @@ export class AiManager {
       if (!data || data === "[DONE]") return;
       const payload = JSON.parse(data) as {
         error?: { message?: string };
-        usage?: { completion_tokens?: number; output_tokens?: number };
+        usage?: Record<string, unknown>;
         choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null } }>;
       };
       if (payload.error) throw new Error(payload.error.message || "上游流式响应返回错误");
@@ -2443,7 +2496,8 @@ export class AiManager {
     }
     if (buffer.trim()) consumeEvent(buffer);
     if (!content.trim()) throw new Error(`Chat Completions 流式响应缺少可用正文，finish_reason=${finishReason}`);
-    return { content, reasoning, outputTokens: resolveOutputTokens(usage, content) };
+    const cacheHitPercent = resolveCacheHitPercent(usage);
+    return { content, reasoning, outputTokens: resolveOutputTokens(usage, content), ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }) };
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {

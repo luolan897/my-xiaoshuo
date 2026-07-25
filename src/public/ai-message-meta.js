@@ -1,7 +1,12 @@
-export function formatAiMessageMeta(modelDisplayName, outputTokens, suffix = "") {
+export function formatAiMessageMeta(modelDisplayName, outputTokens, cacheHitPercent, suffix = "") {
   const modelName = String(modelDisplayName || "模型").trim();
   const tokenCount = Math.max(0, Math.round(Number(outputTokens) || 0)).toLocaleString("zh-CN");
-  return [modelName, `${tokenCount} tok`, String(suffix || "").trim()].filter(Boolean).join(" · ");
+  const cachePercent = Number(cacheHitPercent);
+  const roundedCachePercent = Math.round((cachePercent + Number.EPSILON) * 10) / 10;
+  const cacheLabel = Number.isFinite(cachePercent)
+    ? `缓存命中 ${Math.max(0, Math.min(100, roundedCachePercent)).toLocaleString("zh-CN")}%`
+    : "";
+  return [modelName, `${tokenCount} tok`, cacheLabel, String(suffix || "").trim()].filter(Boolean).join(" · ");
 }
 
 export function estimateAiMessageTokens(value) {

@@ -301,7 +301,7 @@ type AiConversationMessageInput = {
   role: "user" | "assistant";
   content: string;
   citations?: unknown[];
-  metadata?: { modelDisplayName?: string; outputTokens?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
+  metadata?: { modelDisplayName?: string; outputTokens?: number; cacheHitPercent?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
 };
 
 export type AiConversationContext = {
