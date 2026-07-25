@@ -434,7 +434,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(workTree.body.data.volumes[0].chapters[0]).toMatchObject({ id: chapter.body.data.id, title: "第一章" });
     const visibleChapter = await viewer.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(200);
     expect(visibleChapter.body.data.content).toBe("只能阅读的正文。");
-    const settings = await viewer.agent.get(`/api/works/${workId}/settings`).expect(200);
+    const settings = await viewer.agent.get(`/api/works/${workId}/settings?includeContent=true`).expect(200);
     expect(settings.body.data).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: setting.body.data.id, content: "月升时开启航道。" })
     ]));

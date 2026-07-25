@@ -723,6 +723,7 @@ let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
 let entityHistoryContext = null;
+let moduleContentInteractionsBound = false;
 
 function showEntityEditorPage(type, { readOnly = false } = {}) {
   entityEditorType = type;
@@ -2264,11 +2265,8 @@ async function initializePage() {
     }
     if (route.view === "module") return;
     if (route.view === "entity-editor") {
-      const records = route.entity === "setting" ? state.settings : route.entity === "character" ? state.characters : route.entity === "race" ? state.races : state.organizations;
       const item = route.entityId
-        ? route.entity === "character"
-          ? await api(`/api/characters/${encodeURIComponent(route.entityId)}`)
-          : records.find((record) => record.id === route.entityId)
+        ? await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)
         : null;
       if (route.entityId && !item) {
         toast(({ setting: "未找到要编辑的设定", character: "未找到要编辑的角色", race: "未找到要编辑的种族", organization: "未找到要编辑的组织" }[route.entity] ?? "未找到要编辑的档案"), "error");
@@ -2903,6 +2901,7 @@ async function showModule(module) {
   $("#module-create-button").textContent = meta[3];
   $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
+  bindModuleContentInteractions();
   try {
     if (module === "settings") await renderSettings();
     if (module === "characters") await renderCharacters(characterListPage);
@@ -3128,7 +3127,7 @@ function bindModuleLayoutToggle(refresh) {
 
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
-    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openReview;
+    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization ?? card.dataset.openReview;
     card.addEventListener("click", (event) => {
       if (!event.target.closest("button, a, summary")) void open(id);
     });
@@ -3138,6 +3137,36 @@ function bindRecordPreview(selector, open) {
       event.preventDefault();
       void open(id);
     });
+  });
+}
+
+function bindModuleContentInteractions() {
+  if (moduleContentInteractionsBound) return;
+  moduleContentInteractionsBound = true;
+  const host = $("#module-content");
+  const open = async (card) => {
+    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization;
+    if (!id) return;
+    if (card.dataset.openSetting) return openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly: true });
+    if (card.dataset.openCharacter) return openCharacterEditor(await api(`/api/characters/${encodeURIComponent(id)}`), { readOnly: true });
+    if (card.dataset.openRace) return openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly: true });
+    if (card.dataset.openOrganization) return openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly: true });
+  };
+  const findCard = (target) => target instanceof Element
+    ? target.closest("[data-open-setting], [data-open-character], [data-open-race], [data-open-organization]")
+    : null;
+  host.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("button, a, summary")) return;
+    const card = findCard(event.target);
+    if (card) void open(card);
+  });
+  host.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (event.target instanceof Element && event.target.closest("button, a, summary")) return;
+    const card = findCard(event.target);
+    if (!card) return;
+    event.preventDefault();
+    void open(card);
   });
 }
 
@@ -3185,13 +3214,13 @@ function settingRecordActions(item) {
 function renderSettingCards(records) {
   return `<div class="card-grid">${records.map((item) => `
     <article class="record-card preview-record-card" data-open-setting="${esc(item.id)}" role="button" tabindex="0" aria-label="查看设定 ${esc(item.title)}"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(settingStatusLabel(item.status))}</small>
-    <h3>${esc(item.title)}</h3><div class="record-markdown-preview message-body">${renderMarkdown(item.content) || '<p class="markdown-editor-empty">暂无正文</p>'}</div>
+    <h3>${esc(item.title)}</h3><div class="record-markdown-preview">${esc(item.contentPreview || "暂无正文预览")}</div>
     <div class="card-actions">${settingRecordActions(item)}</div></article>`).join("")}</div>`;
 }
 
 function renderSettingRows(records) {
   return `<div class="module-row-list">${records.map((item) => {
-    const preview = moduleRowPreview(item.content);
+    const preview = moduleRowPreview(item.contentPreview);
     return `
     <article class="record-card module-row preview-record-card" data-open-setting="${esc(item.id)}" role="button" tabindex="0" aria-label="查看设定 ${esc(item.title)}"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(settingStatusLabel(item.status))}</small>
     <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
@@ -3208,8 +3237,8 @@ async function renderSettings() {
     ? `${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
   bindModuleLayoutToggle(renderSettings);
-  bindRecordPreview("[data-open-setting]", (id) => openSettingEditor(records.find((item) => item.id === id), { readOnly: true }));
-  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingEditor(records.find((item) => item.id === button.dataset.editSetting))));
+  const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
+  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
   bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
 
@@ -3287,8 +3316,8 @@ async function renderCharacters(page = characterListPage) {
       button.disabled = false;
     }
   });
-  bindRecordPreview("[data-open-character]", (id) => openCharacterEditor(state.characters.find((item) => item.id === id), { readOnly: true }));
-  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
+  const openCharacter = async (id, readOnly) => openCharacterEditor(await api(`/api/characters/${encodeURIComponent(id)}`), { readOnly });
+  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => { void openCharacter(button.dataset.editCharacter, false); }));
 }
 
 async function renderRaces() {
@@ -3307,10 +3336,10 @@ async function renderRaces() {
   const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
     <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
     <div class="race-tree-branch">
-      <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settings.length} 条自身设定</small>
+    <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settingsCount ?? item.settings?.length ?? 0} 条自身设定</small>
         <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
         <p>${esc(item.description || "尚未填写种族简介")}</p>
-        <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<section class="knowledge-markdown-block${setting.inherited ? " inherited" : ""}"><div class="knowledge-markdown-block-heading"><h4>${esc(setting.title || "未命名章节")}</h4><small>${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}</small></div><div class="message-body">${renderMarkdown(setting.value) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></section>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
+        <div class="race-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条共同设定，打开查看详情</span>` : '<span class="pill">暂无共同设定</span>'}</div>
         <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
         ${raceCardActions(item)}
       </article>
@@ -3319,7 +3348,7 @@ async function renderRaces() {
   </details>`;
   const raceRows = () => `<div class="module-row-list">${state.races.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写种族简介");
-    const meta = `${item.memberIds.length} 位直接角色 · ${item.settings.length ? "已填写共同设定" : "暂无共同设定"}`;
+    const meta = `${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
     return `
     <article class="record-card module-row race-card preview-record-card" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}">
       <small>${esc(meta)}</small>
@@ -3333,8 +3362,8 @@ async function renderRaces() {
     ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   bindModuleLayoutToggle(renderRaces);
-  bindRecordPreview("[data-open-race]", (id) => openRaceDialog(state.races.find((item) => item.id === id), { readOnly: true }));
-  $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
+  const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
+  $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
   bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
@@ -3352,9 +3381,9 @@ async function renderOrganizations() {
     ? organizationActions(item)
     : `<div class="card-actions">${organizationActions(item)}</div>`;
   const organizationCards = () => `<div class="card-grid organization-grid">${state.organizations.map((item) => `
-    <article class="record-card organization-card${canEditOrganizations ? " has-card-edit" : ""}"><small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
+    <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
-      <div class="organization-settings">${item.settingsSections?.length ? item.settingsSections.map((section) => `<article class="knowledge-markdown-block"><div class="knowledge-markdown-block-heading"><h4>${esc(section.title || "未命名章节")}</h4></div><div class="message-body">${renderMarkdown(section.contentMarkdown) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></article>`).join("") : '<span class="pill">暂无组织设定</span>'}</div>
+      <div class="organization-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条组织设定，打开查看详情</span>` : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
       ${organizationCardActions(item)}
     </article>`).join("")}</div>`;
@@ -3363,7 +3392,7 @@ async function renderOrganizations() {
     const members = item.members.length ? item.members.map((member) => member.name).join("、") : "暂无绑定角色";
     return `
     <article class="record-card module-row organization-card">
-      <small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
+      <small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3>
       <p class="module-row-preview" title="${esc(`${preview} · 成员：${members}`)}">${esc(preview)} · ${esc(members)}</p>
       <div class="card-actions">${organizationActions(item)}</div>
@@ -3374,7 +3403,8 @@ async function renderOrganizations() {
     ? `${layout === "rows" ? organizationRows() : organizationCards()}`
     : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   bindModuleLayoutToggle(renderOrganizations);
-  $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
+  const openOrganization = async (id, readOnly) => openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly });
+  $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => { void openOrganization(button.dataset.editOrganization, false); }));
   bindEntityHistoryButtons(async () => { await renderOrganizations(); await loadAiReferences(); });
 }
 
@@ -4063,7 +4093,7 @@ async function loadAiReferences() {
   const generation = workScopedUiGeneration;
   const [characters, settings] = await Promise.all([
     canReadModule("characters") ? apiAllPages(`/api/works/${workId}/characters`) : Promise.resolve([]),
-    canReadModule("settings") ? apiAllPages(`/api/works/${workId}/settings`) : Promise.resolve([])
+    canReadModule("settings") ? api(`/api/works/${workId}/settings/context`) : Promise.resolve([])
   ]);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.characters = characters;

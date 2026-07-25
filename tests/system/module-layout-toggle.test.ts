@@ -75,7 +75,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
-    expect(application.text).toContain('await api(`/api/characters/${encodeURIComponent(route.entityId)}`)');
+    expect(application.text).toContain('await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)');
     expect(application.text).not.toContain("人工修正");
     expect(application.text).toContain('item ? "编辑设定" : "新建设定"');
     expect(application.text).toContain('const changeNote = item ? await inputToast(');
