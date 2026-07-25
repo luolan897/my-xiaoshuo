@@ -1569,16 +1569,67 @@ export function createGalaxyStarfield(seed, count = 7200) {
       : armAngle + radius * 0.0065 + (random() - 0.5) * (isCore ? 0.72 : 0.42 + radius / 1100);
     const thickness = isHalo ? 70 + radius * 0.2 : (isCore ? 8 + radius * 0.045 : 22 + radius * 0.105);
     const temperature = random();
+    const x = Math.cos(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78);
+    const z = Math.sin(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78);
     stars.push({
-      x: Math.cos(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78),
+      x,
       y: (random() + random() + random() - 1.5) * thickness,
-      z: Math.sin(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78),
+      z,
+      originX: x,
+      originZ: z,
+      vx: 0,
+      vz: 0,
       size: isCore && random() > 0.94 ? 1.25 + random() * 1.25 : 0.38 + random() * 0.82,
       brightness: isCore ? 0.3 + random() * 0.7 : 0.16 + random() * 0.66,
       color: temperature < 0.2 ? "255,218,176" : temperature > 0.78 ? "174,211,255" : "226,237,255"
     });
   }
   return stars;
+}
+
+export function stepGalaxyStarfieldPhysics(stars, attractor = null, options = {}) {
+  const deltaMs = clamp(Number(options.deltaMs) || 16.667, 1, 50);
+  const timeScale = deltaMs / 16.667;
+  const influenceRadius = Math.max(1, Number(options.influenceRadius) || 210);
+  const repulsionStrength = Number(options.repulsionStrength) || 5.5;
+  const springStrength = Number(options.springStrength) || 0.006;
+  const damping = clamp(Number(options.damping) || 0.84, 0, 1);
+  let energy = 0;
+
+  for (const star of stars) {
+    const originX = Number(star.originX ?? star.x);
+    const originZ = Number(star.originZ ?? star.z);
+    star.originX = originX;
+    star.originZ = originZ;
+    star.vx = Number(star.vx) || 0;
+    star.vz = Number(star.vz) || 0;
+
+    if (attractor) {
+      const deltaX = star.x - attractor.x;
+      const deltaZ = star.z - attractor.z;
+      const distance = Math.hypot(deltaX, deltaZ);
+      if (distance < influenceRadius) {
+        const angle = Math.atan2(star.originZ, star.originX);
+        const normalX = distance > 0.001 ? deltaX / distance : Math.cos(angle);
+        const normalZ = distance > 0.001 ? deltaZ / distance : Math.sin(angle);
+        const falloff = 1 - distance / influenceRadius;
+        const force = falloff * falloff * repulsionStrength * timeScale;
+        star.vx += normalX * force;
+        star.vz += normalZ * force;
+      }
+    }
+
+    star.vx += (originX - star.x) * springStrength * timeScale;
+    star.vz += (originZ - star.z) * springStrength * timeScale;
+    const frameDamping = Math.pow(damping, timeScale);
+    star.vx *= frameDamping;
+    star.vz *= frameDamping;
+    star.x += star.vx * timeScale;
+    star.z += star.vz * timeScale;
+    energy += Math.abs(star.vx) + Math.abs(star.vz) + Math.abs(originX - star.x) + Math.abs(originZ - star.z);
+  }
+
+  return energy;
 }
 
 export function projectGalaxyPoint(point, camera, viewport) {
@@ -1704,6 +1755,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   let animationFrame = 0;
   let previousFrameTime = 0;
   let cameraFocus = null;
+  let draggedNode = null;
+  let starPhysicsEnergy = 0;
   let paused = false;
   let starsVisible = true;
   let gridVisible = false;
@@ -1713,6 +1766,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   shell.dataset.sceneDimension = "3";
   shell.dataset.starCount = String(stars.length);
   shell.dataset.gridVisible = "false";
+  shell.dataset.starPhysicsEnergy = "0";
   shell.dataset.rotationSpeed = String(GALAXY_ROTATION_RADIANS_PER_MS);
   shell.dataset.layoutMinimumRadius = String(GALAXY_LAYOUT_CONFIG.minimumRadius);
   shell.dataset.layoutRadialSpan = String(GALAXY_LAYOUT_CONFIG.radialSpan);
@@ -1949,6 +2003,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       }
     }
     if (!paused && !cameraDrag) camera.yaw += elapsed * GALAXY_ROTATION_RADIANS_PER_MS;
+    if (draggedNode || starPhysicsEnergy > 0.01) {
+      starPhysicsEnergy = stepGalaxyStarfieldPhysics(stars, draggedNode, { deltaMs: elapsed || 16.667 });
+      shell.dataset.starPhysicsEnergy = starPhysicsEnergy.toFixed(3);
+    }
     drawScene();
     animationFrame = window.requestAnimationFrame(renderFrame);
   };
@@ -2083,6 +2141,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
           scale: Number(button.dataset.projectedScale) || 1,
           dragged: false
         };
+        draggedNode = node;
         button.setPointerCapture(event.pointerId);
         button.classList.add("is-dragging");
         button.setAttribute("aria-grabbed", "true");
@@ -2110,6 +2169,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         if (!nodeDrag || event.pointerId !== nodeDrag.pointerId) return;
         suppressClick = nodeDrag.dragged;
         nodeDrag = null;
+        if (draggedNode === node) draggedNode = null;
         button.classList.remove("is-dragging");
         button.setAttribute("aria-grabbed", "false");
         if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
