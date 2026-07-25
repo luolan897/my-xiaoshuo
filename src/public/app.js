@@ -29,8 +29,9 @@ import {
   searchResultTypeLabel,
   settingStatusLabel,
   taskScopeLabel,
-  timelineStatusLabel
-} from "/display-labels.js?v=20260725-unified-permissions";
+  timelineStatusLabel,
+  characterStateFieldLabel
+} from "/display-labels.js?v=20260725-state-field-zh";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -3403,14 +3404,14 @@ async function renderCharacters(page = characterListPage) {
     ${item.aliases.length ? `<div class="character-aliases"><b>别名</b>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
     ${item.code ? `<div class="character-code"><b>编号</b><span class="pill">${esc(item.code)}</span></div>` : ""}
     ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
-    ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
+    ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(characterStateFieldLabel(detail.label))}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
-    ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
+    ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${characterStateFieldLabel(key)}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
     </article>`;
   }).join("")}</div>`;
   const characterRows = () => `<div class="module-row-list">${state.characters.map((item) => {
-    const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join(" ") || "尚未记录当前状态");
+    const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${characterStateFieldLabel(key)}：${value}`).join(" ") || "尚未记录当前状态");
     const meta = [
       item.code ? `编号 ${item.code}` : "",
       item.species ? (racePathLabel(item.race) || item.species) : "",
