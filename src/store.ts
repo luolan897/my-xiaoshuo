@@ -1185,9 +1185,9 @@ export class Store {
       workId,
       ...page.params
     );
-    const chapters = chapterRows.map((row) => this.mapChapterDirectoryEntry(row));
+    const pageResult = paginated(chapterRows.map((row) => this.mapChapterDirectoryEntry(row)), pagination);
     const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
-    for (const chapter of chapters) {
+    for (const chapter of pageResult.items) {
       const volumeId = String(chapter.volumeId);
       const list = chaptersByVolume.get(volumeId) ?? [];
       list.push(chapter);
@@ -1197,7 +1197,7 @@ export class Store {
       ...this.mapVolume(row),
       chapters: chaptersByVolume.get(requiredString(row, "id")) ?? []
     }));
-    return { ...work, volumes, directoryPage: paginated(chapters, pagination) };
+    return { ...work, volumes, directoryPage: pageResult };
   }
 
   listFileVersions(workId: string): Record<string, unknown>[] {
@@ -2430,7 +2430,7 @@ export class Store {
     return occurrenceId;
   }
 
-  private getForeshadowOccurrence(occurrenceId: string): Record<string, unknown> {
+  getForeshadowOccurrence(occurrenceId: string): Record<string, unknown> {
     const row = this.db.get(
       `SELECT fo.*, c.title AS chapter_title, c.volume_id, v.title AS volume_title
        FROM foreshadow_occurrences fo JOIN chapters c ON c.id = fo.chapter_id

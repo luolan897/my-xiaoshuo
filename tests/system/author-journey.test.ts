@@ -285,14 +285,18 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-module-header-scale');
-    expect(page.text).toContain('/styles.css?v=20260725-module-header-scale');
+    expect(page.text).toContain('/app.js?v=20260725-collab-refresh-left-panel-resize');
+    expect(page.text).toContain('/styles.css?v=20260725-module-count-vditor-left-panel');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
     expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
+    expect(application.text).toContain("function handleCollaborativeChanges(recentChanges)");
+    expect(application.text).toContain("协作者已更新");
+    expect(application.text).toContain("本页无法代为另存");
+    expect(application.text).toContain("peerPageStale");
     expect(styles.text).toContain(".dev-auth-bypass .auth-view { display: none !important; }");
     expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
@@ -380,7 +384,7 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("renderMarkdownTable");
     expect(vditorCss.text).toContain("Vditor v3.11.2");
     expect(vditorScript.text).toContain("Vditor");
-    expect(application.text).toContain('/markdown.js?v=20260722-inline-code');
+    expect(application.text).toContain('/markdown.js?v=20260725-ordered-list');
     expect(application.text).toContain('new window.Vditor');
     expect(application.text).toContain('createVditorUploadHandler');
     expect(page.text).toContain('id="character-section-editor-view"');
@@ -396,6 +400,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("请先保存当前角色");
     expect(application.text).toContain("保存成功后即可新建 Markdown 档案章节");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
+    expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table { background: var(--surface); color: var(--ink); }');
+    expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }');
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
     expect(styles.text).toContain("#character-section-editor-view");
     expect(styles.text).toContain("#knowledge-section-editor-view");
@@ -487,6 +493,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.record-markdown-preview { display: -webkit-box;');
     expect(styles.text).toContain('-webkit-line-clamp: 12;');
     expect(styles.text).toContain('.module-header-actions > [data-module-header-action] { order: 1; }');
+    expect(styles.text).toContain('.module-header-actions > .module-count-badge { order: 0; }');
     expect(styles.text).toContain('.module-header-actions > #module-create-button { order: 2; min-height: 36px; }');
     expect(styles.text).toContain('.module-layout-toggle button { display: inline-grid; place-items: center; width: 36px; min-height: 34px;');
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
@@ -537,7 +544,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }");
     expect(styles.text).toContain(".book-card-settings {");
     expect(styles.text).toContain("padding: 2px 6px;");
-    expect(styles.text).toContain(".left-panel { border-right: 1px solid var(--line); padding: 18px 14px 16px; overflow-y: auto; }");
+    expect(styles.text).toContain(".left-panel { display: flex; flex-direction: column; border-right: 1px solid var(--line); padding: 0; overflow: hidden; }");
+    expect(styles.text).toContain(".left-panel-body { flex: 1 1 auto; min-height: 0; padding: 18px 14px 16px; overflow-y: auto; }");
+    expect(page.text).toContain('class="left-panel-body"');
     expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
     expect(styles.text).toContain(".file-button { min-height: 30px; font-size: 11px;");
     expect(styles.text).toContain(".panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 0 9px 7px;");

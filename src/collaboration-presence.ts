@@ -30,9 +30,28 @@ export type PresenceParticipant = PresenceUser & {
   lastSeenAt: string;
 };
 
+export type CollaborativeChange = {
+  id: string;
+  pageKey: string;
+  label: string;
+  actorUserId: string;
+  actorDisplayName: string;
+  savedAt: string;
+};
+
+export type PresenceHeartbeatResult = {
+  participants: PresenceParticipant[];
+  recentChanges: CollaborativeChange[];
+};
+
 type PresenceEntry = PresenceParticipant & {
   workId: string;
   lastSeenMs: number;
+};
+
+type ChangeEntry = CollaborativeChange & {
+  workId: string;
+  savedAtMs: number;
 };
 
 const moduleLabels: Record<string, string> = {
@@ -65,15 +84,45 @@ function normalizedPage(page: PresencePage): PresenceParticipant["page"] {
   return { key: "welcome", label: "作品首页" };
 }
 
+export function editorPageKey(chapterId: string): string {
+  return `editor:${chapterId}`;
+}
+
+export function entityEditorPageKey(module: "setting" | "character" | "race" | "organization", resourceId: string): string {
+  return `entity-editor:${module}:${resourceId}`;
+}
+
+export function modulePageKey(module: keyof typeof moduleLabels | string): string {
+  return `module:${module}`;
+}
+
+export function pageLabelForKey(pageKey: string): string {
+  if (pageKey.startsWith("editor:")) return "正文编辑";
+  if (pageKey.startsWith("entity-editor:")) {
+    const module = pageKey.split(":")[1] ?? "";
+    return entityLabels[module] ?? "资料编辑";
+  }
+  if (pageKey.startsWith("module:")) {
+    const module = pageKey.slice("module:".length);
+    return moduleLabels[module] ?? "作品模块";
+  }
+  if (pageKey === "settings") return "设置中心";
+  return "作品页面";
+}
+
 export class CollaborationPresence {
   private readonly entries = new Map<string, PresenceEntry>();
+  private readonly changes: ChangeEntry[] = [];
+  private changeSequence = 0;
 
   constructor(
     private readonly timeoutMs = 45_000,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    private readonly changeTtlMs = 120_000,
+    private readonly maxChanges = 50
   ) {}
 
-  heartbeat(workId: string, clientId: string, user: PresenceUser, page: PresencePage): PresenceParticipant[] {
+  heartbeat(workId: string, clientId: string, user: PresenceUser, page: PresencePage): PresenceHeartbeatResult {
     const now = this.now();
     this.prune(now);
     const normalized = normalizedPage(page);
@@ -85,7 +134,49 @@ export class CollaborationPresence {
       lastSeenAt: new Date(now).toISOString(),
       lastSeenMs: now
     });
-    return this.list(workId, now);
+    return {
+      participants: this.list(workId, now),
+      recentChanges: this.listChanges(workId, now)
+    };
+  }
+
+  publishChange(
+    workId: string,
+    pageKey: string,
+    actor: { userId: string; displayName: string },
+    label = pageLabelForKey(pageKey)
+  ): CollaborativeChange {
+    const now = this.now();
+    this.pruneChanges(now);
+    this.changeSequence += 1;
+    const change: ChangeEntry = {
+      id: `change-${now}-${this.changeSequence}`,
+      workId,
+      pageKey,
+      label,
+      actorUserId: actor.userId,
+      actorDisplayName: actor.displayName,
+      savedAt: new Date(now).toISOString(),
+      savedAtMs: now
+    };
+    this.changes.push(change);
+    while (this.changes.length > this.maxChanges) this.changes.shift();
+    return {
+      id: change.id,
+      pageKey: change.pageKey,
+      label: change.label,
+      actorUserId: change.actorUserId,
+      actorDisplayName: change.actorDisplayName,
+      savedAt: change.savedAt
+    };
+  }
+
+  listChanges(workId: string, now = this.now()): CollaborativeChange[] {
+    this.pruneChanges(now);
+    return this.changes
+      .filter((change) => change.workId === workId)
+      .sort((left, right) => right.savedAtMs - left.savedAtMs)
+      .map(({ workId: _workId, savedAtMs: _savedAtMs, ...change }) => change);
   }
 
   private list(workId: string, now: number): PresenceParticipant[] {
@@ -99,6 +190,15 @@ export class CollaborationPresence {
   private prune(now: number): void {
     for (const [key, entry] of this.entries) {
       if (now - entry.lastSeenMs > this.timeoutMs) this.entries.delete(key);
+    }
+    this.pruneChanges(now);
+  }
+
+  private pruneChanges(now: number): void {
+    while (this.changes.length > 0) {
+      const oldest = this.changes[0];
+      if (!oldest || now - oldest.savedAtMs <= this.changeTtlMs) break;
+      this.changes.shift();
     }
   }
 }

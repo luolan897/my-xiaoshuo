@@ -36,6 +36,28 @@ describe("侧边栏 Markdown 渲染", () => {
     expect(html).not.toContain("<blockquote></blockquote>");
   });
 
+  it("跨空行的有序与无序列表合并为单个列表", () => {
+    const ordered = renderMarkdown("1. **相遇**：初见。\n\n2. **承诺**：约定。\n\n3. **幻灭**：失望。");
+    expect(ordered.match(/<ol>/gu)).toHaveLength(1);
+    expect(ordered.match(/<\/ol>/gu)).toHaveLength(1);
+    expect(ordered).toContain("<li class=\"markdown-depth-0\"><strong>相遇</strong>：初见。</li>");
+    expect(ordered).toContain("<li class=\"markdown-depth-0\"><strong>承诺</strong>：约定。</li>");
+    expect(ordered).toContain("<li class=\"markdown-depth-0\"><strong>幻灭</strong>：失望。</li>");
+
+    const unordered = renderMarkdown("- 甲\n\n- 乙\n\n- 丙");
+    expect(unordered.match(/<ul>/gu)).toHaveLength(1);
+    expect(unordered).toContain("<li class=\"markdown-depth-0\">甲</li>");
+    expect(unordered).toContain("<li class=\"markdown-depth-0\">乙</li>");
+    expect(unordered).toContain("<li class=\"markdown-depth-0\">丙</li>");
+  });
+
+  it("空行后若不再是同类型列表则结束当前列表", () => {
+    const html = renderMarkdown("1. 第一项\n\n不是列表\n\n- 无序项");
+    expect(html).toContain("</ol><p>不是列表</p><ul>");
+    expect(html.match(/<ol>/gu)).toHaveLength(1);
+    expect(html.match(/<ul>/gu)).toHaveLength(1);
+  });
+
   it("渲染带对齐方式的表格并保留单元格内的管道符", () => {
     const html = renderMarkdown("| 章节 | 标题 | 内容摘要 |\n| :--- | :---: | ---: |\n| 第一百六十三章 | **护盾实验** | `能量 | 护盾` |\n| 第一百六十四章 | 海洋星舰 | 哥斯拉\\|机械哥斯拉 | ");
 

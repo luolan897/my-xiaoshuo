@@ -12,7 +12,8 @@ import {
   reviewStatusLabel,
   settingStatusLabel,
   taskScopeLabel,
-  timelineStatusLabel
+  timelineStatusLabel,
+  characterStateFieldLabel
 } from "../../src/public/display-labels.js";
 
 describe("前端枚举中文标签", () => {
@@ -33,6 +34,13 @@ describe("前端枚举中文标签", () => {
     expect(providerStatusLabel("enabled")).toBe("已启用");
     expect(providerConnectionLabel("success")).toBe("连接正常");
     expect(chapterVersionSourceLabel("ai-suggestion")).toBe("AI 建议");
+  });
+
+  it("将角色当前状态常用英文字段显示为中文", () => {
+    expect(characterStateFieldLabel("location")).toBe("位置");
+    expect(characterStateFieldLabel("condition")).toBe("状况");
+    expect(characterStateFieldLabel("自定义字段")).toBe("自定义字段");
+    expect(characterStateFieldLabel("energy")).toBe("energy");
   });
 
   it("保留中文自定义值并隐藏未知英文枚举", () => {

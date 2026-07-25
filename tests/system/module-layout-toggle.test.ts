@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-module-header-scale');
-    expect(page.text).toContain('/app.js?v=20260725-module-header-scale');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-module-header-scale"></script>');
+    expect(page.text).toContain('/styles.css?v=20260725-module-count-vditor-left-panel');
+    expect(page.text).toContain('/app.js?v=20260725-collab-refresh-left-panel-resize');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-collab-refresh-left-panel-resize"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -60,7 +60,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('bindRecordPreview("[data-open-review]"');
     expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
     expect(application.text).toContain('hideCancel: true');
-    expect(application.text).toContain('/display-labels.js?v=20260725-unified-permissions');
+    expect(application.text).toContain('/display-labels.js?v=20260725-state-field-zh');
     expect(application.text).toContain('settingStatusLabel(item.status)');
     expect(application.text).not.toContain('characterVisibilityLabel(item.visibility)');
     expect(application.text).toContain('timelineStatusLabel(item.status)');
@@ -142,6 +142,7 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain(".module-layout-toggle svg { width: 16px; height: 16px;");
     expect(styles.text).toContain(".settings-layout-toolbar, .module-layout-toolbar { display: flex;");
     expect(styles.text).toContain(".module-header-actions { display: flex;");
+    expect(styles.text).toContain(".module-header-actions > .module-count-badge { order: 0; }");
     expect(styles.text).toContain(".module-pagination { display: flex;");
     expect(styles.text).toContain(".module-pagination button { min-width: 58px; min-height: 28px;");
     expect(styles.text).toContain('.entity-editor-page.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"]');
