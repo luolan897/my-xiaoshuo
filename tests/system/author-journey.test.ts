@@ -248,6 +248,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".vditor-editor-host .vditor");
     expect(styles.text).toContain(".setting-editor-title-input");
     expect(styles.text).toContain(".setting-editor-header-fields");
+    expect(styles.text).toContain(".character-section-editor-title-input");
+    expect(application.text).toContain('class="character-section-editor-title-input"');
+    expect(application.text).toContain('class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}"');
+    expect(application.text).not.toContain('<label>设定标题<input id="knowledge-section-title"');
+    expect(application.text).not.toContain('<label>章节标题<input id="character-section-title"');
     expect(styles.text).toContain(".character-relationship-row");
     expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
@@ -280,8 +285,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-galaxy-ripple');
-    expect(page.text).toContain('/styles.css?v=20260725-galaxy-ripple');
+    expect(page.text).toContain('/app.js?v=20260725-develop-galaxy-ripple');
+    expect(page.text).toContain('/styles.css?v=20260725-develop-galaxy-ripple');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');

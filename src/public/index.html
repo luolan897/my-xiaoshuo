@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260725-galaxy-ripple">
+    <link rel="stylesheet" href="/styles.css?v=20260725-develop-galaxy-ripple">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -376,6 +376,7 @@
           <button id="setting-editor-back" class="entity-editor-back" type="button">返回设定库</button>
           <div class="entity-editor-heading">
             <span id="setting-editor-eyebrow" class="eyebrow">新建设定</span>
+            <span id="setting-editor-readonly-badge" class="entity-editor-readonly-badge hidden">只读模式</span>
             <input id="setting-editor-name" class="setting-editor-title-input" name="title" maxlength="200" placeholder="新建设定" aria-label="设定标题">
             <div class="setting-editor-header-fields">
               <label>分类<select id="setting-editor-category" name="category">
@@ -408,7 +409,7 @@
           <button id="character-editor-close" class="entity-editor-back" type="button">返回角色列表</button>
           <div>
             <span id="character-editor-eyebrow" class="eyebrow">人物主档案</span>
-            <div class="character-editor-title-row"><h1 id="character-editor-title">新建角色</h1><span id="character-editor-version" class="character-version-badge">新档案</span></div>
+            <div class="character-editor-title-row"><h1 id="character-editor-title">新建角色</h1><span id="character-editor-version" class="character-version-badge">新档案</span><span id="character-editor-readonly-badge" class="entity-editor-readonly-badge hidden">只读模式</span></div>
           </div>
           <div class="character-editor-header-actions">
             <button id="character-editor-edit" class="primary-button hidden" type="button">编辑角色</button>
@@ -442,7 +443,7 @@
           <button id="knowledge-editor-close" class="entity-editor-back" type="button">返回列表</button>
           <div>
             <span id="knowledge-editor-eyebrow" class="eyebrow">世界档案</span>
-            <div class="character-editor-title-row"><h1 id="knowledge-editor-title">新建档案</h1><span id="knowledge-editor-version" class="character-version-badge">新档案</span></div>
+            <div class="character-editor-title-row"><h1 id="knowledge-editor-title">新建档案</h1><span id="knowledge-editor-version" class="character-version-badge">新档案</span><span id="knowledge-editor-readonly-badge" class="entity-editor-readonly-badge hidden">只读模式</span></div>
           </div>
           <div class="character-editor-header-actions">
             <span id="knowledge-editor-header-note" class="knowledge-editor-header-note">独立资料页</span>
@@ -698,6 +699,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260725-galaxy-ripple"></script>
+    <script type="module" src="/app.js?v=20260725-develop-galaxy-ripple"></script>
   </body>
 </html>

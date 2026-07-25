@@ -2516,16 +2516,16 @@ export class Store {
     return this.getSetting(settingId);
   }
 
-  listSettings(workId: string): Record<string, unknown>[] {
+  listSettings(workId: string, includeContent = true): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title", workId).map((row) => this.mapSetting(row));
+    return this.db.all("SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title", workId).map((row) => this.mapSetting(row, includeContent));
   }
 
-  listSettingsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+  listSettingsPage(workId: string, pagination: Pagination, includeContent = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.db.all(`SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title${page.sql}`, workId, ...page.params);
-    return paginated(rows.map((row) => this.mapSetting(row)), pagination);
+    return paginated(rows.map((row) => this.mapSetting(row, includeContent)), pagination);
   }
 
   getSetting(settingId: string): Record<string, unknown> {
@@ -2579,13 +2579,14 @@ export class Store {
     });
   }
 
-  private mapSetting(row: Row): Record<string, unknown> {
+  private mapSetting(row: Row, includeContent = true): Record<string, unknown> {
+    const content = requiredString(row, "content");
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
       title: requiredString(row, "title"),
       category: requiredString(row, "category"),
-      content: requiredString(row, "content"),
+      ...(includeContent ? { content } : { contentPreview: content.replace(/\s+/gu, " ").trim().slice(0, 320) }),
       tags: json(requiredString(row, "tags_json"), []),
       status: requiredString(row, "status"),
       locked: booleanValue(row, "locked"),
@@ -2647,22 +2648,22 @@ export class Store {
     return this.getRace(raceId);
   }
 
-  listRaces(workId: string): Record<string, unknown>[] {
+  listRaces(workId: string, includeMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM races WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapRace(row));
+    return this.db.all("SELECT * FROM races WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapRace(row, includeMarkdown));
   }
 
-  listRacesPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+  listRacesPage(workId: string, pagination: Pagination, includeMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.db.all(`SELECT * FROM races WHERE work_id = ? ORDER BY name${page.sql}`, workId, ...page.params);
-    return paginated(rows.map((row) => this.mapRace(row)), pagination);
+    return paginated(rows.map((row) => this.mapRace(row, includeMarkdown)), pagination);
   }
 
-  getRace(raceId: string): Record<string, unknown> {
+  getRace(raceId: string, includeMarkdown = true): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM races WHERE id = ?", raceId);
     if (!row) throw notFound("种族");
-    return this.mapRace(row);
+    return this.mapRace(row, includeMarkdown);
   }
 
   updateRace(
@@ -2799,9 +2800,9 @@ export class Store {
     return row ? requiredString(row, "id") : null;
   }
 
-  private mapRace(row: Row): Record<string, unknown> {
+  private mapRace(row: Row, includeMarkdown = true): Record<string, unknown> {
     const raceId = requiredString(row, "id");
-    const lineage = this.raceLineage(raceId);
+    const lineage = includeMarkdown ? this.raceLineage(raceId) : this.raceLineageNames(raceId);
     const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
     const settings = settingsFromKnowledgeSections(settingsSections);
     const members = this.db.all("SELECT id, name FROM characters WHERE race_id = ? ORDER BY name", requiredString(row, "id")).map((member) => ({
@@ -2814,19 +2815,21 @@ export class Store {
       parentRaceId: optionalString(row, "parent_race_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
-      settings,
-      settingsMarkdown: settingsMarkdownFromList(settings),
-      settingsSections,
+      ...(includeMarkdown
+        ? { settings, settingsMarkdown: settingsMarkdownFromList(settings), settingsSections }
+        : { settings: [], settingsCount: settingsSections.length }),
       lineage: lineage.map((item) => ({ id: item.id, name: item.name })),
-      effectiveSettings: lineage.flatMap((item, index) => item.settingsSections.map((section) => ({
-        title: section.title,
-        summary: section.summary,
-        sortOrder: section.sortOrder,
-        value: section.contentMarkdown,
-        sourceRaceId: item.id,
-        sourceRaceName: item.name,
-        inherited: index < lineage.length - 1
-      }))),
+      ...(includeMarkdown
+        ? { effectiveSettings: (lineage as Array<{ id: string; name: string; settings: string[]; settingsSections: KnowledgeSection[] }>).flatMap((item, index) => item.settingsSections.map((section) => ({
+          title: section.title,
+          summary: section.summary,
+          sortOrder: section.sortOrder,
+          value: section.contentMarkdown,
+          sourceRaceId: item.id,
+          sourceRaceName: item.name,
+          inherited: index < lineage.length - 1
+        }))) }
+        : {}),
       memberIds: members.map((member) => member.characterId),
       members,
       versionNo: this.currentEntityVersionNo("race", requiredString(row, "id")),
@@ -2888,6 +2891,21 @@ export class Store {
     return lineage.reverse();
   }
 
+  private raceLineageNames(raceId: string): Array<{ id: string; name: string }> {
+    const lineage: Array<{ id: string; name: string }> = [];
+    const seen = new Set<string>();
+    let currentId: string | null = raceId;
+    while (currentId) {
+      if (seen.has(currentId)) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级存在循环");
+      seen.add(currentId);
+      const row = this.db.get("SELECT id, name, parent_race_id FROM races WHERE id = ?", currentId);
+      if (!row) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级引用了不存在的父种族");
+      lineage.push({ id: requiredString(row, "id"), name: requiredString(row, "name") });
+      currentId = optionalString(row, "parent_race_id");
+    }
+    return lineage.reverse();
+  }
+
   private replaceRaceMembers(raceId: string, raceName: string, memberIds: string[]): void {
     const timestamp = now();
     this.db.run("UPDATE characters SET race_id = NULL, species = '', updated_at = ? WHERE race_id = ?", timestamp, raceId);
@@ -2942,16 +2960,16 @@ export class Store {
     return this.getOrganization(organizationId);
   }
 
-  listOrganizations(workId: string): Record<string, unknown>[] {
+  listOrganizations(workId: string, includeMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapOrganization(row));
+    return this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapOrganization(row, includeMarkdown));
   }
 
-  listOrganizationsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+  listOrganizationsPage(workId: string, pagination: Pagination, includeMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY name${page.sql}`, workId, ...page.params);
-    return paginated(rows.map((row) => this.mapOrganization(row)), pagination);
+    return paginated(rows.map((row) => this.mapOrganization(row, includeMarkdown)), pagination);
   }
 
   getOrganization(organizationId: string): Record<string, unknown> {
@@ -3076,7 +3094,7 @@ export class Store {
     return { mergeId, target: this.getOrganization(targetOrganizationId), source };
   }
 
-  private mapOrganization(row: Row): Record<string, unknown> {
+  private mapOrganization(row: Row, includeMarkdown = true): Record<string, unknown> {
     const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
     const settings = settingsFromKnowledgeSections(settingsSections);
     const members = this.db.all(
@@ -3096,9 +3114,9 @@ export class Store {
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
-      settings,
-      settingsMarkdown: settingsMarkdownFromList(settings),
-      settingsSections,
+      ...(includeMarkdown
+        ? { settings, settingsMarkdown: settingsMarkdownFromList(settings), settingsSections }
+        : { settings: [], settingsCount: settingsSections.length }),
       memberIds: members.map((member) => member.characterId),
       members,
       versionNo: this.currentEntityVersionNo("organization", requiredString(row, "id")),
@@ -3274,16 +3292,16 @@ export class Store {
     return this.getCharacter(characterId);
   }
 
-  listCharacters(workId: string, includeProfileSections = false, includeMerged = false): Record<string, unknown>[] {
+  listCharacters(workId: string, includeProfileSections = false, includeMerged = false, includeRaceMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db.all(
       `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name`,
       workId
     )
-      .map((row) => this.mapCharacter(row, includeProfileSections));
+      .map((row) => this.mapCharacter(row, includeProfileSections, includeRaceMarkdown));
   }
 
-  listCharactersPage(workId: string, pagination: Pagination, includeProfileSections = false, includeMerged = false): PaginatedResult<Record<string, unknown>> {
+  listCharactersPage(workId: string, pagination: Pagination, includeProfileSections = false, includeMerged = false, includeRaceMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.db.all(
@@ -3291,7 +3309,7 @@ export class Store {
       workId,
       ...page.params
     );
-    return paginated(rows.map((row) => this.mapCharacter(row, includeProfileSections)), pagination);
+    return paginated(rows.map((row) => this.mapCharacter(row, includeProfileSections, includeRaceMarkdown)), pagination);
   }
 
   private mapCharacterProfileSection(row: Row): Record<string, unknown> {
@@ -3971,7 +3989,7 @@ export class Store {
     });
   }
 
-  private mapCharacter(row: Row, includeProfileSections = true): Record<string, unknown> {
+  private mapCharacter(row: Row, includeProfileSections = true, includeRaceMarkdown = true): Record<string, unknown> {
     const indexedAliases = this.db.all(
       "SELECT display_name FROM character_names WHERE character_id = ? AND kind = 'alias' ORDER BY sort_order",
       requiredString(row, "id")
@@ -3989,9 +4007,10 @@ export class Store {
       note: requiredString(item, "note")
     }));
     const raceId = optionalString(row, "race_id");
-    const race = raceId ? this.getRace(raceId) : undefined;
+    const race = raceId ? this.getRace(raceId, includeRaceMarkdown) : undefined;
     const species = race ? String(race.name) : requiredString(row, "species");
     const profile = json<Record<string, unknown>>(requiredString(row, "profile_json"), {});
+    if (!includeProfileSections) delete profile.sections;
     const characterId = requiredString(row, "id");
     const profileSectionCount = Number(this.db.get(
       "SELECT COUNT(*) AS count FROM character_profile_sections WHERE character_id = ?",

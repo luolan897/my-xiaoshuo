@@ -23,9 +23,14 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-galaxy-ripple');
-    expect(page.text).toContain('/app.js?v=20260725-galaxy-ripple');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-galaxy-ripple"></script>');
+    expect(page.text).toContain('/styles.css?v=20260725-develop-galaxy-ripple');
+    expect(page.text).toContain('/app.js?v=20260725-develop-galaxy-ripple');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-develop-galaxy-ripple"></script>');
+    expect(page.text).toContain('id="setting-editor-readonly-badge"');
+    expect(page.text).toContain('id="character-editor-readonly-badge"');
+    expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
+    expect(styles.text).toContain('.entity-editor-readonly-badge');
+    expect(application.text).toContain('error.code === "INVALID_CURRENT_PASSWORD" ? "当前密码错误，请重新输入"');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -75,7 +80,11 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
-    expect(application.text).toContain('await api(`/api/characters/${encodeURIComponent(route.entityId)}`)');
+    expect(application.text).toContain('const characterPage = await apiPage(`/api/works/${state.work.id}/characters`, page);');
+    expect(application.text).toContain('await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)');
+    expect(application.text).toContain('state.races = await apiAllPages(`/api/works/${state.work.id}/races`);');
+    expect(application.text).toContain('state.organizations = await apiAllPages(`/api/works/${state.work.id}/organizations`);');
+    expect(application.text).toContain('data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"');
     expect(application.text).not.toContain("人工修正");
     expect(application.text).toContain('item ? "编辑设定" : "新建设定"');
     expect(application.text).toContain('const changeNote = item ? await inputToast(');

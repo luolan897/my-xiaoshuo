@@ -434,7 +434,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(workTree.body.data.volumes[0].chapters[0]).toMatchObject({ id: chapter.body.data.id, title: "第一章" });
     const visibleChapter = await viewer.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(200);
     expect(visibleChapter.body.data.content).toBe("只能阅读的正文。");
-    const settings = await viewer.agent.get(`/api/works/${workId}/settings`).expect(200);
+    const settings = await viewer.agent.get(`/api/works/${workId}/settings?includeContent=true`).expect(200);
     expect(settings.body.data).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: setting.body.data.id, content: "月升时开启航道。" })
     ]));
@@ -1025,6 +1025,15 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const user = await register(runtime, "profile_user");
     const profile = await user.agent.patch("/api/auth/profile").set("X-CSRF-Token", user.csrfToken).send({ displayName: "新名称" }).expect(200);
     expect(profile.body.data.displayName).toBe("新名称");
+    const wrongCurrentPassword = await user.agent.patch("/api/auth/password").set("X-CSRF-Token", user.csrfToken).send({
+      currentPassword: "wrong-current-password",
+      newPassword: "new-secure-password-456",
+      passwordConfirmation: "new-secure-password-456"
+    }).expect(401);
+    expect(wrongCurrentPassword.body.error).toMatchObject({
+      code: "INVALID_CURRENT_PASSWORD",
+      message: "当前密码错误，请重新输入"
+    });
     await user.agent.patch("/api/auth/password").set("X-CSRF-Token", user.csrfToken).send({
       currentPassword: "secure-password-123",
       newPassword: "new-secure-password-456",
