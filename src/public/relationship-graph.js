@@ -6,14 +6,26 @@ const RELATION_STYLE = Object.freeze({
   uncertain: { label: "未确定", color: "#9aa5b5" }
 });
 
-/** Obsidian Graph View 风格：低饱和度分组配色 */
+/** Obsidian Graph View 风格：为浅色和深色背景分别提供可辨识的低饱和度分组配色 */
 export const OBSIDIAN_NODE_PALETTE = Object.freeze([
-  Object.freeze({ key: "blue", color: "#7a9bb5", glow: "rgba(122,155,181,.48)" }),
-  Object.freeze({ key: "lavender", color: "#9a8fb5", glow: "rgba(154,143,181,.48)" }),
-  Object.freeze({ key: "slate", color: "#8b9099", glow: "rgba(139,144,153,.42)" }),
-  Object.freeze({ key: "rose", color: "#b58a9a", glow: "rgba(181,138,154,.48)" }),
-  Object.freeze({ key: "mist", color: "#8aa8a3", glow: "rgba(138,168,163,.45)" }),
-  Object.freeze({ key: "sand", color: "#a89a88", glow: "rgba(168,154,136,.42)" })
+  Object.freeze({ key: "blue", color: "#3f6f99", darkColor: "#7fb7e3", glow: "rgba(63,111,153,.42)", darkGlow: "rgba(127,183,227,.56)" }),
+  Object.freeze({ key: "indigo", color: "#5b5fa3", darkColor: "#9ea6ed", glow: "rgba(91,95,163,.42)", darkGlow: "rgba(158,166,237,.56)" }),
+  Object.freeze({ key: "violet", color: "#77549a", darkColor: "#bd91df", glow: "rgba(119,84,154,.42)", darkGlow: "rgba(189,145,223,.56)" }),
+  Object.freeze({ key: "purple", color: "#8b4f83", darkColor: "#d28bc5", glow: "rgba(139,79,131,.42)", darkGlow: "rgba(210,139,197,.56)" }),
+  Object.freeze({ key: "rose", color: "#a84e6a", darkColor: "#e78da8", glow: "rgba(168,78,106,.42)", darkGlow: "rgba(231,141,168,.56)" }),
+  Object.freeze({ key: "red", color: "#ad554f", darkColor: "#ef948c", glow: "rgba(173,85,79,.42)", darkGlow: "rgba(239,148,140,.56)" }),
+  Object.freeze({ key: "coral", color: "#a95d45", darkColor: "#eda083", glow: "rgba(169,93,69,.42)", darkGlow: "rgba(237,160,131,.56)" }),
+  Object.freeze({ key: "amber", color: "#956b2f", darkColor: "#deb46d", glow: "rgba(149,107,47,.42)", darkGlow: "rgba(222,180,109,.56)" }),
+  Object.freeze({ key: "olive", color: "#777331", darkColor: "#bdba70", glow: "rgba(119,115,49,.42)", darkGlow: "rgba(189,186,112,.56)" }),
+  Object.freeze({ key: "green", color: "#47794f", darkColor: "#84c98f", glow: "rgba(71,121,79,.42)", darkGlow: "rgba(132,201,143,.56)" }),
+  Object.freeze({ key: "emerald", color: "#337965", darkColor: "#74c9aa", glow: "rgba(51,121,101,.42)", darkGlow: "rgba(116,201,170,.56)" }),
+  Object.freeze({ key: "teal", color: "#31777a", darkColor: "#72c6c8", glow: "rgba(49,119,122,.42)", darkGlow: "rgba(114,198,200,.56)" }),
+  Object.freeze({ key: "cyan", color: "#34758f", darkColor: "#7cc4de", glow: "rgba(52,117,143,.42)", darkGlow: "rgba(124,196,222,.56)" }),
+  Object.freeze({ key: "sky", color: "#41749f", darkColor: "#87bce6", glow: "rgba(65,116,159,.42)", darkGlow: "rgba(135,188,230,.56)" }),
+  Object.freeze({ key: "steel", color: "#576f86", darkColor: "#98afc5", glow: "rgba(87,111,134,.42)", darkGlow: "rgba(152,175,197,.56)" }),
+  Object.freeze({ key: "slate", color: "#626b78", darkColor: "#aab3c0", glow: "rgba(98,107,120,.42)", darkGlow: "rgba(170,179,192,.56)" }),
+  Object.freeze({ key: "sand", color: "#806e58", darkColor: "#c5ad91", glow: "rgba(128,110,88,.42)", darkGlow: "rgba(197,173,145,.56)" }),
+  Object.freeze({ key: "taupe", color: "#75636d", darkColor: "#b9a0ad", glow: "rgba(117,99,109,.42)", darkGlow: "rgba(185,160,173,.56)" })
 ]);
 
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
@@ -186,12 +198,18 @@ export function getObsidianNodeAppearance(node, maxDegree = 1) {
   const group = resolveRelationshipNodeGroup(node);
   const degree = Math.max(0, Number(node?.degree) || 0);
   const normalizedDegree = clamp(degree / Math.max(1, Number(maxDegree) || 1), 0, 1);
-  const paletteIndex = group.key === "default" ? 2 : hashString(group.key) % OBSIDIAN_NODE_PALETTE.length;
+  // 未分组角色没有可共享的分组语义，按角色稳定标识散列，避免资料不完整时大片同色。
+  const colorKey = group.key === "default"
+    ? `node:${String(node?.id ?? node?.name ?? "default")}`
+    : group.key;
+  const paletteIndex = hashString(colorKey) % OBSIDIAN_NODE_PALETTE.length;
   const palette = OBSIDIAN_NODE_PALETTE[paletteIndex];
   return {
     group,
     color: palette.color,
+    darkColor: palette.darkColor,
     glow: palette.glow,
+    darkGlow: palette.darkGlow,
     size: clamp(8 + Math.sqrt(degree) * 4.8 + normalizedDegree * 4, 8, 38),
     degree,
     normalizedDegree
@@ -299,7 +317,9 @@ export function buildRelationshipGraph(characters, relationships) {
     node.importance = node.weightedDegree + Math.sqrt(node.degree) * 0.8;
     const appearance = getObsidianNodeAppearance(node, maxDegree);
     node.color = appearance.color;
+    node.darkColor = appearance.darkColor;
     node.glow = appearance.glow;
+    node.darkGlow = appearance.darkGlow;
     node.nodeSize = appearance.size;
   }
   nodes.sort((left, right) => right.importance - left.importance || left.name.localeCompare(right.name, "zh-CN"));
@@ -1253,8 +1273,10 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     button.dataset.groupKey = node.groupKey || appearance.group.key;
     button.classList.toggle("is-label-visible", graph.nodes.indexOf(node) < defaultLabelLimit || node.degree >= 4);
     button.style.setProperty("--node-size", `${nodeSize}px`);
-    button.style.setProperty("--node-color", node.color || appearance.color);
-    button.style.setProperty("--node-glow", node.glow || appearance.glow);
+    button.style.setProperty("--node-color-light", node.color || appearance.color);
+    button.style.setProperty("--node-color-dark", node.darkColor || appearance.darkColor);
+    button.style.setProperty("--node-glow-light", node.glow || appearance.glow);
+    button.style.setProperty("--node-glow-dark", node.darkGlow || appearance.darkGlow);
     const labelEl = document.createElement("span");
     labelEl.textContent = node.name;
     button.append(labelEl);
