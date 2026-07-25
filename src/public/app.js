@@ -68,6 +68,7 @@ const state = {
   relationshipMindMap: null,
   relationshipExpandedMap: null,
   collapsedVolumeIds: new Set(),
+  collapsedRaceIds: new Set(),
   contextChapterId: null
 };
 
@@ -1783,7 +1784,8 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
-    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+    // Presence is best-effort; a heartbeat 401 must not force the login wall.
+    if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
       state.user = null;
       state.csrfToken = null;
       showAuth(false);
@@ -2679,6 +2681,7 @@ function resetWorkScopedUiCaches() {
   state.settings = [];
   characterListPage = 1;
   state.collapsedVolumeIds.clear();
+  state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
   if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
   aiContextUsageTimer = null;
@@ -3138,6 +3141,72 @@ function bindModuleLayoutToggle(refresh) {
   }));
 }
 
+function raceTreeExpandIconMarkup(action) {
+  if (action === "collapse") {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 15 6-6 6 6"></path></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"></path></svg>';
+}
+
+function raceTreeExpandAction() {
+  return state.collapsedRaceIds.size === 0 ? "collapse" : "expand";
+}
+
+function renderRaceTreeExpandToggle() {
+  const action = raceTreeExpandAction();
+  const label = action === "collapse" ? "全部折叠" : "全部展开";
+  return `<div class="module-layout-toolbar race-tree-expand-toolbar" data-module-header-action="race-tree-expand">
+    <div class="module-layout-toggle" role="group" aria-label="种族树展开折叠">
+      <button type="button" data-race-tree-expand="${action}" aria-label="${label}" title="${label}">${raceTreeExpandIconMarkup(action)}</button>
+    </div>
+  </div>`;
+}
+
+function mountRaceTreeExpandToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="race-tree-expand"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", renderRaceTreeExpandToggle());
+}
+
+function syncRaceTreeExpandToggle() {
+  const button = $("#module-header-actions").querySelector("[data-race-tree-expand]");
+  if (!button) return;
+  const action = raceTreeExpandAction();
+  const label = action === "collapse" ? "全部折叠" : "全部展开";
+  button.dataset.raceTreeExpand = action;
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.innerHTML = raceTreeExpandIconMarkup(action);
+}
+
+function setAllRaceTreeNodesOpen(open) {
+  const nodes = $("#module-content").querySelectorAll("details.race-tree-node[data-race-node]");
+  if (open) state.collapsedRaceIds.clear();
+  else nodes.forEach((node) => state.collapsedRaceIds.add(node.dataset.raceNode));
+  nodes.forEach((node) => {
+    node.open = open;
+  });
+  syncRaceTreeExpandToggle();
+}
+
+function bindRaceTreeNodeToggles() {
+  $("#module-content").querySelectorAll("details.race-tree-node[data-race-node]").forEach((node) => {
+    node.addEventListener("toggle", () => {
+      const raceId = node.dataset.raceNode;
+      if (!raceId) return;
+      if (node.open) state.collapsedRaceIds.delete(raceId);
+      else state.collapsedRaceIds.add(raceId);
+      syncRaceTreeExpandToggle();
+    });
+  });
+}
+
+function bindRaceTreeExpandToggle() {
+  $("#module-header-actions").querySelector("[data-race-tree-expand]")?.addEventListener("click", (event) => {
+    const button = event.currentTarget;
+    setAllRaceTreeNodesOpen(button.dataset.raceTreeExpand === "expand");
+  });
+}
+
 function mountCharacterFilterToggle() {
   $("#module-header-actions").querySelector('[data-module-header-action="character-filter-toggle"]')?.remove();
   $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="character-filter-toggle" aria-label="筛选角色" aria-controls="character-filter-panel" aria-expanded="${characterFiltersPanelOpen}" title="筛选角色"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
@@ -3379,7 +3448,7 @@ async function renderRaces() {
   const raceCardActions = (item) => canEditRaces
     ? raceActions(item)
     : `<div class="card-actions">${raceActions(item)}</div>`;
-  const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
+  const renderRaceNode = (item) => `<details class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"} data-race-node="${esc(item.id)}">
     <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
     <div class="race-tree-branch">
     <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settingsCount ?? item.settings?.length ?? 0} 条自身设定</small>
@@ -3404,10 +3473,13 @@ async function renderRaces() {
     </article>`;
   }).join("")}</div>`;
   if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
+  if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle();
   $("#module-content").innerHTML = state.races.length
     ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   bindModuleLayoutToggle(renderRaces);
+  bindRaceTreeExpandToggle();
+  bindRaceTreeNodeToggles();
   const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
   bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });

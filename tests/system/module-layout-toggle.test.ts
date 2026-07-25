@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-mobile-workspace-unify');
-    expect(page.text).toContain('/app.js?v=20260725-mobile-workspace-unify');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-mobile-workspace-unify"></script>');
+    expect(page.text).toContain('/styles.css?v=20260725-race-tree-expand');
+    expect(page.text).toContain('/app.js?v=20260725-race-tree-expand');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-race-tree-expand"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -93,7 +93,19 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "设定列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "角色列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "种族列表样式")');
+    expect(application.text).toContain('function mountRaceTreeExpandToggle()');
+    expect(application.text).toContain('function setAllRaceTreeNodesOpen(open)');
+    expect(application.text).toContain('function bindRaceTreeNodeToggles()');
+    expect(application.text).toContain('function syncRaceTreeExpandToggle()');
+    expect(application.text).toContain('function raceTreeExpandAction()');
+    expect(application.text).toContain('collapsedRaceIds: new Set()');
+    expect(application.text).toContain('data-race-tree-expand="${action}"');
+    expect(application.text).toContain('const label = action === "collapse" ? "全部折叠" : "全部展开"');
+    expect(application.text).toContain('if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle()');
+    expect(application.text).toContain('class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"}');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "组织列表样式")');
+    expect(styles.text).toContain(".race-tree-expand-toolbar ~ .module-layout-toolbar { order: 2; }");
+    expect(styles.text).toContain(".race-tree-expand-toolbar ~ #module-create-button { order: 3; }");
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "伏笔列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "审核列表样式")');
     expect(page.text).toContain('id="module-header-actions"');
