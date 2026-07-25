@@ -6,7 +6,7 @@ import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-a
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
-import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260713-persisted-output-tokens";
+import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
@@ -6206,7 +6206,7 @@ async function sendAi() {
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
       assistantContent = suggestion.content;
-      assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens };
+      assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
     try {
       const persistedAssistantMessage = await persistAiConversationMessage("assistant", assistantContent, [], assistantMetadata);
@@ -6302,9 +6302,9 @@ async function streamChat(body) {
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
         const processDurationMs = elapsedProcessTime();
-        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, toolCalls, processSteps, processDurationMs };
+        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, cacheHitPercent: payload.cacheHitPercent, toolCalls, processSteps, processDurationMs };
         renderAiProcessSteps(message, processSteps, true, processDurationMs);
-        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens);
+        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
       } else if (eventName === "error") {
@@ -6359,7 +6359,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     const outputTokens = Number.isFinite(metadata?.outputTokens) ? metadata.outputTokens : estimateAiMessageTokens(text);
     const meta = document.createElement("div");
     meta.className = "message-meta";
-    meta.textContent = formatAiMessageMeta(modelDisplayName, outputTokens);
+    meta.textContent = formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent);
     message.append(meta);
     attachAssistantCopyAction(message, text);
   }
@@ -6374,7 +6374,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
   const applicable = suggestion.action !== "note";
   const guard = suggestion.guard;
   const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
-  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, `基于 v${suggestion.chapterVersion ?? "-"}`))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
+  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
   attachMessageHeading(message, "助手建议", createdAt ?? undefined);
   attachAssistantCopyAction(message, suggestion.content);
   attachMessageIdentity(message, messageId);
