@@ -758,7 +758,7 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .api-key-result label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .api-key-result input { width: 100%; min-height: 38px; padding: 9px 10px; background: var(--surface); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; }
 .api-key-result button { min-height: 38px; }
-.book-access-badge { display: inline-flex; width: fit-content; margin-top: 7px; padding: 2px 7px; border-radius: 10px; background: var(--paper-deep); color: var(--accent-dark); font-size: 9px; }
+.book-access-badge { display: inline-flex; width: fit-content; margin-top: 7px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--accent-dark); font-size: 9px; }
 .book-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: clamp(22px, 3vw, 38px); width: 100%; min-width: 0; max-width: 1400px; margin: 0 auto; }
 .book-card { position: relative; min-width: 0; border: 0; background: transparent; text-align: left; }
 .book-open { width: 100%; padding: 0; border: 0; background: transparent; text-align: left; }
@@ -883,7 +883,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-node > span:first-child { min-width: 0; overflow-wrap: anywhere; line-height: 1.45; white-space: normal; }
 .chapter-node-meta { display: flex; flex: none; align-items: center; gap: 5px; margin-left: auto; overflow: visible; white-space: nowrap; }
 .chapter-node small { color: var(--muted); font-size: 9px; }
-.chapter-type-badge { max-width: 58px; overflow: hidden; padding: 2px 5px; border-radius: 9px; background: rgba(139,61,44,.1); color: var(--accent-dark); font-size: 8px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-type-badge { max-width: 58px; overflow: hidden; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent-dark); font-size: 8px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 .ghost-button, .primary-button { border-radius: 4px; padding: 8px 13px; font-size: 12px; }
 .ghost-button { border: 1px solid var(--line); background: transparent; }
@@ -1898,7 +1898,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-version-card-heading span, .character-version-card-heading time { color: var(--muted); font-size: 8px; }
 .character-version-card p { margin: 0; color: var(--ink); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .character-version-changes { display: flex; flex-wrap: wrap; gap: 4px; }
-.character-version-changes span { padding: 2px 6px; border-radius: 10px; background: var(--paper-deep); color: var(--muted); font-size: 8px; }
+.character-version-changes span { padding: 2px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 8px; }
 .character-version-card > button { justify-self: end; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); font-size: 9px; }
 .character-version-card > button:not(:disabled):hover { border-color: var(--accent); color: var(--accent-dark); }
 .character-version-card > button.is-confirming { border-color: var(--accent); background: var(--accent); color: #fff; }
