@@ -281,7 +281,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260725-character-filter-toggle');
-    expect(page.text).toContain('/styles.css?v=20260725-mobile-shelf-v4');
+    expect(page.text).toContain('/styles.css?v=20260725-mobile-workspace-v3');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
@@ -502,6 +502,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".topbar .work-meta { display: none; }");
     expect(styles.text).toContain(".account-button > span:last-child { display: none; }");
     expect(styles.text).toContain(".app-shell.shelf-mode #top-search-button { display: none; }");
+    expect(styles.text).toContain(".app-shell:not(.shelf-mode) { grid-template-columns: minmax(0,1fr); }");
+    expect(styles.text).toContain(".mobile-panel-toggle { display: grid;");
+    expect(application.text).toContain("function setMobilePanel(panel, open)");
+    expect(styles.text).toContain(".presence-button #presence-count { display: none; }");
+    expect(styles.text).toContain(".top-actions .save-state { display: none; }");
     expect(application.text).toContain('function isMobileLayout()');
     expect(application.text).toContain('if (isMobileLayout()) return;');
     expect(styles.text).not.toContain("-webkit-box-orient: vertical; min-height: 2.8em;");

@@ -639,6 +639,15 @@ function applyPanelLayout(persist = false) {
   }
 }
 
+function setMobilePanel(panel, open) {
+  const app = $("#app");
+  const isLeft = panel === "left";
+  app.classList.toggle("mobile-left-panel-open", isLeft && open);
+  app.classList.toggle("mobile-ai-panel-open", !isLeft && open);
+  $("#mobile-outline-toggle").setAttribute("aria-expanded", String(isLeft && open));
+  $("#mobile-ai-toggle").setAttribute("aria-expanded", String(!isLeft && open));
+}
+
 function ensureAiPanelExpanded() {
   if (!panelLayout.aiCollapsed) return;
   panelLayout.aiCollapsed = false;
@@ -2746,7 +2755,10 @@ function renderTree() {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
-    button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
+    button.addEventListener("click", () => {
+      selectChapter(button.dataset.chapterId);
+      if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("left", false);
+    });
     button.addEventListener("contextmenu", (event) => {
       if (!canEditProse()) return;
       event.preventDefault();
@@ -6486,10 +6498,20 @@ $("#add-line-citation").addEventListener("click", addSelectedLinesAsCitation);
 $("#left-panel-toggle").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
   applyPanelLayout(true);
+  if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("left", false);
 });
 $("#ai-panel-toggle").addEventListener("click", () => {
   panelLayout.aiCollapsed = !panelLayout.aiCollapsed;
   applyPanelLayout(true);
+  if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("ai", false);
+});
+$("#mobile-outline-toggle").addEventListener("click", () => {
+  const open = !$("#app").classList.contains("mobile-left-panel-open");
+  setMobilePanel("left", open);
+});
+$("#mobile-ai-toggle").addEventListener("click", () => {
+  const open = !$("#app").classList.contains("mobile-ai-panel-open");
+  setMobilePanel("ai", open);
 });
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
@@ -6503,7 +6525,10 @@ $("#module-nav").addEventListener("click", (event) => {
     openWorkSettingsDialog(work);
     return;
   }
-  if (button.dataset.module) showModule(button.dataset.module);
+  if (button.dataset.module) {
+    showModule(button.dataset.module);
+    if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("left", false);
+  }
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
