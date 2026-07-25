@@ -3250,8 +3250,6 @@ async function renderCharacters(page = characterListPage) {
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
-  const hasMultipleCharacters = characterPage.page > 1 || characterPage.hasMore || state.characters.length > 1;
-  const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${hasMultipleCharacters ? "" : "disabled"}>AI 角色查重</button></section>` : "";
   const pagination = state.characters.length && (characterPage.page > 1 || characterPage.hasMore)
     ? `<nav class="module-pagination" aria-label="角色列表分页">
       <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
@@ -3275,7 +3273,7 @@ async function renderCharacters(page = characterListPage) {
   </section>`;
   mountCharacterFilterToggle();
   if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
-  $("#module-content").innerHTML = filterToolbar + auditPanel + (state.characters.length
+  $("#module-content").innerHTML = filterToolbar + (state.characters.length
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
@@ -3304,18 +3302,6 @@ async function renderCharacters(page = characterListPage) {
     $("#module-content").querySelectorAll("[data-character-page]").forEach((control) => { control.disabled = true; });
     await renderCharacters(Number(button.dataset.characterPage));
   }));
-  $("#create-character-audit-task")?.addEventListener("click", async () => {
-    const button = $("#create-character-audit-task");
-    button.disabled = true;
-    try {
-      await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: "character-identity-audit", scope: { type: "book" } } });
-      toast("角色查重任务已加入分析队列");
-      await showModule("tasks");
-    } catch (error) {
-      toast(error.message, "error");
-      button.disabled = false;
-    }
-  });
   bindRecordPreview("[data-open-character]", (id) => openCharacterEditor(state.characters.find((item) => item.id === id), { readOnly: true }));
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
 }

@@ -602,7 +602,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("--node-color");
     expect(styles.text).toContain("--node-brightness");
     expect(styles.text).toContain('[data-celestial-type="ringed"]');
-    expect(application.text).toContain('id="create-character-audit-task"');
+    expect(application.text).not.toContain('id="create-character-audit-task"');
+    expect(application.text).toContain('character-identity-audit');
     expect(application.text).toContain("data-merge-review");
     expect(application.text).toContain("data-keep-characters-separate");
     expect(styles.text).toContain(".character-duplicate-pair");

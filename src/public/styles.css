@@ -992,9 +992,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-filter-toolbar-actions { display: flex; align-items: center; justify-content: flex-end; min-height: 38px; }
 .character-filter-toolbar-actions button:disabled { cursor: default; opacity: .45; }
 .character-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.character-audit-panel { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 15px 17px; border: 1px solid var(--line); background: var(--surface-soft); }
-.character-audit-panel div { display: grid; gap: 5px; }
-.character-audit-panel small { max-width: 760px; color: var(--muted); line-height: 1.55; }
 .character-duplicate-review { grid-column: 1 / -1; }
 .character-duplicate-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
 .character-duplicate-pair section { display: grid; align-content: start; gap: 8px; min-width: 0; padding: 13px; border: 1px solid var(--line); background: var(--surface-soft); }
