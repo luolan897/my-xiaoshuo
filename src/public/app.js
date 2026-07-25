@@ -104,6 +104,8 @@ let peerPageStale = false;
 let collaborationAutoSaveDisabled = false;
 
 let timelineMultiSelectEnabled = false;
+let taskProgressRefreshTimer = null;
+const taskProgressRefreshInterval = 2_500;
 
 const chapterTypes = ["正文", "设定", "作者的话", "其他"];
 
@@ -2989,6 +2991,7 @@ async function showModule(module) {
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
+  if (module !== "tasks") stopTaskProgressRefresh();
   applyWorkAccessMode();
   markActiveModule(module);
   if (module === "editor") {
@@ -3868,6 +3871,7 @@ async function renderReviews() {
 }
 
 async function renderTasks() {
+  stopTaskProgressRefresh();
   const [tasks, settings] = await Promise.all([
     apiAllPages(`/api/works/${state.work.id}/tasks?view=summary`),
     canReadModule("ai-settings")
@@ -3877,7 +3881,12 @@ async function renderTasks() {
   mountModuleCount(tasks.length);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
   const pendingCount = tasks.filter((item) => item.status === "pending").length;
-  const runningCount = tasks.filter((item) => item.status === "running").length;
+  const runningTasks = tasks.filter((item) => item.status === "running");
+  const runningCount = runningTasks.length;
+  const activeTaskCount = pendingCount + runningCount;
+  const runningProgress = runningCount
+    ? Math.round(runningTasks.reduce((total, item) => total + Math.min(100, Math.max(0, Number(item.progress) || 0)), 0) / runningCount)
+    : 0;
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel ${canConfigureAutoRun ? "" : "hidden"}" aria-labelledby="task-auto-run-title">
       <div class="task-auto-run-copy">
@@ -3893,6 +3902,10 @@ async function renderTasks() {
         <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>开始下一轮</button>
       </div>
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
+      <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
+        <div class="task-auto-run-progress-label"><span>${runningCount ? "运行中任务平均进度" : "等待任务开始"}</span><strong>${runningProgress}%</strong></div>
+        <progress class="task-auto-run-progress-bar" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
+      </div>
     </section>
     ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
@@ -3956,6 +3969,7 @@ async function renderTasks() {
       button.textContent = "运行中";
       const cancel = button.parentElement.querySelector("[data-cancel-task]");
       if (cancel) cancel.textContent = "取消运行";
+      scheduleTaskProgressRefresh(workId, 1);
       const completed = await api(`/api/tasks/${button.dataset.runTask}/run`, { method: "POST", body: { modelId: $("#ai-model").value || undefined } });
       toast(completed.status === "cancelled" ? "分析任务已取消" : completed.status === "expired" ? "正文已变化，本次分析已过期" : "分析已完成");
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
@@ -3975,6 +3989,32 @@ async function renderTasks() {
       button.disabled = false;
     }
   }));
+  scheduleTaskProgressRefresh(state.work.id, runningCount);
+}
+
+function stopTaskProgressRefresh() {
+  if (taskProgressRefreshTimer === null) return;
+  window.clearTimeout(taskProgressRefreshTimer);
+  taskProgressRefreshTimer = null;
+}
+
+function scheduleTaskProgressRefresh(workId, runningCount) {
+  stopTaskProgressRefresh();
+  if (runningCount === 0) return;
+  taskProgressRefreshTimer = window.setTimeout(async () => {
+    taskProgressRefreshTimer = null;
+    if (state.module !== "tasks" || state.work?.id !== workId) return;
+    if ($(".task-auto-run-controls")?.contains(document.activeElement)) {
+      scheduleTaskProgressRefresh(workId, runningCount);
+      return;
+    }
+    try {
+      await renderTasks();
+    } catch (error) {
+      console.error("Failed to refresh task progress", error);
+      scheduleTaskProgressRefresh(workId, runningCount);
+    }
+  }, taskProgressRefreshInterval);
 }
 
 function openTaskDetailDialog(task) {
@@ -4530,6 +4570,8 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   bindRelationshipKeywordControls($("#dialog-fields"));
   bindVditorEditors($("#dialog-fields"));
   const form = $("#dynamic-form");
+  form.onclick = null;
+  form.onkeydown = null;
   form.onsubmit = async (event) => {
     if (event.submitter?.value === "cancel") {
       void discardPendingMarkdownAttachments();
@@ -5922,14 +5964,58 @@ function openReviewDialog() {
   });
 }
 
-function openTaskDialog() {
+async function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
+  let relationshipCharacters = [];
+  try {
+    relationshipCharacters = canReadModule("characters")
+      ? await apiAllPages(`/api/works/${state.work.id}/characters`)
+      : [];
+  } catch (error) {
+    toast(`角色列表加载失败：${error.message}`, "error");
+    return;
+  }
+  const characterOptions = relationshipCharacters.map((character) => [character.id, character.name]);
+  const relationshipCharacterPicker = `<div class="form-field relationship-character-field">
+    <span id="relationship-character-label">被分析角色（可多选）</span>
+    <div class="relationship-character-picker">
+      <button class="relationship-character-trigger" type="button" aria-expanded="false" aria-controls="relationship-character-bubble" aria-labelledby="relationship-character-label relationship-character-summary">
+        <span id="relationship-character-summary">选择需要定向分析的角色</span>
+        <span class="relationship-character-trigger-meta"><span data-relationship-character-count>未选择</span><span class="relationship-character-chevron" aria-hidden="true">⌄</span></span>
+      </button>
+      <div id="relationship-character-bubble" class="relationship-character-bubble hidden">
+        <label class="relationship-character-search">筛选角色<input type="search" data-relationship-character-search placeholder="输入角色名" autocomplete="off"></label>
+        <div class="relationship-character-bubble-meta"><span>共 ${characterOptions.length} 个角色</span><button type="button" data-relationship-character-clear disabled>清空选择</button></div>
+        <div class="relationship-character-options" role="group" aria-labelledby="relationship-character-label">
+          ${characterOptions.map(([characterId, characterName]) => `<label class="relationship-character-chip" data-character-search-name="${esc(String(characterName).toLocaleLowerCase())}"><input type="checkbox" name="characterIds" value="${esc(characterId)}" data-character-name="${esc(characterName)}"><span>${esc(characterName)}</span></label>`).join("")}
+        </div>
+        <p class="relationship-character-empty hidden" data-relationship-character-empty>没有匹配的角色</p>
+      </div>
+    </div>
+  </div>`;
   const defaultTaskType = ANALYSIS_TYPES[0].value;
   const taskTypeField = `<div class="form-field analysis-type-field"><label>分析类型<select name="taskType" aria-describedby="analysis-type-description">${ANALYSIS_TYPES.map(({ value, label }) => `<option value="${esc(value)}" ${value === defaultTaskType ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label><p id="analysis-type-description" class="analysis-type-description" aria-live="polite">${esc(analysisTypeDescription(defaultTaskType))}</p></div>`;
   const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
-  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField, async (form) => {
-    const scope = form.get("taskType") === "character-identity-audit" || form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
-    await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
+  const relationshipFields = `<div class="relationship-analysis-options hidden">
+    ${relationshipCharacterPicker}
+    <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。</span></p>
+    <div class="relationship-overwrite-card hidden">
+      <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
+      <p>任务成功后，会先删除所有涉及所选角色的旧关系，再写入本次分析结果。</p>
+    </div>
+    <label>额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将同时追加到证据收集和全局关系归纳提示词，仅影响本次任务。</small></label>
+  </div>`;
+  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
+    const taskType = String(form.get("taskType"));
+    const scopeType = String(form.get("scopeType"));
+    const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
+    const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
+    const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
+    const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
+    const scope = taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
+      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+    await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
     await renderTasks();
   });
   const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
@@ -5937,17 +6023,99 @@ function openTaskDialog() {
   const chapterSelect = $("#dialog-fields").querySelector('select[name="chapterId"]');
   const chapterFieldElement = chapterSelect.closest(".task-chapter-field");
   const description = $("#analysis-type-description");
+  const relationshipOptions = $("#dialog-fields").querySelector(".relationship-analysis-options");
+  const relationshipPrompt = relationshipOptions.querySelector('textarea[name="additionalPrompt"]');
+  const relationshipCharacterPickerElement = relationshipOptions.querySelector(".relationship-character-picker");
+  const relationshipCharacterTrigger = relationshipOptions.querySelector(".relationship-character-trigger");
+  const relationshipCharacterBubble = relationshipOptions.querySelector(".relationship-character-bubble");
+  const relationshipCharacterSearch = relationshipOptions.querySelector("[data-relationship-character-search]");
+  const relationshipCharacterInputs = [...relationshipOptions.querySelectorAll('input[name="characterIds"]')];
+  const relationshipCharacterSummary = relationshipOptions.querySelector("#relationship-character-summary");
+  const relationshipCharacterCount = relationshipOptions.querySelector("[data-relationship-character-count]");
+  const relationshipCharacterClear = relationshipOptions.querySelector("[data-relationship-character-clear]");
+  const relationshipCharacterEmpty = relationshipOptions.querySelector("[data-relationship-character-empty]");
+  const replaceRelationships = relationshipOptions.querySelector('input[name="replaceExistingRelationships"]');
+  const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-overwrite-card");
+  const allSettingsOption = document.createElement("option");
+  allSettingsOption.value = "book-with-settings";
+  allSettingsOption.textContent = "全书 + 所有设定";
   const syncChapterField = () => {
-    const disabled = scopeTypeSelect.value === "book";
+    const disabled = scopeTypeSelect.value !== "chapter";
     chapterSelect.disabled = disabled;
     chapterFieldElement.classList.toggle("is-disabled", disabled);
     chapterFieldElement.setAttribute("aria-disabled", String(disabled));
   };
+  const setRelationshipCharacterBubbleOpen = (open) => {
+    relationshipCharacterBubble.classList.toggle("hidden", !open);
+    relationshipCharacterTrigger.setAttribute("aria-expanded", String(open));
+    if (open) relationshipCharacterSearch.focus();
+  };
+  const syncRelationshipCharacterPicker = () => {
+    const selected = relationshipCharacterInputs.filter((input) => input.checked);
+    const selectedNames = selected.map((input) => input.dataset.characterName);
+    relationshipCharacterSummary.textContent = selectedNames.length
+      ? `${selectedNames.slice(0, 2).join("、")}${selectedNames.length > 2 ? ` 等 ${selectedNames.length} 人` : ""}`
+      : "选择需要定向分析的角色";
+    relationshipCharacterCount.textContent = selected.length ? `已选 ${selected.length}` : "未选择";
+    relationshipCharacterClear.disabled = selected.length === 0;
+    relationshipCharacterTrigger.setAttribute("aria-label", `筛选被分析角色，已选择 ${selected.length} 个`);
+  };
+  const filterRelationshipCharacters = () => {
+    const query = relationshipCharacterSearch.value.trim().toLocaleLowerCase();
+    let visibleCount = 0;
+    for (const input of relationshipCharacterInputs) {
+      const chip = input.closest(".relationship-character-chip");
+      const visible = !query || chip.dataset.characterSearchName.includes(query);
+      chip.classList.toggle("hidden", !visible);
+      if (visible) visibleCount += 1;
+    }
+    relationshipCharacterEmpty.classList.toggle("hidden", visibleCount > 0);
+  };
+  const syncRelationshipOptions = () => {
+    const enabled = taskTypeSelect.value === "relationship-analysis";
+    if (enabled && !allSettingsOption.isConnected) scopeTypeSelect.append(allSettingsOption);
+    if (!enabled && allSettingsOption.isConnected) {
+      if (scopeTypeSelect.value === allSettingsOption.value) scopeTypeSelect.value = "book";
+      allSettingsOption.remove();
+    }
+    relationshipOptions.classList.toggle("hidden", !enabled);
+    relationshipPrompt.disabled = !enabled;
+    relationshipCharacterTrigger.disabled = !enabled;
+    relationshipCharacterSearch.disabled = !enabled;
+    for (const input of relationshipCharacterInputs) input.disabled = !enabled;
+    if (!enabled) setRelationshipCharacterBubbleOpen(false);
+    const hasSelectedCharacters = enabled && relationshipCharacterInputs.some((input) => input.checked);
+    replaceRelationships.disabled = !hasSelectedCharacters;
+    relationshipOverwriteCard.classList.toggle("hidden", !hasSelectedCharacters);
+    if (!hasSelectedCharacters) replaceRelationships.checked = false;
+    syncRelationshipCharacterPicker();
+    filterRelationshipCharacters();
+    syncChapterField();
+  };
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
+    syncRelationshipOptions();
   });
+  relationshipCharacterTrigger.addEventListener("click", () => {
+    setRelationshipCharacterBubbleOpen(relationshipCharacterTrigger.getAttribute("aria-expanded") !== "true");
+  });
+  relationshipCharacterSearch.addEventListener("input", filterRelationshipCharacters);
+  for (const input of relationshipCharacterInputs) input.addEventListener("change", syncRelationshipOptions);
+  relationshipCharacterClear.addEventListener("click", () => {
+    for (const input of relationshipCharacterInputs) input.checked = false;
+    syncRelationshipOptions();
+  });
+  $("#dynamic-form").onclick = (event) => {
+    if (!relationshipCharacterPickerElement.contains(event.target)) setRelationshipCharacterBubbleOpen(false);
+  };
+  $("#dynamic-form").onkeydown = (event) => {
+    if (event.key !== "Escape" || relationshipCharacterBubble.classList.contains("hidden")) return;
+    event.preventDefault();
+    setRelationshipCharacterBubbleOpen(false);
+    relationshipCharacterTrigger.focus();
+  };
   scopeTypeSelect.addEventListener("change", syncChapterField);
-  syncChapterField();
+  syncRelationshipOptions();
 }
 
 function openProviderDialog(item) {
