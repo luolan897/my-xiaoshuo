@@ -5714,16 +5714,28 @@ function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
   const defaultTaskType = ANALYSIS_TYPES[0].value;
   const taskTypeField = `<div class="form-field analysis-type-field"><label>分析类型<select name="taskType" aria-describedby="analysis-type-description">${ANALYSIS_TYPES.map(({ value, label }) => `<option value="${esc(value)}" ${value === defaultTaskType ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label><p id="analysis-type-description" class="analysis-type-description" aria-live="polite">${esc(analysisTypeDescription(defaultTaskType))}</p></div>`;
-  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
+  const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
+  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField, async (form) => {
     const scope = form.get("taskType") === "character-identity-audit" || form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
     await renderTasks();
   });
   const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
+  const scopeTypeSelect = $("#dialog-fields").querySelector('select[name="scopeType"]');
+  const chapterSelect = $("#dialog-fields").querySelector('select[name="chapterId"]');
+  const chapterFieldElement = chapterSelect.closest(".task-chapter-field");
   const description = $("#analysis-type-description");
+  const syncChapterField = () => {
+    const disabled = scopeTypeSelect.value === "book";
+    chapterSelect.disabled = disabled;
+    chapterFieldElement.classList.toggle("is-disabled", disabled);
+    chapterFieldElement.setAttribute("aria-disabled", String(disabled));
+  };
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
   });
+  scopeTypeSelect.addEventListener("change", syncChapterField);
+  syncChapterField();
 }
 
 function openProviderDialog(item) {

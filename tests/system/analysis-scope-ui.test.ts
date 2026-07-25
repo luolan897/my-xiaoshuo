@@ -1,0 +1,21 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+describe("AI 分析范围交互", () => {
+  it("选择全书时禁用章节选项，并在切回指定章节后恢复", async () => {
+    const publicPath = join(process.cwd(), "src/public");
+    const [application, styles] = await Promise.all([
+      readFile(join(publicPath, "app.js"), "utf8"),
+      readFile(join(publicPath, "styles.css"), "utf8")
+    ]);
+
+    expect(application).toContain('const disabled = scopeTypeSelect.value === "book"');
+    expect(application).toContain("chapterSelect.disabled = disabled");
+    expect(application).toContain('chapterFieldElement.classList.toggle("is-disabled", disabled)');
+    expect(application).toContain('chapterFieldElement.setAttribute("aria-disabled", String(disabled))');
+    expect(application).toContain('scopeTypeSelect.addEventListener("change", syncChapterField)');
+    expect(styles).toContain(".task-chapter-field.is-disabled { opacity: .48; }");
+    expect(styles).toContain(".task-chapter-field select:disabled { cursor: not-allowed; }");
+  });
+});
