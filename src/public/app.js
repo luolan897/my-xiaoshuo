@@ -40,6 +40,16 @@ import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canW
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
+import {
+  clampCropRect,
+  containImageRect,
+  cropOutputSize,
+  defaultCropRect,
+  mapDisplayPointToImage,
+  mapImageRectToDisplay,
+  moveCropRect,
+  resizeCropRect
+} from "/avatar-crop.js?v=20260725-avatar-crop";
 
 const state = {
   user: null,
@@ -6336,6 +6346,196 @@ $("#account-settings-button").addEventListener("click", () => {
 });
 $("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
 $("#avatar-upload-button").addEventListener("click", () => $("#avatar-file").click());
+
+const avatarCropSession = {
+  objectUrl: null,
+  imageWidth: 0,
+  imageHeight: 0,
+  crop: { x: 0, y: 0, size: 0 },
+  display: { x: 0, y: 0, width: 0, height: 0, scale: 0 },
+  drag: null,
+  uploading: false
+};
+
+function releaseAvatarCropObjectUrl() {
+  if (!avatarCropSession.objectUrl) return;
+  URL.revokeObjectURL(avatarCropSession.objectUrl);
+  avatarCropSession.objectUrl = null;
+}
+
+function closeAvatarCropDialog() {
+  const dialog = $("#avatar-crop-dialog");
+  if (dialog?.open) dialog.close();
+}
+
+function resetAvatarCropDialog() {
+  releaseAvatarCropObjectUrl();
+  avatarCropSession.drag = null;
+  avatarCropSession.imageWidth = 0;
+  avatarCropSession.imageHeight = 0;
+  avatarCropSession.crop = { x: 0, y: 0, size: 0 };
+  const image = $("#avatar-crop-image");
+  if (image) image.removeAttribute("src");
+  $("#avatar-crop-selection")?.setAttribute("hidden", "");
+  $("#avatar-crop-preview")?.replaceChildren();
+  const fileInput = $("#avatar-file");
+  if (fileInput) fileInput.value = "";
+}
+
+function stagePointFromEvent(event) {
+  const stage = $("#avatar-crop-stage");
+  const bounds = stage.getBoundingClientRect();
+  return {
+    x: event.clientX - bounds.left,
+    y: event.clientY - bounds.top
+  };
+}
+
+function paintAvatarCropPreview() {
+  const preview = $("#avatar-crop-preview");
+  const image = $("#avatar-crop-image");
+  if (!preview || !image?.naturalWidth || avatarCropSession.crop.size < 1) {
+    preview?.replaceChildren();
+    return;
+  }
+  const output = cropOutputSize(avatarCropSession.crop.size);
+  let canvas = preview.querySelector("canvas");
+  if (!canvas) {
+    preview.replaceChildren();
+    canvas = document.createElement("canvas");
+    preview.append(canvas);
+  }
+  canvas.width = output;
+  canvas.height = output;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.clearRect(0, 0, output, output);
+  context.beginPath();
+  context.arc(output / 2, output / 2, output / 2, 0, Math.PI * 2);
+  context.closePath();
+  context.clip();
+  context.drawImage(
+    image,
+    avatarCropSession.crop.x,
+    avatarCropSession.crop.y,
+    avatarCropSession.crop.size,
+    avatarCropSession.crop.size,
+    0,
+    0,
+    output,
+    output
+  );
+}
+
+function renderAvatarCropSelection() {
+  const stage = $("#avatar-crop-stage");
+  const selection = $("#avatar-crop-selection");
+  const shade = $("#avatar-crop-shade");
+  const image = $("#avatar-crop-image");
+  if (!stage || !selection || !shade || !image?.naturalWidth) return;
+
+  avatarCropSession.display = containImageRect(
+    avatarCropSession.imageWidth,
+    avatarCropSession.imageHeight,
+    stage.clientWidth,
+    stage.clientHeight
+  );
+  const shown = mapImageRectToDisplay(avatarCropSession.crop, avatarCropSession.display);
+  if (shown.size < 1) {
+    selection.setAttribute("hidden", "");
+    shade.style.webkitMaskSize = "100% 100%, 0 0";
+    shade.style.maskSize = "100% 100%, 0 0";
+    return;
+  }
+  selection.hidden = false;
+  selection.style.left = `${shown.x}px`;
+  selection.style.top = `${shown.y}px`;
+  selection.style.width = `${shown.size}px`;
+  selection.style.height = `${shown.size}px`;
+  const hole = `${Math.max(0, shown.size)}px ${Math.max(0, shown.size)}px`;
+  const position = `${shown.x}px ${shown.y}px`;
+  shade.style.webkitMaskSize = `100% 100%, ${hole}`;
+  shade.style.maskSize = `100% 100%, ${hole}`;
+  shade.style.webkitMaskPosition = `0 0, ${position}`;
+  shade.style.maskPosition = `0 0, ${position}`;
+  paintAvatarCropPreview();
+}
+
+function applyAvatarCropRect(next) {
+  avatarCropSession.crop = clampCropRect(next, avatarCropSession.imageWidth, avatarCropSession.imageHeight);
+  renderAvatarCropSelection();
+}
+
+async function openAvatarCropDialog(file) {
+  releaseAvatarCropObjectUrl();
+  const objectUrl = URL.createObjectURL(file);
+  avatarCropSession.objectUrl = objectUrl;
+  const image = $("#avatar-crop-image");
+  const dialog = $("#avatar-crop-dialog");
+  await new Promise((resolve, reject) => {
+    const onLoad = () => {
+      image.removeEventListener("error", onError);
+      resolve();
+    };
+    const onError = () => {
+      image.removeEventListener("load", onLoad);
+      reject(new Error("无法读取所选图片"));
+    };
+    image.addEventListener("load", onLoad, { once: true });
+    image.addEventListener("error", onError, { once: true });
+    image.src = objectUrl;
+  });
+  avatarCropSession.imageWidth = image.naturalWidth;
+  avatarCropSession.imageHeight = image.naturalHeight;
+  if (avatarCropSession.imageWidth > 4096 || avatarCropSession.imageHeight > 4096) {
+    resetAvatarCropDialog();
+    throw new Error("图片尺寸不能超过 4096 × 4096 像素");
+  }
+  avatarCropSession.crop = defaultCropRect(avatarCropSession.imageWidth, avatarCropSession.imageHeight);
+  if (avatarCropSession.crop.size < 1) {
+    resetAvatarCropDialog();
+    throw new Error("图片尺寸无效");
+  }
+  if (!dialog.open) dialog.showModal();
+  requestAnimationFrame(() => {
+    renderAvatarCropSelection();
+    $("#avatar-crop-confirm")?.focus();
+  });
+}
+
+function exportAvatarCropBlob() {
+  const image = $("#avatar-crop-image");
+  if (!image?.naturalWidth || avatarCropSession.crop.size < 1) {
+    return Promise.reject(new Error("请先完成头像裁剪"));
+  }
+  const output = cropOutputSize(avatarCropSession.crop.size);
+  const canvas = document.createElement("canvas");
+  canvas.width = output;
+  canvas.height = output;
+  const context = canvas.getContext("2d");
+  if (!context) return Promise.reject(new Error("当前浏览器无法裁剪图片"));
+  context.drawImage(
+    image,
+    avatarCropSession.crop.x,
+    avatarCropSession.crop.y,
+    avatarCropSession.crop.size,
+    avatarCropSession.crop.size,
+    0,
+    0,
+    output,
+    output
+  );
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("头像裁剪失败"));
+        return;
+      }
+      resolve(blob);
+    }, "image/png");
+  });
+}
+
 $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
@@ -6344,23 +6544,115 @@ $("#avatar-file").addEventListener("change", async (event) => {
     event.target.value = "";
     return;
   }
-  const body = new FormData();
-  body.append("file", file);
+  try {
+    await openAvatarCropDialog(file);
+  } catch (error) {
+    toast(error.message, "error");
+    event.target.value = "";
+  }
+});
+
+$("#avatar-crop-stage").addEventListener("pointerdown", (event) => {
+  if (!$("#avatar-crop-dialog")?.open || avatarCropSession.uploading) return;
+  const handle = event.target.closest("[data-avatar-crop-handle]")?.dataset.avatarCropHandle;
+  const onSelection = event.target.closest("#avatar-crop-selection");
+  if (!handle && !onSelection) return;
+  event.preventDefault();
+  const point = stagePointFromEvent(event);
+  const imagePoint = mapDisplayPointToImage(point, avatarCropSession.display);
+  avatarCropSession.drag = {
+    mode: handle ? "resize" : "move",
+    handle: handle || null,
+    originX: imagePoint.x,
+    originY: imagePoint.y,
+    startCrop: { ...avatarCropSession.crop }
+  };
+  $("#avatar-crop-selection").classList.add("is-dragging");
+  $("#avatar-crop-stage").setPointerCapture(event.pointerId);
+});
+
+$("#avatar-crop-stage").addEventListener("pointermove", (event) => {
+  if (!avatarCropSession.drag) return;
+  const point = stagePointFromEvent(event);
+  const imagePoint = mapDisplayPointToImage(point, avatarCropSession.display);
+  if (avatarCropSession.drag.mode === "move") {
+    applyAvatarCropRect(moveCropRect(
+      avatarCropSession.drag.startCrop,
+      imagePoint.x - avatarCropSession.drag.originX,
+      imagePoint.y - avatarCropSession.drag.originY,
+      avatarCropSession.imageWidth,
+      avatarCropSession.imageHeight
+    ));
+    return;
+  }
+  applyAvatarCropRect(resizeCropRect(
+    avatarCropSession.drag.startCrop,
+    avatarCropSession.drag.handle,
+    imagePoint.x,
+    imagePoint.y,
+    avatarCropSession.imageWidth,
+    avatarCropSession.imageHeight
+  ));
+});
+
+function endAvatarCropDrag(event) {
+  if (!avatarCropSession.drag) return;
+  avatarCropSession.drag = null;
+  $("#avatar-crop-selection")?.classList.remove("is-dragging");
+  if (event?.pointerId != null && $("#avatar-crop-stage")?.hasPointerCapture?.(event.pointerId)) {
+    $("#avatar-crop-stage").releasePointerCapture(event.pointerId);
+  }
+}
+
+$("#avatar-crop-stage").addEventListener("pointerup", endAvatarCropDrag);
+$("#avatar-crop-stage").addEventListener("pointercancel", endAvatarCropDrag);
+
+window.addEventListener("resize", () => {
+  if ($("#avatar-crop-dialog")?.open) renderAvatarCropSelection();
+});
+
+$("#avatar-crop-close").addEventListener("click", () => {
+  if (!avatarCropSession.uploading) closeAvatarCropDialog();
+});
+$("#avatar-crop-cancel").addEventListener("click", () => {
+  if (!avatarCropSession.uploading) closeAvatarCropDialog();
+});
+$("#avatar-crop-dialog").addEventListener("cancel", (event) => {
+  if (avatarCropSession.uploading) event.preventDefault();
+});
+$("#avatar-crop-dialog").addEventListener("close", () => {
+  if (avatarCropSession.uploading) return;
+  resetAvatarCropDialog();
+});
+
+$("#avatar-crop-confirm").addEventListener("click", async () => {
+  if (avatarCropSession.uploading) return;
+  avatarCropSession.uploading = true;
+  $("#avatar-crop-confirm").disabled = true;
+  $("#avatar-crop-cancel").disabled = true;
   $("#avatar-upload-button").disabled = true;
   $("#avatar-remove-button").disabled = true;
   try {
+    const blob = await exportAvatarCropBlob();
+    const body = new FormData();
+    body.append("file", blob, "avatar.png");
     const updated = await api("/api/auth/avatar", { method: "PUT", body });
     applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
     renderProfileAvatar();
+    avatarCropSession.uploading = false;
+    closeAvatarCropDialog();
     toast("头像已更新");
   } catch (error) {
     toast(error.message, "error");
   } finally {
+    avatarCropSession.uploading = false;
+    $("#avatar-crop-confirm").disabled = false;
+    $("#avatar-crop-cancel").disabled = false;
     $("#avatar-upload-button").disabled = false;
     $("#avatar-remove-button").disabled = false;
-    event.target.value = "";
   }
 });
+
 $("#avatar-remove-button").addEventListener("click", async () => {
   if (!state.user?.avatarUrl || !(await confirmToast("确定移除当前头像吗？", { title: "移除头像", confirmLabel: "确认移除" }))) return;
   $("#avatar-upload-button").disabled = true;

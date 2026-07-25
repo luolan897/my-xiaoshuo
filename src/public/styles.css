@@ -747,6 +747,74 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .avatar-settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .avatar-settings-actions button { min-height: 32px; padding: 6px 11px; font-size: 11px; }
 .avatar-settings-actions button:disabled { cursor: wait; opacity: .5; }
+.avatar-crop-dialog { width: min(720px, 94vw); }
+.avatar-crop-body { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 16px; align-items: start; padding: 18px 24px 8px; }
+.avatar-crop-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  max-height: min(52vh, 480px);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background:
+    linear-gradient(45deg, color-mix(in srgb, var(--line) 55%, transparent) 25%, transparent 25%) 0 0 / 16px 16px,
+    linear-gradient(-45deg, color-mix(in srgb, var(--line) 55%, transparent) 25%, transparent 25%) 0 8px / 16px 16px,
+    var(--surface-soft);
+  touch-action: none;
+  user-select: none;
+}
+.avatar-crop-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.avatar-crop-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--ink) 42%, transparent);
+  -webkit-mask-image: linear-gradient(#000, #000), linear-gradient(#000, #000);
+  mask-image: linear-gradient(#000, #000), linear-gradient(#000, #000);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.avatar-crop-selection {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, white 88%, var(--accent));
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 35%, transparent);
+  cursor: grab;
+  touch-action: none;
+}
+.avatar-crop-selection.is-dragging { cursor: grabbing; }
+.avatar-crop-selection[hidden] { display: none; }
+.avatar-crop-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 2px solid color-mix(in srgb, white 90%, var(--accent));
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 28%, transparent);
+}
+.avatar-crop-handle[data-avatar-crop-handle="nw"] { top: -7px; left: -7px; cursor: nwse-resize; }
+.avatar-crop-handle[data-avatar-crop-handle="ne"] { top: -7px; right: -7px; cursor: nesw-resize; }
+.avatar-crop-handle[data-avatar-crop-handle="sw"] { bottom: -7px; left: -7px; cursor: nesw-resize; }
+.avatar-crop-handle[data-avatar-crop-handle="se"] { bottom: -7px; right: -7px; cursor: nwse-resize; }
+.avatar-crop-side { display: grid; justify-items: center; gap: 8px; padding-top: 8px; }
+.avatar-crop-side p { margin: 0; color: var(--muted); font-size: 10px; }
+.avatar-crop-preview { width: 76px; height: 76px; border: 2px solid color-mix(in srgb, var(--line) 72%, transparent); background: var(--surface); }
+.avatar-crop-preview canvas { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%; }
 .account-settings-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; margin-top: 16px; }
 .account-settings-form label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 11px; }
 .account-settings-form input { width: 100%; min-height: 38px; padding: 9px 10px; background: var(--surface); font-size: 12px; }
@@ -2041,6 +2109,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .account-settings-form, .password-settings-form, .api-key-settings, .api-key-result { grid-template-columns: minmax(0, 1fr); }
   .avatar-settings { grid-template-columns: 64px minmax(0, 1fr); }
   .profile-avatar-preview { width: 64px; height: 64px; }
+  .avatar-crop-body { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 14px 16px 4px; }
+  .avatar-crop-side { grid-template-columns: auto 1fr; align-items: center; justify-items: start; gap: 10px; padding-top: 0; }
+  .avatar-crop-preview { width: 64px; height: 64px; }
   .account-settings-form .primary-button { width: 100%; }
 }
 
