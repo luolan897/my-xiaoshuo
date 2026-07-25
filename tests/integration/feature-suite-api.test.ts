@@ -899,6 +899,239 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0]).toMatchObject({ subtype: "朋友", keywords: ["长期信任", "共同守望"], confirmationStatus: "pending" });
   });
 
+  it("关系分析可将所有设定和额外提示加入每个抽取批次", async () => {
+    const systemPrompts: string[] = [];
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
+      systemPrompts.push(body.messages[0]?.content ?? "");
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId } = await seedWork(runtime);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "未锁定王位规则", category: "社会制度", content: "摄政者退位后仍保留导师身份。", locked: false
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "锁定继承规则", category: "社会制度", content: "王位只能由正式继承人承接。", locked: true
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        additionalPrompt: "重点检查退位者与继承人的师承变化。"
+      }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定");
+    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(userPrompts.length).toBeGreaterThan(0);
+    expect(userPrompts.every((prompt) => prompt.includes("全部作品设定（关系分析参考）"))).toBe(true);
+    expect(userPrompts.every((prompt) => prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
+    expect(userPrompts.every((prompt) => prompt.includes("王位只能由正式继承人承接"))).toBe(true);
+    expect(systemPrompts.every((prompt) => prompt.includes("作者追加的关系分析提示") && prompt.includes("重点检查退位者与继承人的师承变化"))).toBe(true);
+  });
+
+  it("选择角色后先收集跨章节证据再进行全局关系归纳", async () => {
+    let linId = "";
+    let shenId = "";
+    const systemPrompts: string[] = [];
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      const userPrompt = body.messages[1]?.content ?? "";
+      systemPrompts.push(systemPrompt);
+      userPrompts.push(userPrompt);
+      if (userPrompt.includes("小说人物关系全局归纳器")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+          fromCharacterId: linId,
+          toCharacterId: shenId,
+          category: "social",
+          subtype: "朋友",
+          keywords: ["长期信任", "失联重逢"],
+          directed: false,
+          currentStatus: "active",
+          confidence: 0.92,
+          timeRange: { stages: ["北港重逢"] },
+          evidence: [{ chapterId: userPrompt.match(/"chapterId":"([^"]+)"/u)?.[1], chapterTitle: "第一章 埋线", quote: "我们一直是朋友", contextType: "current", supports: "原文直接说明长期关系" }]
+        }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const chapterId = userPrompt.match(/<CHAPTER id="([^"]+)"/u)?.[1] ?? "";
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+        targetCharacterId: linId,
+        relatedCharacterId: shenId,
+        observation: "沈星直接说明两人一直是朋友",
+        possibleCategory: "social",
+        possibleSubtype: "朋友",
+        directionHint: "undirected",
+        timeHint: "current",
+        chapterId,
+        chapterTitle: "第一章 埋线",
+        quote: "我们一直是朋友",
+        contextType: "current"
+      }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId } = await seedWork(runtime);
+    const lin = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", profile: { identity: "调查员" } }).expect(201);
+    const shen = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const qiao = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "乔安" }).expect(201);
+    const ye = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "叶宁" }).expect(201);
+    linId = lin.body.data.id as string;
+    shenId = shen.body.data.id as string;
+    const unrelated = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: qiao.body.data.id,
+      toCharacterId: ye.body.data.id,
+      category: "social",
+      subtype: "盟友",
+      confirmationStatus: "confirmed"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "未锁定北港旧约", category: "社会制度", content: "北港旧约只认可长期互信。", locked: false
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        characterIds: [linId],
+        additionalPrompt: "重点检查失联前后的关系连续性。"
+      }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定 · 定向 1 人");
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      candidateCount: 1,
+      targetedCharacterIds: [linId],
+      targetedEvidenceCount: 1,
+      aggregationBatchCount: 1,
+      replacedRelationshipCount: 0
+    });
+    expect(userPrompts).toHaveLength(2);
+    expect(userPrompts[0]).toContain("定向人物关系证据收集器");
+    expect(userPrompts[1]).toContain("小说人物关系全局归纳器");
+    expect(userPrompts[1]).toContain("沈星直接说明两人一直是朋友");
+    expect(userPrompts.every((prompt) => prompt.includes("北港旧约只认可长期互信"))).toBe(true);
+    expect(userPrompts.every((prompt) => prompt.includes("林舟") && prompt.includes("调查员"))).toBe(true);
+    expect(systemPrompts.every((prompt) => prompt.includes("重点检查失联前后的关系连续性"))).toBe(true);
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data.some((relationship: { id: string }) => relationship.id === unrelated.body.data.id)).toBe(true);
+    expect(relationships.body.data.some((relationship: { fromCharacterId: string; toCharacterId: string; subtype: string }) =>
+      new Set([relationship.fromCharacterId, relationship.toCharacterId]).has(linId) && relationship.subtype === "朋友"
+    )).toBe(true);
+  });
+
+  it("覆盖定向角色关系并在归纳失败时保留全部旧关系", async () => {
+    let linId = "";
+    let shenId = "";
+    let failAggregation = false;
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      if (prompt.includes("小说人物关系全局归纳器")) {
+        if (failAggregation) {
+          return new Response(JSON.stringify({ error: { code: "aggregation_failed" } }), { status: 503, headers: { "Content-Type": "application/json" } });
+        }
+        const chapterId = prompt.match(/"chapterId":"([^"]+)"/u)?.[1] ?? "";
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+          fromCharacterId: linId,
+          toCharacterId: shenId,
+          category: "social",
+          subtype: "朋友",
+          keywords: ["长期信任", "北港重逢"],
+          directed: false,
+          currentStatus: "active",
+          confidence: 0.91,
+          timeRange: {},
+          evidence: [{ chapterId, chapterTitle: "第一章 埋线", quote: "我们一直是朋友", contextType: "current", supports: "原文直接说明" }]
+        }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const chapterId = prompt.match(/<CHAPTER id="([^"]+)"/u)?.[1] ?? "";
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+        targetCharacterId: linId,
+        relatedCharacterId: shenId,
+        observation: "两人是长期朋友",
+        possibleCategory: "social",
+        possibleSubtype: "朋友",
+        chapterId,
+        chapterTitle: "第一章 埋线",
+        quote: "我们一直是朋友",
+        contextType: "current"
+      }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId } = await seedWork(runtime);
+    const lin = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const shen = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const qiao = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "乔安" }).expect(201);
+    const ye = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "叶宁" }).expect(201);
+    linId = lin.body.data.id as string;
+    shenId = shen.body.data.id as string;
+    const lockedOld = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: linId, toCharacterId: shenId, category: "social", subtype: "旧识", confirmationStatus: "confirmed", locked: true
+    }).expect(201);
+    const pendingOld = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: linId, toCharacterId: qiao.body.data.id, category: "conflict", subtype: "竞争者", confirmationStatus: "pending"
+    }).expect(201);
+    const unrelated = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: shenId, toCharacterId: ye.body.data.id, category: "social", subtype: "同事", confirmationStatus: "confirmed"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const createTask = () => request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [linId], replaceExistingRelationships: true }
+    });
+    const task = await createTask().expect(201);
+    expect(task.body.data.scopeSummary).toBe("全书 · 定向 1 人 · 覆盖已有关系");
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result.replacedRelationshipCount).toBe(2);
+    const replaced = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(replaced.body.data.some((relationship: { id: string }) => relationship.id === lockedOld.body.data.id || relationship.id === pendingOld.body.data.id)).toBe(false);
+    expect(replaced.body.data.some((relationship: { id: string }) => relationship.id === unrelated.body.data.id)).toBe(true);
+    const currentTargetRelationships = replaced.body.data.filter((relationship: { fromCharacterId: string; toCharacterId: string }) =>
+      relationship.fromCharacterId === linId || relationship.toCharacterId === linId
+    );
+    expect(currentTargetRelationships).toHaveLength(1);
+    expect(currentTargetRelationships[0]).toMatchObject({ subtype: "朋友", confirmationStatus: "pending", locked: false });
+
+    failAggregation = true;
+    const failureTask = await createTask().expect(201);
+    await request(runtime.app).post(`/api/tasks/${failureTask.body.data.id}/run`).send({ modelId }).expect(502);
+    const afterFailure = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(afterFailure.body.data).toEqual(replaced.body.data);
+  });
+
+  it("拒绝不适用于当前任务或缺少角色前提的关系分析选项", async () => {
+    runtime = createTestRuntime(vi.fn<typeof fetch>());
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", includeAllSettings: true }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", additionalPrompt: "不应被接受" }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "chapter", chapterId: chapters[0].id, includeAllSettings: true }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", replaceExistingRelationships: true }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", characterIds: ["character_not_allowed"] }
+    }).expect(400);
+  });
+
   it("已有强关系时忽略同人物对的弱语义重复边", async () => {
     let firstChapterId = "";
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{

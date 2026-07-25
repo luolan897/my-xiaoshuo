@@ -60,4 +60,8 @@ export type ContextScope = {
   characterIds?: string[];
   settingIds?: string[];
   includeBookSummary?: boolean;
+  includeAllSettings?: boolean;
+  additionalPrompt?: string;
+  replaceExistingRelationships?: boolean;
+  excludeRelationshipConstraints?: boolean;
 };
