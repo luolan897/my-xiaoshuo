@@ -4861,13 +4861,10 @@ function knowledgeSectionEditorHtml(section = null) {
   const label = knowledgeEditorKind === "race" ? "种族" : "组织";
   return `<div class="character-section-editor-shell knowledge-section-editor-shell">
     <header class="character-section-editor-header">
-      <div><span class="eyebrow">${label} Markdown 设定</span><h2 id="knowledge-section-editor-title">${section ? `编辑“${esc(section.title)}”` : "新建设定"}</h2></div>
+      <div><span class="eyebrow">${label} Markdown 设定</span><input id="knowledge-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建设定" aria-label="设定标题" required></div>
       <button class="entity-editor-back" type="button" data-knowledge-section-edit-close>返回设定列表</button>
     </header>
     <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}${label} Markdown 设定">
-      <div class="character-markdown-editor-meta">
-        <label>设定标题<input id="knowledge-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：组织章程、种族特征" required></label>
-      </div>
       <div id="knowledge-section-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
       <div class="character-markdown-editor-footer">
         <div class="character-markdown-editor-actions"><button type="button" data-knowledge-section-edit-cancel>取消</button><button type="button" class="primary-button" data-knowledge-section-edit-save>${section ? "保存设定" : "添加设定"}</button></div>
@@ -4939,13 +4936,12 @@ function characterSectionEditorHtml(section = null) {
   const options = Object.entries(characterSectionTypeLabels).map(([value, label]) => `<option value="${value}" ${section?.sectionType === value ? "selected" : ""}>${esc(label)}</option>`).join("");
   return `<div class="character-section-editor-shell">
     <header class="character-section-editor-header">
-      <div><span class="eyebrow">人物 Markdown 档案</span><h2 id="character-section-editor-title">${section ? `编辑“${esc(section.title)}”` : "新建档案章节"}</h2></div>
+      <div><span class="eyebrow">人物 Markdown 档案</span><input id="character-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建档案章节" aria-label="章节标题" required></div>
       <button class="entity-editor-back" type="button" data-character-section-edit-close>返回人物档案</button>
     </header>
     <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
     <div class="character-markdown-editor-meta">
       <label>章节类型<select id="character-section-type">${options}</select></label>
-      <label>章节标题<input id="character-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：背景故事" required></label>
       <label class="character-markdown-summary-field">章节摘要<textarea id="character-section-summary" maxlength="20000" placeholder="用于角色列表和 AI 快速定位，不会替代正文">${esc(section?.summary ?? "")}</textarea></label>
     </div>
     <div id="character-section-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>

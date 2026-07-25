@@ -248,6 +248,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".vditor-editor-host .vditor");
     expect(styles.text).toContain(".setting-editor-title-input");
     expect(styles.text).toContain(".setting-editor-header-fields");
+    expect(styles.text).toContain(".character-section-editor-title-input");
+    expect(application.text).toContain('class="character-section-editor-title-input"');
+    expect(application.text).toContain('class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}"');
+    expect(application.text).not.toContain('<label>设定标题<input id="knowledge-section-title"');
+    expect(application.text).not.toContain('<label>章节标题<input id="character-section-title"');
     expect(styles.text).toContain(".character-relationship-row");
     expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
