@@ -3,11 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { shouldRenderGalaxyLabel } from "../app/galaxy-visibility.js";
 
-async function render() {
+async function render(path = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), {
+  return worker.fetch(new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }), {
     ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
   }, { waitUntil() {}, passThroughOnException() {} });
 }
@@ -22,7 +22,15 @@ test("服务端渲染叙界介绍页", async () => {
   assert.match(html, /人物关系/);
   assert.match(html, /银河图/);
   assert.match(html, /AI 创作助手/);
+  assert.match(html, /href="\/demo"[^>]*>在线体验/);
+  assert.match(html, /href="\/demo"[^>]*>打开演示站/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/);
+});
+
+test("演示入口跳转到独立 Demo 站点", async () => {
+  const response = await render("/demo");
+  assert.ok([307, 308].includes(response.status));
+  assert.equal(response.headers.get("location"), "https://showcase.scriverse.top/");
 });
 
 test("页内导航不写入 URL 哈希锚点", async () => {
