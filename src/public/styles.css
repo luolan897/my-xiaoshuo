@@ -1187,6 +1187,89 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-auto-run-progress-bar::-webkit-progress-bar { border-radius: inherit; background: color-mix(in srgb, var(--line) 72%, transparent); }
 .task-auto-run-progress-bar::-webkit-progress-value { border-radius: inherit; background: var(--accent); transition: width .25s ease; }
 .task-auto-run-progress-bar::-moz-progress-bar { border-radius: inherit; background: var(--accent); transition: width .25s ease; }
+.task-auto-run-progress-bar.is-running { animation: task-auto-run-active 1.8s ease-in-out infinite; }
+.task-auto-run-progress-bar.is-running::-webkit-progress-value { background: var(--green); }
+.task-auto-run-progress-bar.is-running::-moz-progress-bar { background: var(--green); }
+.task-status-cell { width: 116px; white-space: nowrap; }
+.task-status-badge {
+  --task-status-color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 27px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--task-status-color) 28%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--task-status-color) 8%, transparent);
+  color: var(--task-status-color);
+  font-size: 11px;
+  font-weight: 600;
+}
+.task-status-indicator {
+  position: relative;
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 13%, transparent);
+}
+.task-status-indicator::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border: 1px solid currentColor;
+  border-radius: inherit;
+  opacity: 0;
+}
+.task-status-badge.is-pending { --task-status-color: color-mix(in srgb, var(--accent) 48%, #b69043); }
+.task-status-badge.is-pending .task-status-indicator { background: transparent; border: 1px solid currentColor; animation: task-status-waiting 1.7s ease-in-out infinite; }
+.task-status-badge.is-running {
+  --task-status-color: var(--green);
+  animation: task-status-running-breathe 1.8s ease-in-out infinite;
+}
+.task-status-badge.is-running .task-status-indicator::after { animation: task-status-running-ripple 1.8s ease-out infinite; }
+.task-status-badge.is-review, .task-status-badge.is-completed { --task-status-color: var(--green); }
+.task-status-badge.is-partial { --task-status-color: var(--accent); }
+.task-status-badge.is-expired { --task-status-color: color-mix(in srgb, var(--muted) 72%, var(--accent)); border-style: dashed; }
+.task-status-badge.is-cancelled, .task-status-badge.is-unknown { --task-status-color: var(--muted); }
+.task-status-badge.is-cancelled .task-status-indicator, .task-status-badge.is-unknown .task-status-indicator { background: transparent; border: 1px solid currentColor; box-shadow: none; }
+.task-status-badge.is-state-change { animation: task-status-enter .42s cubic-bezier(.22, .8, .32, 1) both; }
+.task-status-badge.is-running.is-state-change { animation: task-status-enter .42s cubic-bezier(.22, .8, .32, 1) both, task-status-running-breathe 1.8s ease-in-out .42s infinite; }
+.task-status-badge.is-partial.is-state-change { animation: task-status-attention .46s ease-out both; }
+.task-progress-cell { width: 128px; }
+.task-progress { display: grid; grid-template-columns: 36px minmax(58px, 1fr); align-items: center; gap: 8px; min-width: 102px; }
+.task-progress-value { color: var(--ink); font-family: var(--font-latin), monospace; font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.task-progress-track { position: relative; display: block; height: 5px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--line) 72%, transparent); }
+.task-progress-fill { position: relative; display: block; width: var(--task-progress); height: 100%; overflow: hidden; border-radius: inherit; background: var(--muted); transition: width .35s ease; }
+.task-progress.is-running .task-progress-fill, .task-progress.is-review .task-progress-fill, .task-progress.is-completed .task-progress-fill { background: var(--green); }
+.task-progress.is-partial .task-progress-fill { background: var(--accent); }
+.task-progress.is-running .task-progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--surface) 64%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: task-progress-shimmer 1.55s ease-in-out infinite;
+}
+.task-progress.is-pending .task-progress-track::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  animation: task-progress-waiting 1.9s ease-in-out infinite;
+}
+@keyframes task-auto-run-active { 0%, 100% { filter: drop-shadow(0 0 0 transparent); opacity: .72; } 50% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--green) 42%, transparent)); opacity: 1; } }
+@keyframes task-status-waiting { 0%, 100% { opacity: .45; transform: scale(.74); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes task-status-running-breathe { 0%, 100% { background: color-mix(in srgb, var(--green) 5%, transparent); box-shadow: 0 0 0 0 transparent; opacity: .72; } 50% { background: color-mix(in srgb, var(--green) 16%, transparent); box-shadow: 0 0 12px color-mix(in srgb, var(--green) 20%, transparent); opacity: 1; } }
+@keyframes task-status-running-ripple { 0% { opacity: .62; transform: scale(.38); } 70%, 100% { opacity: 0; transform: scale(1.18); } }
+@keyframes task-status-enter { from { opacity: .25; transform: translateY(3px) scale(.92); } 65% { transform: translateY(0) scale(1.04); } to { opacity: 1; transform: scale(1); } }
+@keyframes task-status-attention { 0% { opacity: .35; transform: translateX(0); } 35% { transform: translateX(-3px); } 65% { transform: translateX(3px); } 100% { opacity: 1; transform: translateX(0); } }
+@keyframes task-progress-shimmer { 0% { transform: translateX(-100%); } 58%, 100% { transform: translateX(100%); } }
+@keyframes task-progress-waiting { 0% { left: -34%; opacity: .32; } 50% { opacity: .74; } 100% { left: 100%; opacity: .32; } }
 .task-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .task-detail { display: grid; gap: 12px; }
 .task-detail p, .task-detail div { margin: 0; font-size: 12px; line-height: 1.55; }

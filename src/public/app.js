@@ -106,6 +106,7 @@ let collaborationAutoSaveDisabled = false;
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
 const taskProgressRefreshInterval = 2_500;
+const taskStatusSnapshots = new Map();
 
 const chapterTypes = ["正文", "设定", "作者的话", "其他"];
 
@@ -135,6 +136,41 @@ function analysisTaskStatusLabel(status) {
     expired: "已过期",
     cancelled: "已取消"
   })[String(status)] ?? "未知状态";
+}
+
+function normalizedAnalysisTaskStatus(status) {
+  const value = String(status);
+  return ["pending", "running", "review", "completed", "partial", "expired", "cancelled"].includes(value)
+    ? value
+    : "unknown";
+}
+
+function analysisTaskProgressValue(progress) {
+  const value = Number(progress);
+  return Math.round(Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0)));
+}
+
+function renderAnalysisTaskStatus(item) {
+  const taskId = String(item.id);
+  const status = normalizedAnalysisTaskStatus(item.status);
+  const statusChanged = taskStatusSnapshots.get(taskId) !== status;
+  taskStatusSnapshots.set(taskId, status);
+  const label = analysisTaskStatusLabel(item.status);
+  return `<span class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}" aria-label="任务状态：${esc(label)}">
+    <span class="task-status-indicator" aria-hidden="true"></span>
+    <span>${esc(label)}</span>
+  </span>`;
+}
+
+function renderAnalysisTaskProgress(item) {
+  const status = normalizedAnalysisTaskStatus(item.status);
+  const progress = analysisTaskProgressValue(item.progress);
+  return `<div class="task-progress is-${status}" aria-label="任务进度 ${progress}%">
+    <span class="task-progress-value">${progress}%</span>
+    <span class="task-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}">
+      <span class="task-progress-fill" style="--task-progress: ${progress}%"></span>
+    </span>
+  </div>`;
 }
 
 function reviewSeverityLabel(severity) {
@@ -3887,6 +3923,10 @@ async function renderTasks() {
   const runningProgress = runningCount
     ? Math.round(runningTasks.reduce((total, item) => total + Math.min(100, Math.max(0, Number(item.progress) || 0)), 0) / runningCount)
     : 0;
+  const visibleTaskIds = new Set(tasks.map((item) => String(item.id)));
+  for (const taskId of taskStatusSnapshots.keys()) {
+    if (!visibleTaskIds.has(taskId)) taskStatusSnapshots.delete(taskId);
+  }
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel ${canConfigureAutoRun ? "" : "hidden"}" aria-labelledby="task-auto-run-title">
       <div class="task-auto-run-copy">
@@ -3904,15 +3944,15 @@ async function renderTasks() {
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
       <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
         <div class="task-auto-run-progress-label"><span>${runningCount ? "运行中任务平均进度" : "等待任务开始"}</span><strong>${runningProgress}%</strong></div>
-        <progress class="task-auto-run-progress-bar" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
+        <progress class="task-auto-run-progress-bar ${runningCount ? "is-running" : "is-waiting"}" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
       </div>
     </section>
     ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
       <td>${esc(analysisTaskTypeLabel(item.taskType))}</td>
       <td>${esc(item.scopeSummary || taskScopeLabel(item.scope?.type || "book"))}</td>
-      <td>${esc(analysisTaskStatusLabel(item.status))}</td>
-      <td>${Number(item.progress ?? 0)}%</td>
+      <td class="task-status-cell">${renderAnalysisTaskStatus(item)}</td>
+      <td class="task-progress-cell">${renderAnalysisTaskProgress(item)}</td>
       <td class="task-row-actions">
         <button class="ghost-button" type="button" data-task-detail="${esc(item.id)}">详情</button>
         ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
