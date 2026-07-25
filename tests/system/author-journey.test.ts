@@ -82,6 +82,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="ai-panel-resize"');
     expect(page.text).toContain('<div class="panel-heading">');
     expect(page.text).toContain('<div class="ai-heading">');
+    expect(page.text).toContain('<div class="ai-heading-actions">');
+    expect(page.text).toContain('aria-label="新建对话" title="新建对话">＋</button>');
+    expect(page.text).not.toContain('class="ai-conversation-toolbar"');
+    expect(styles.text).toContain(".quick-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));");
     expect(styles.text).toContain(".editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }");
     expect(styles.text).toContain("@container editor-workspace (max-width: 720px)");
     expect(styles.text).toContain(".chapter-stats { display: none; }");
@@ -286,7 +290,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260725-collab-refresh-left-panel-resize');
-    expect(page.text).toContain('/styles.css?v=20260725-module-count-vditor-left-panel');
+    expect(page.text).toContain('/styles.css?v=20260726-ai-panel-header');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
