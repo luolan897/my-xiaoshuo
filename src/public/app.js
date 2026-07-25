@@ -3131,6 +3131,12 @@ function mountModuleLayoutToggle(layout, ariaLabel) {
   $("#module-header-actions").insertAdjacentHTML("beforeend", renderModuleLayoutToggle(layout, ariaLabel));
 }
 
+function mountModuleCount(count) {
+  $("#module-header-actions").querySelector('[data-module-header-action="count"]')?.remove();
+  const safeCount = Math.max(0, Number(count) || 0);
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<span class="module-count-badge" data-module-header-action="count" aria-label="列表数量 ${safeCount}">${safeCount}</span>`);
+}
+
 function bindModuleLayoutToggle(refresh) {
   $("#module-header-actions").querySelectorAll("[data-module-layout]").forEach((button) => button.addEventListener("click", async () => {
     saveModuleLayout(button.dataset.moduleLayout);
@@ -3251,8 +3257,9 @@ function renderSettingRows(records) {
 }
 
 async function renderSettings() {
-  const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
+  const records = await apiAllPages(`/api/works/${state.work.id}/settings`);
   state.settings = records;
+  mountModuleCount(records.length);
   const layout = readModuleLayout();
   if (records.length) mountModuleLayoutToggle(layout, "设定列表样式");
   $("#module-content").innerHTML = records.length
@@ -3276,7 +3283,8 @@ async function renderCharacters(page = characterListPage) {
     : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
-  state.characters = characterPage.items;
+  [state.characters, state.races, state.organizations] = [characterPage.items, races, organizations];
+  mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
   const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
   const characterLockBadge = (item) => item.lockedFields.length
@@ -3316,7 +3324,7 @@ async function renderCharacters(page = characterListPage) {
   const pagination = state.characters.length && (characterPage.page > 1 || characterPage.hasMore)
     ? `<nav class="module-pagination" aria-label="角色列表分页">
       <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
-      <span>第 ${characterPage.page} 页 · 本页 ${state.characters.length} 个角色</span>
+      <span>第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页 · 本页 ${state.characters.length} 个角色 · 共 ${characterPage.total} 个角色</span>
       <button type="button" data-character-page="${characterPage.nextPage ?? characterPage.page + 1}" ${characterPage.hasMore ? "" : "disabled"}>下一页</button>
     </nav>`
     : "";
@@ -3370,7 +3378,11 @@ async function renderCharacters(page = characterListPage) {
 }
 
 async function renderRaces() {
-  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
+  [state.races, state.characters] = await Promise.all([
+    apiAllPages(`/api/works/${state.work.id}/races`),
+    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+  ]);
+  mountModuleCount(state.races.length);
   const layout = readModuleLayout();
   const canEditRaces = canEditModule("races");
   const raceActions = (item) => canEditRaces
@@ -3414,7 +3426,11 @@ async function renderRaces() {
 }
 
 async function renderOrganizations() {
-  state.organizations = await apiAllPages(`/api/works/${state.work.id}/organizations`);
+  [state.organizations, state.characters] = await Promise.all([
+    apiAllPages(`/api/works/${state.work.id}/organizations`),
+    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+  ]);
+  mountModuleCount(state.organizations.length);
   const layout = readModuleLayout();
   const canEditOrganizations = canEditModule("organizations");
   const organizationActions = (item) => canEditOrganizations
@@ -3475,9 +3491,10 @@ function setTimelineMultiSelectMode(enabled) {
 
 async function renderTimeline() {
   const [events, tracks] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/timeline`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/timeline`),
     apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
   ]);
+  mountModuleCount(events.length);
   timelineMultiSelectEnabled = false;
   $("#timeline-tools")?.remove();
   $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button><button id="timeline-multi-select-toggle" class="ghost-button" type="button" aria-pressed="false">多选</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button" hidden>合并所选事件</button>' : ""}</div>`);
@@ -3515,9 +3532,10 @@ async function renderTimeline() {
 async function renderOutlines() {
   const currentChapterId = state.chapter?.id;
   const [outlines, foreshadows] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/outlines`).then((result) => result.items),
-    apiPage(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`).then((result) => result.items)
+    apiAllPages(`/api/works/${state.work.id}/outlines`),
+    apiAllPages(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
   ]);
+  mountModuleCount(outlines.length + foreshadows.length);
   const layout = readModuleLayout();
   const unresolved = foreshadows.filter((item) => item.unresolved);
   const overdue = unresolved.filter((item) => item.overdue);
@@ -3563,7 +3581,8 @@ async function renderOutlines() {
 
 async function renderRelationships() {
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const relationships = (await apiPage(`/api/works/${state.work.id}/relationships`)).items;
+  const relationships = await apiAllPages(`/api/works/${state.work.id}/relationships`);
+  mountModuleCount(relationships.length);
   const nameOf = (id) => state.characters.find((item) => item.id === id)?.name ?? "未知角色";
   state.galaxy?.destroy();
   state.relationshipExpandedMap?.destroy?.();
@@ -3598,9 +3617,10 @@ async function renderReviews() {
   const canMergeCharacters = canResolveReview
     && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
   const [reviews, characters] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/reviews`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/reviews`),
     canReadCharacters ? apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
   ]);
+  mountModuleCount(reviews.length);
   const characterById = new Map(characters.map((character) => [character.id, character]));
   const duplicateCard = (item) => {
     const refs = (item.entityRefs ?? []).filter((reference) => reference?.type === "character" && characterById.has(reference.id));
@@ -3685,11 +3705,12 @@ async function renderReviews() {
 
 async function renderTasks() {
   const [tasks, settings] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/tasks?view=summary`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/tasks?view=summary`),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
       : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
   ]);
+  mountModuleCount(tasks.length);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
   const pendingCount = tasks.filter((item) => item.status === "pending").length;
   const runningCount = tasks.filter((item) => item.status === "running").length;

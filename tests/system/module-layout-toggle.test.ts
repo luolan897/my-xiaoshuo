@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-mobile-workspace-unify');
-    expect(page.text).toContain('/app.js?v=20260725-mobile-workspace-unify');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-mobile-workspace-unify"></script>');
+    expect(page.text).toContain('/styles.css?v=20260725-module-count-badges-v2');
+    expect(page.text).toContain('/app.js?v=20260725-module-count-badges-v2');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-module-count-badges-v2"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -77,6 +77,10 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("data-character-page");
     expect(application.text).toContain("上一页");
     expect(application.text).toContain("下一页");
+    expect(application.text).toContain("共 ${characterPage.total} 个角色");
+    expect(application.text).toContain("第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页");
+    expect(application.text).toContain("function mountModuleCount(count)");
+    expect(application.text).toContain("class=\"module-count-badge\"");
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");

@@ -945,6 +945,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .module-header-actions > [data-module-header-action] { order: 1; }
 .module-header-actions > #module-create-button { order: 2; min-height: 36px; }
+.module-count-badge { display: inline-grid; min-width: 36px; height: 36px; padding: 0 9px; place-items: center; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); color: var(--accent-dark); font-family: var(--font-latin), monospace; font-size: 12px; font-weight: 650; }
 .module-header h1 { margin: 0 0 8px; font-weight: 500; font-size: 34px; }
 .module-header p { margin: 0; color: var(--muted); font-size: 13px; }
 .module-content { padding: 24px 0 80px; }
