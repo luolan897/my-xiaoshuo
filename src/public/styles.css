@@ -503,10 +503,11 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.left-panel-collapsed .panel-heading { display: none; }
 .app-shell.left-panel-collapsed .brand-block { padding: 0 4px; }.app-shell.left-panel-collapsed .brand-block > div { display: none; }
 .main-panel { min-width: 0; min-height: 0; overflow: hidden; }
-.app-shell.shelf-mode { grid-template-columns: 1fr; }
+.app-shell.shelf-mode { grid-template-columns: minmax(0, 1fr); }
 .app-shell.shelf-mode .topbar { grid-template-columns: 280px 1fr auto; }
 .app-shell.shelf-mode .left-panel, .app-shell.shelf-mode .ai-panel { display: none; }
 .app-shell.shelf-mode .save-state { display: none; }
+.app-shell.shelf-mode #top-search-button { display: none; }
 .app-shell.shelf-mode .main-panel { grid-column: 1 / -1; }
 
 .shelf-view { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 48px clamp(32px, 7vw, 110px) 90px; }
@@ -877,7 +878,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-add-button { flex: none; }
 .volume-chapters { display: block; }
 .volume-node.is-collapsed .volume-chapters { display: none; }
- .chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: calc(100% + 6px); padding: 9px 8px 9px 20px; border: 0; background: transparent; border-radius: 4px; text-align: left; font-size: 12px; }
+.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: calc(100% + 6px); padding: 9px 8px 9px 20px; border: 0; background: transparent; border-radius: 4px; text-align: left; font-size: 12px; }
 .chapter-node:hover, .chapter-node.active { background: var(--row-active); }
 .chapter-node.active { color: var(--accent-dark); font-weight: 700; }
 .chapter-node > span:first-child { min-width: 0; overflow-wrap: anywhere; line-height: 1.45; white-space: normal; }
@@ -2024,8 +2025,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 }
 
 @media (max-width: 640px) {
-  .setting-editor-heading { gap: 6px; }
-  .setting-editor-header-fields { align-items: flex-start; flex-direction: column; }
+  #onboarding-dialog, #onboarding-menu-button { display: none !important; }
+  .topbar .work-meta { display: none; }
+  .top-actions .save-state { display: none; }
+  .presence-button #presence-count { display: none; }
+  .account-button > span:last-child { display: none; }
+  .book-shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 14px; }
+  .book-info > span, .book-access-badge { display: none; }
   .ai-history-dialog-body { min-height: min(360px, 62vh); padding: 12px 14px 18px; }
   .account-settings-body { padding: 16px; }
   .account-settings-section { padding: 15px; }
@@ -2071,6 +2077,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .brand-block strong { font-size: 14px; }
   .brand-block small { display: none; }
   .mobile-module-tab { position: fixed; z-index: 32; top: 132px; right: 0; display: grid; width: 34px; height: 42px; padding: 0; place-items: center; border: 1px solid var(--line); border-right: 0; border-radius: 5px 0 0 5px; background: var(--surface-soft); color: var(--accent-dark); font-size: 10px; writing-mode: vertical-rl; }
+  .app-shell.shelf-mode .mobile-module-tab { display: none; }
   .mobile-panel-backdrop { position: fixed; z-index: 30; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(20, 17, 14, .28); }
   .app-shell:not(.shelf-mode):not(.left-panel-collapsed) .mobile-panel-backdrop { display: block; }
   .work-meta {
@@ -2254,7 +2261,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .editor-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .editor-actions .chapter-stats { display: none; }
   .editor-actions > button { width: auto; }
-  .book-shelf { grid-template-columns: minmax(0, 1fr); max-width: 280px; }
+  .book-shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; max-width: none; }
   .book-add-card { min-height: 220px; }
   .onboarding-popover { width: calc(100vw - 20px); }
 }
