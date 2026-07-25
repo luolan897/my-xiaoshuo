@@ -10,7 +10,8 @@ const vditorRoot = new URL("../node_modules/vditor/dist/", import.meta.url).path
 const mainVersion = await readMainVersion();
 const versionModule = versionModuleSource(mainVersion);
 const adapterSource = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
-const adapterVersion = demoAssetVersion(adapterSource, mainVersion);
+const browserAiSource = await readFile(new URL("../browser-ai.js", import.meta.url), "utf8");
+const adapterVersion = demoAssetVersion(`${adapterSource}\n${browserAiSource}`, mainVersion);
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -28,7 +29,7 @@ createServer(async (request, response) => {
     response.end(versionModule);
     return;
   }
-  const isDemoAsset = relativePath === "data.js" || relativePath === "demo-auth.js" || relativePath === "mock-api.js" || relativePath.startsWith("demo-covers/");
+  const isDemoAsset = relativePath === "data.js" || relativePath === "demo-auth.js" || relativePath === "browser-ai.js" || relativePath === "mock-api.js" || relativePath.startsWith("demo-covers/");
   const isVditorAsset = relativePath.startsWith("vendor/vditor/dist/");
   const root = isDemoAsset ? demoRoot : isVditorAsset ? vditorRoot : publicRoot;
   const rootRelativePath = isVditorAsset ? relativePath.replace(/^vendor\/vditor\/dist\//, "") : relativePath;

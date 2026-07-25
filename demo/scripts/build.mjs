@@ -10,10 +10,12 @@ await mkdir(output, { recursive: true });
 await cp(publicSource, output, { recursive: true });
 await cp(new URL("data.js", demoSource), new URL("data.js", output));
 await cp(new URL("demo-auth.js", demoSource), new URL("demo-auth.js", output));
+await cp(new URL("browser-ai.js", demoSource), new URL("browser-ai.js", output));
 await cp(new URL("demo-covers/", demoSource), new URL("demo-covers/", output), { recursive: true });
 const mainVersion = await readMainVersion();
 const adapter = await readFile(new URL("mock-api.js", demoSource), "utf8");
-const adapterVersion = demoAssetVersion(adapter, mainVersion);
+const browserAi = await readFile(new URL("browser-ai.js", demoSource), "utf8");
+const adapterVersion = demoAssetVersion(`${adapter}\n${browserAi}`, mainVersion);
 await writeFile(new URL("mock-api.js", output), versionedDemoAdapterSource(adapter, mainVersion));
 await writeFile(new URL("demo-version.js", output), versionModuleSource(mainVersion));
 

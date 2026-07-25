@@ -1,9 +1,11 @@
 import { analysisTasks, works as sourceWorks } from "./data.js";
+import { buildBrowserAiMessages, createBrowserAiStore, normalizeProviderBaseUrl, publicProvider, requestBrowserAi, testBrowserAiProvider } from "./browser-ai.js";
 import { DEMO_CREDENTIALS as demoCredentials, isValidDemoLogin } from "./demo-auth.js";
 import { DEMO_VERSION } from "./demo-version.js";
 
 const now = "2026-07-25T10:00:00.000Z";
 const nativeFetch = window.fetch.bind(window);
+const browserAiStore = createBrowserAiStore(window.localStorage);
 const demoAuthStorageKey = "scriverse-demo-authenticated";
 const demoUser = Object.freeze({
   userId: "demo-user",
@@ -47,6 +49,34 @@ function installDemoFooterNotice() {
 }
 
 installDemoFooterNotice();
+
+function installBrowserAiNotice() {
+  const mount = () => {
+    const host = document.querySelector("#platform-ai-content");
+    if (!host?.children.length || host.querySelector(".demo-browser-ai-notice")) return;
+    const section = document.createElement("section");
+    section.className = "config-section demo-browser-ai-notice";
+    const header = document.createElement("div");
+    header.className = "config-section-header";
+    const copy = document.createElement("div");
+    const title = document.createElement("h2");
+    title.textContent = "演示站前端直连模式";
+    const description = document.createElement("p");
+    description.textContent = "供应商、模型和 API Key 仅保存在当前浏览器。AI 请求由浏览器直接发往你配置的 OpenAI 兼容接口，不经过演示站服务器；演示站服务器不会接收、记录或存储 API Key。请仅在可信设备上使用，并确认服务商支持浏览器跨域请求（CORS）。";
+    copy.append(title, description);
+    header.append(copy);
+    section.append(header);
+    host.prepend(section);
+  };
+  const observe = () => {
+    mount();
+    new MutationObserver(mount).observe(document.documentElement, { childList: true, subtree: true });
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", observe, { once: true });
+  else observe();
+}
+
+installBrowserAiNotice();
 
 const wordCount = (text) => Array.from(String(text ?? "").replace(/\s/gu, "")).length;
 const page = (items, url) => {
@@ -260,6 +290,56 @@ const bodyOf = async (init) => {
   try { return JSON.parse(String(init.body)); } catch { return {}; }
 };
 
+const demoId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
+const defaultWorkAiSettings = () => ({ systemPrompt: "", bookSummaryContextPercent: 20, contextCompactThreshold: 80, agentTools: [], autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 });
+const modelWithProvider = (model, providers) => {
+  const provider = providers.find((item) => item.id === model.providerId);
+  return { ...model, providerName: provider?.name ?? "未找到供应商", providerStatus: provider?.status ?? "disabled", providerConnectionStatus: provider?.connectionStatus ?? "untested" };
+};
+const contextUsage = (model) => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, contextWindow: Number(model?.contextWindow ?? 128000), usagePercent: 0, conversationUsagePercent: 0, compactThreshold: 80 });
+
+function conversationSummaries(state, workId) {
+  return [...(state.conversations[workId] ?? [])]
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
+    .map(({ messages, ...conversation }) => ({ ...conversation, messageCount: messages.length }));
+}
+
+function findConversation(state, conversationId) {
+  return Object.values(state.conversations).flat().find((item) => item.id === conversationId);
+}
+
+async function runBrowserAi(body, workId) {
+  const state = browserAiStore.read();
+  const model = state.models.find((item) => item.id === body.modelId);
+  if (!model?.enabled) throw new Error("所选模型不存在或未启用");
+  const provider = state.providers.find((item) => item.id === model.providerId);
+  if (!provider || provider.status !== "enabled" || !provider.apiKey) throw new Error("模型供应商未启用或缺少 API Key");
+  const work = findWork(workId);
+  if (!work) throw new Error("未找到作品");
+  const conversation = body.conversationId ? findConversation(state, body.conversationId) : null;
+  const settings = { ...defaultWorkAiSettings(), ...(state.workSettings[workId] ?? {}) };
+  const messages = buildBrowserAiMessages({
+    work,
+    scope: body.scope,
+    instruction: String(body.instruction ?? ""),
+    platformPrompt: state.platformSettings.systemPrompt,
+    workPrompt: settings.systemPrompt,
+    conversationMessages: conversation?.messages ?? [],
+    citations: body.citations ?? []
+  });
+  const result = await requestBrowserAi({ fetchImpl: nativeFetch, provider, model, messages });
+  return { ...result, model: modelWithProvider(model, state.providers) };
+}
+
+function aiStreamResponse(result) {
+  const outputTokens = result.outputTokens || Math.max(1, Math.ceil(Array.from(result.content).length / 2));
+  const events = [
+    `event: delta\ndata: ${JSON.stringify({ delta: result.content })}`,
+    `event: complete\ndata: ${JSON.stringify({ model: { id: result.model.id, displayName: result.model.displayName }, outputTokens, toolCalls: [], processSteps: [] })}`
+  ];
+  return new Response(`${events.join("\n\n")}\n\n`, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
+}
+
 async function mockApi(input, init = {}) {
   const requestUrl = typeof input === "string" ? input : input.url;
   const url = new URL(requestUrl, window.location.origin);
@@ -293,14 +373,187 @@ async function mockApi(input, init = {}) {
   if (sessionStorage.getItem(demoAuthStorageKey) !== "true") return failure("请先登录演示账号", 401);
   if (path === "/api/auth/api-key") return success({ configured: false });
   if (path === "/api/auth/onboarding/complete") return success(demoUser);
+  if (path === "/api/platform/ai/providers") {
+    if (method === "GET") return success(browserAiStore.read().providers.map(publicProvider));
+    const body = await bodyOf(init);
+    const provider = {
+      id: demoId("provider"),
+      name: String(body.name ?? "").trim(),
+      baseUrl: normalizeProviderBaseUrl(body.baseUrl),
+      apiKey: String(body.apiKey ?? "").trim(),
+      concurrencyLimit: Number(body.concurrencyLimit ?? 10),
+      rpmLimit: Number(body.rpmLimit ?? 10),
+      maxTokens: Number(body.maxTokens ?? 32000),
+      note: String(body.note ?? ""),
+      status: body.status === "disabled" ? "disabled" : "enabled",
+      connectionStatus: "untested",
+      lastError: null
+    };
+    browserAiStore.update((state) => { state.providers.push(provider); });
+    return success(publicProvider(provider), 201);
+  }
+  if (path === "/api/platform/ai/models") {
+    const state = browserAiStore.read();
+    return success(state.models.map((model) => modelWithProvider(model, state.providers)));
+  }
+  if (path === "/api/platform/ai/settings") {
+    const state = browserAiStore.read();
+    if (method === "GET") return success(state.platformSettings);
+    const body = await bodyOf(init);
+    browserAiStore.update((current) => { current.platformSettings = { ...current.platformSettings, ...body }; });
+    return success({ ...state.platformSettings, ...body });
+  }
+  let match = path.match(/^\/api\/providers\/([^/]+)$/u);
+  if (match) {
+    const providerId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    let updated;
+    browserAiStore.update((state) => {
+      const provider = state.providers.find((item) => item.id === providerId);
+      if (!provider) return;
+      const connectionChanged = body.baseUrl !== undefined || String(body.apiKey ?? "").trim();
+      Object.assign(provider, body, body.baseUrl !== undefined ? { baseUrl: normalizeProviderBaseUrl(body.baseUrl) } : {}, String(body.apiKey ?? "").trim() ? { apiKey: String(body.apiKey).trim() } : {});
+      if (connectionChanged) Object.assign(provider, { connectionStatus: "untested", lastError: null });
+      updated = provider;
+    });
+    return updated ? success(publicProvider(updated)) : failure("未找到 AI 供应商");
+  }
+  match = path.match(/^\/api\/providers\/([^/]+)\/test$/u);
+  if (match) {
+    const providerId = decodeURIComponent(match[1]);
+    const provider = browserAiStore.read().providers.find((item) => item.id === providerId);
+    if (!provider) return failure("未找到 AI 供应商");
+    try {
+      await testBrowserAiProvider({ fetchImpl: nativeFetch, provider });
+      browserAiStore.update((state) => { Object.assign(state.providers.find((item) => item.id === providerId), { connectionStatus: "success", lastError: null }); });
+      return success({ ok: true });
+    } catch (error) {
+      const message = error instanceof TypeError ? "浏览器无法直连该地址，请确认服务商支持 CORS" : error.message;
+      browserAiStore.update((state) => { Object.assign(state.providers.find((item) => item.id === providerId), { connectionStatus: "failed", lastError: message }); });
+      return success({ ok: false, error: message });
+    }
+  }
+  match = path.match(/^\/api\/providers\/([^/]+)\/models$/u);
+  if (match) {
+    const providerId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    const state = browserAiStore.read();
+    if (!state.providers.some((item) => item.id === providerId)) return failure("未找到 AI 供应商");
+    const model = { id: demoId("model"), providerId, displayName: String(body.displayName ?? "").trim(), modelId: String(body.modelId ?? "").trim(), purposes: body.purposes ?? ["chat"], contextWindow: Number(body.contextWindow ?? 128000), preset: body.preset ?? { temperature: 0.7, max_tokens: 32000 }, thinkingEnabled: body.thinkingEnabled !== false, enabled: body.enabled !== false };
+    browserAiStore.update((current) => { current.models.push(model); });
+    return success(modelWithProvider(model, state.providers), 201);
+  }
+  match = path.match(/^\/api\/models\/([^/]+)$/u);
+  if (match) {
+    const modelId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    let updated;
+    browserAiStore.update((state) => {
+      const model = state.models.find((item) => item.id === modelId);
+      if (!model) return;
+      Object.assign(model, body);
+      updated = modelWithProvider(model, state.providers);
+    });
+    return updated ? success(updated) : failure("未找到模型");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/models$/u);
+  if (match) {
+    const state = browserAiStore.read();
+    return success(state.models.map((model) => modelWithProvider(model, state.providers)).filter((model) => model.enabled && model.providerStatus === "enabled"));
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/ai-settings$/u);
+  if (match) {
+    const workId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    const settings = { ...defaultWorkAiSettings(), ...(browserAiStore.read().workSettings[workId] ?? {}) };
+    if (method === "GET") return success(settings);
+    browserAiStore.update((state) => { state.workSettings[workId] = { ...settings, ...body }; });
+    return success({ ...settings, ...body });
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/task-defaults$/u);
+  if (match) {
+    const workId = decodeURIComponent(match[1]);
+    const state = browserAiStore.read();
+    return success(Object.entries(state.taskDefaults[workId] ?? {}).flatMap(([taskType, modelId]) => {
+      const model = state.models.find((item) => item.id === modelId);
+      return model ? [{ taskType, model: modelWithProvider(model, state.providers) }] : [];
+    }));
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/task-defaults\/([^/]+)$/u);
+  if (match) {
+    const workId = decodeURIComponent(match[1]);
+    const taskType = decodeURIComponent(match[2]);
+    const body = await bodyOf(init);
+    browserAiStore.update((state) => { state.taskDefaults[workId] = { ...(state.taskDefaults[workId] ?? {}), [taskType]: body.modelId }; });
+    return success({ taskType, modelId: body.modelId });
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/ai-conversations$/u);
+  if (match) {
+    const workId = decodeURIComponent(match[1]);
+    if (method === "GET") return success(page(conversationSummaries(browserAiStore.read(), workId), url));
+    const createdAt = new Date().toISOString();
+    const conversation = { id: demoId("conversation"), workId, title: "新对话", messages: [], createdAt, updatedAt: createdAt, contextWarningPending: false };
+    browserAiStore.update((state) => { state.conversations[workId] = [conversation, ...(state.conversations[workId] ?? [])]; });
+    return success({ ...conversation, messageCount: 0 }, 201);
+  }
+  match = path.match(/^\/api\/ai-conversations\/([^/]+)$/u);
+  if (match) {
+    const conversation = findConversation(browserAiStore.read(), decodeURIComponent(match[1]));
+    return conversation ? success(conversation) : failure("未找到 AI 对话");
+  }
+  match = path.match(/^\/api\/ai-conversations\/([^/]+)\/messages$/u);
+  if (match) {
+    const conversationId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    const message = { id: demoId("message"), role: body.role, content: String(body.content ?? ""), citations: body.citations ?? [], metadata: body.metadata ?? {}, createdAt: new Date().toISOString() };
+    let found = false;
+    browserAiStore.update((state) => {
+      const conversation = findConversation(state, conversationId);
+      if (!conversation) return;
+      conversation.messages.push(message);
+      conversation.updatedAt = message.createdAt;
+      if (conversation.title === "新对话" && message.role === "user") conversation.title = Array.from(message.content).slice(0, 18).join("") || "新对话";
+      found = true;
+    });
+    return found ? success(message, 201) : failure("未找到 AI 对话");
+  }
+  match = path.match(/^\/api\/ai-conversations\/([^/]+)\/context\/prepare$/u);
+  if (match) {
+    const body = await bodyOf(init);
+    const model = browserAiStore.read().models.find((item) => item.id === body.modelId);
+    return success({ action: "ready", usage: contextUsage(model) });
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/ai-context-usage$/u);
+  if (match) {
+    const body = await bodyOf(init);
+    const model = browserAiStore.read().models.find((item) => item.id === body.modelId);
+    return success(contextUsage(model));
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/chat\/stream$/u);
+  if (match) {
+    try {
+      return aiStreamResponse(await runBrowserAi(await bodyOf(init), decodeURIComponent(match[1])));
+    } catch (error) {
+      const message = error instanceof TypeError ? "浏览器直连失败，请确认接口地址、网络与 CORS 配置" : error.message;
+      return failure(message, 502);
+    }
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/suggestions$/u);
+  if (match) {
+    try {
+      const body = await bodyOf(init);
+      const result = await runBrowserAi(body, decodeURIComponent(match[1]));
+      const chapter = allChapters().find((item) => item.id === body.scope?.chapterId);
+      return success({ id: demoId("suggestion"), content: result.content, action: "note", chapterVersion: chapter?.versionNo ?? 1, outputTokens: result.outputTokens || Math.max(1, Math.ceil(Array.from(result.content).length / 2)), model: { id: result.model.id, displayName: result.model.displayName } }, 201);
+    } catch (error) {
+      const message = error instanceof TypeError ? "浏览器直连失败，请确认接口地址、网络与 CORS 配置" : error.message;
+      return failure(message, 502);
+    }
+  }
   if (path === "/api/works" && method === "GET") return success(page(works.map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, relationships, reviews, tasks, ...work }) => work), url));
   if (path === "/api/users") return success(page([], url));
   if (path === "/api/users/directory") return success([]);
-  if (path === "/api/platform/ai/providers") return success([]);
-  if (path === "/api/platform/ai/models") return success([]);
-  if (path === "/api/platform/ai/settings") return success({ systemPrompt: "" });
-
-  let match = path.match(/^\/api\/works\/([^/]+)$/u);
+  match = path.match(/^\/api\/works\/([^/]+)$/u);
   if (match) {
     const work = findWork(decodeURIComponent(match[1]));
     if (!work) return failure("未找到作品");

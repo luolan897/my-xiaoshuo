@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
+import { BROWSER_AI_STORAGE_KEY, buildBrowserAiMessages, createBrowserAiStore, publicProvider, requestBrowserAi } from "../browser-ai.js";
 import { works } from "../data.js";
 import { DEMO_CREDENTIALS, isValidDemoLogin } from "../demo-auth.js";
 import { demoAssetVersion, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "../scripts/version.mjs";
@@ -54,11 +55,46 @@ test("构建产物复制正式前端并注入预制数据适配层", async () =>
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
   assert.match(build, /src\/public/);
   assert.match(build, /mock-api\.js/);
+  assert.match(build, /browser-ai\.js/);
   assert.doesNotMatch(build, /cover-originals/);
   assert.match(adapter, /window\.fetch = mockApi/);
   assert.match(adapter, /\[data-product-footer\]/);
   assert.match(adapter, /notice\.textContent = "演示站"/);
   assert.doesNotMatch(adapter, /novel\.db|sqlite/iu);
+});
+
+test("AI 配置仅保存在浏览器并说明前端直连方式", async () => {
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  const values = new Map();
+  const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  const store = createBrowserAiStore(storage);
+  store.update((state) => { state.providers.push({ id: "provider-local", apiKey: "sk-browser-only" }); });
+  assert.equal(JSON.parse(values.get(BROWSER_AI_STORAGE_KEY)).providers[0].apiKey, "sk-browser-only");
+  assert.equal(store.read().providers[0].id, "provider-local");
+  assert.doesNotMatch(publicProvider(store.read().providers[0]).apiKey, /browser-only/);
+  assert.match(adapter, /API Key 仅保存在当前浏览器/);
+  assert.match(adapter, /不经过演示站服务器/);
+  assert.match(adapter, /不会接收、记录或存储 API Key/);
+});
+
+test("浏览器直接调用 OpenAI 兼容模型并携带作品上下文", async () => {
+  const messages = buildBrowserAiMessages({ work: works[0], scope: { type: "chapter", chapterId: works[0].chapters[0].id }, instruction: "概括当前冲突" });
+  assert.match(messages[0].content, new RegExp(works[0].title));
+  assert.match(messages[0].content, new RegExp(works[0].chapters[0].title));
+  let request;
+  const result = await requestBrowserAi({
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return new Response(JSON.stringify({ choices: [{ message: { content: "冲突概括" } }], usage: { completion_tokens: 12 } }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    provider: { baseUrl: "https://example.test/v1", apiKey: "sk-local", maxTokens: 2000 },
+    model: { modelId: "demo-model", preset: { temperature: 0.5, max_tokens: 1000 } },
+    messages
+  });
+  assert.equal(request.url, "https://example.test/v1/chat/completions");
+  assert.equal(request.init.headers.Authorization, "Bearer sk-local");
+  assert.equal(JSON.parse(request.init.body).model, "demo-model");
+  assert.deepEqual(result, { content: "冲突概括", outputTokens: 12 });
 });
 
 test("两本预制作品都设置了项目内封面", async () => {
