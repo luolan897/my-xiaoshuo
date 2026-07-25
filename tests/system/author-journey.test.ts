@@ -214,7 +214,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="character-species"');
     expect(application.text).toContain("refreshRelationshipSurfaces");
     expect(application.text).toContain("data-character-relationship-edit");
+    expect(application.text).toContain('const canEditRelationships = canEditModule("relationships");');
+    expect(application.text).toContain('canEditRelationships ? `<button data-edit-relationship=');
     expect(application.text).toContain("data-dialog-relationship-delete");
+    expect(application.text).toContain('item && canEditModule("relationships") ? `<section class="entity-dialog-management"');
     expect(application.text).toContain('title: "删除人物关系", confirmLabel: "继续删除"');
     expect(application.text).toContain('title: "删除操作需要再次确认", confirmLabel: "确认删除"');
     expect(application.text).toContain('return dialog.showModal()');
@@ -294,7 +297,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-relationship-delete-network-palette');
+    expect(page.text).toContain('/app.js?v=20260726-relationship-permission-actions');
     expect(page.text).toContain('/styles.css?v=20260726-ai-panel-header-relationship-network-palette');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
