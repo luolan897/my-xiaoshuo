@@ -60,7 +60,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('bindRecordPreview("[data-open-review]"');
     expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
     expect(application.text).toContain('hideCancel: true');
-    expect(application.text).toContain('/display-labels.js?v=20260725-unified-permissions');
+    expect(application.text).toContain('/display-labels.js?v=20260725-state-field-zh');
     expect(application.text).toContain('settingStatusLabel(item.status)');
     expect(application.text).not.toContain('characterVisibilityLabel(item.visibility)');
     expect(application.text).toContain('timelineStatusLabel(item.status)');

@@ -75,3 +75,11 @@ export function occurrenceRoleLabel(value) {
 export function searchResultTypeLabel(value) {
   return enumLabel({ chapter: "章节", setting: "设定", character: "角色", race: "种族", organization: "组织" }, value, "其他资料");
 }
+
+export function characterStateFieldLabel(value) {
+  const normalized = String(value ?? "").trim();
+  return enumLabel({
+    location: "位置",
+    condition: "状况"
+  }, normalized, normalized || "未命名字段");
+}
