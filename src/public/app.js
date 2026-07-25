@@ -97,6 +97,9 @@ let presenceParticipants = [];
 let presenceHeartbeatTimer = null;
 let presenceHeartbeatQueued = null;
 let presenceHeartbeatRequest = 0;
+const acknowledgedCollaborativeChangeIds = new Set();
+let collaborativeChangePromptOpen = false;
+let peerPageStale = false;
 let collaborationAutoSaveDisabled = false;
 
 let timelineMultiSelectEnabled = false;
@@ -547,14 +550,16 @@ async function refreshPresence() {
     return [];
   }
   try {
-    const participants = await api(`/api/works/${encodeURIComponent(workId)}/presence`, {
+    const payload = await api(`/api/works/${encodeURIComponent(workId)}/presence`, {
       method: "POST",
       body: { clientId: presenceClientId, page },
       skipOptimisticVersion: true
     });
     if (state.work?.id === workId && presenceHeartbeatRequest === requestId) {
-      presenceParticipants = participants;
+      presenceParticipants = Array.isArray(payload) ? payload : (payload?.participants ?? []);
       renderPresence();
+      const recentChanges = Array.isArray(payload) ? [] : (payload?.recentChanges ?? []);
+      void handleCollaborativeChanges(recentChanges);
     }
   } catch {
     if (state.work?.id === workId) renderPresence();
@@ -562,6 +567,58 @@ async function refreshPresence() {
     if (state.work?.id === workId && presenceHeartbeatRequest === requestId) presenceHeartbeatTimer = setTimeout(refreshPresence, presenceHeartbeatInterval);
   }
   return presenceParticipants;
+}
+
+function localEditingDirty() {
+  return Boolean(state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty);
+}
+
+async function handleCollaborativeChanges(recentChanges) {
+  if (!Array.isArray(recentChanges) || !recentChanges.length || collaborativeChangePromptOpen) return;
+  const localKey = presencePageKey(presencePageForRoute());
+  if (!localKey) return;
+  const selfId = state.user?.userId;
+  const incoming = recentChanges.filter((change) => (
+    change
+    && change.pageKey === localKey
+    && change.actorUserId
+    && change.actorUserId !== selfId
+    && change.id
+    && !acknowledgedCollaborativeChangeIds.has(change.id)
+  ));
+  if (!incoming.length) return;
+  const latest = incoming[0];
+  for (const change of incoming) acknowledgedCollaborativeChangeIds.add(change.id);
+  while (acknowledgedCollaborativeChangeIds.size > 200) {
+    const oldest = acknowledgedCollaborativeChangeIds.values().next().value;
+    acknowledgedCollaborativeChangeIds.delete(oldest);
+  }
+  peerPageStale = true;
+  collaborativeChangePromptOpen = true;
+  const dirtyHint = localEditingDirty()
+    ? "你当前页面还有未保存修改。请先把正在编辑的内容复制保存到别处（本页无法代为另存），再刷新页面后重新提交。"
+    : "请先确认本地没有需要保留的草稿；如有，请复制保存到别处（本页无法代为另存），再刷新页面后继续编辑。";
+  try {
+    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新「${latest.label || "当前页面"}」。${dirtyHint}`, {
+      title: "协作者已更新",
+      confirmLabel: "刷新页面",
+      cancelLabel: "稍后处理"
+    });
+    if (shouldReload) window.location.reload();
+  } finally {
+    collaborativeChangePromptOpen = false;
+  }
+}
+
+async function confirmPeerStaleSave() {
+  if (!peerPageStale) return true;
+  const confirmed = await confirmToast("协作者已更新当前页面。请先把正在编辑的内容复制保存到别处（本页无法代为另存），再刷新页面后重新提交。继续保存可能覆盖对方修改或触发冲突。", {
+    title: "页面内容已过期",
+    confirmLabel: "仍然保存",
+    cancelLabel: "暂不保存"
+  });
+  if (confirmed) peerPageStale = false;
+  return confirmed;
 }
 
 function schedulePresenceHeartbeat() {
@@ -574,6 +631,7 @@ function schedulePresenceHeartbeat() {
 
 async function confirmConcurrentSave() {
   await refreshPresence();
+  if (!(await confirmPeerStaleSave())) return false;
   const localKey = presencePageKey(presencePageForRoute());
   const peers = presenceParticipants.filter((participant) => participant.clientId !== presenceClientId && participant.page.key === localKey);
   if (!peers.length) return true;

@@ -285,7 +285,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-module-header-scale');
+    expect(page.text).toContain('/app.js?v=20260725-collab-refresh');
     expect(page.text).toContain('/styles.css?v=20260725-module-header-scale');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
@@ -293,6 +293,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
+    expect(application.text).toContain("function handleCollaborativeChanges(recentChanges)");
+    expect(application.text).toContain("协作者已更新");
+    expect(application.text).toContain("本页无法代为另存");
+    expect(application.text).toContain("peerPageStale");
     expect(styles.text).toContain(".dev-auth-bypass .auth-view { display: none !important; }");
     expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");

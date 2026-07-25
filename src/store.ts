@@ -2430,7 +2430,7 @@ export class Store {
     return occurrenceId;
   }
 
-  private getForeshadowOccurrence(occurrenceId: string): Record<string, unknown> {
+  getForeshadowOccurrence(occurrenceId: string): Record<string, unknown> {
     const row = this.db.get(
       `SELECT fo.*, c.title AS chapter_title, c.volume_id, v.title AS volume_title
        FROM foreshadow_occurrences fo JOIN chapters c ON c.id = fo.chapter_id

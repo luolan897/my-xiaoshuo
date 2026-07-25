@@ -128,9 +128,61 @@ describe("用户、作品权限与操作者追踪 API", () => {
       page: { kind: "editor", resourceId: "chapter-1" }
     }).expect(200);
 
-    expect(active.body.data).toEqual(expect.arrayContaining([
-      expect.objectContaining({ userId: owner.user.userId, displayName: "presence_owner", page: { key: "editor:chapter-1", label: "正文编辑" } }),
-      expect.objectContaining({ userId: writer.user.userId, displayName: "presence_writer", page: { key: "editor:chapter-1", label: "正文编辑" } })
+    expect(active.body.data).toEqual(expect.objectContaining({
+      participants: expect.arrayContaining([
+        expect.objectContaining({ userId: owner.user.userId, displayName: "presence_owner", page: { key: "editor:chapter-1", label: "正文编辑" } }),
+        expect.objectContaining({ userId: writer.user.userId, displayName: "presence_writer", page: { key: "editor:chapter-1", label: "正文编辑" } })
+      ]),
+      recentChanges: []
+    }));
+  });
+
+  it("同页协作者保存后，对方心跳可收到刷新提醒事件", async () => {
+    const owner = await register(runtime, "change_owner");
+    const writer = await register(runtime, "change_writer");
+    const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({ title: "变更提醒作品" }).expect(201);
+    const workId = work.body.data.id;
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: writer.user.userId,
+      role: "editor"
+    }).expect(201);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`).set("X-CSRF-Token", owner.csrfToken).send({ title: "第一卷" }).expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`).set("X-CSRF-Token", owner.csrfToken).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "原始正文。"
+    }).expect(201);
+    const chapterId = chapter.body.data.id;
+
+    await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "editor", resourceId: chapterId }
+    }).expect(200);
+
+    await owner.agent.patch(`/api/chapters/${chapterId}`).set("X-CSRF-Token", owner.csrfToken).send({
+      content: "作者更新后的正文。",
+      expectedVersionNo: chapter.body.data.versionNo
+    }).expect(200);
+
+    const samePage = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "editor", resourceId: chapterId }
+    }).expect(200);
+    expect(samePage.body.data.recentChanges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pageKey: `editor:${chapterId}`,
+        label: "正文编辑",
+        actorUserId: owner.user.userId,
+        actorDisplayName: "change_owner"
+      })
+    ]));
+
+    const otherPage = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "module", module: "characters" }
+    }).expect(200);
+    expect(otherPage.body.data.recentChanges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pageKey: `editor:${chapterId}` })
     ]));
   });
 
