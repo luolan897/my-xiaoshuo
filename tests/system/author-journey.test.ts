@@ -285,8 +285,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-races-lazy-characters');
-    expect(page.text).toContain('/styles.css?v=20260725-module-count-vditor-left-panel');
+    expect(page.text).toContain('/app.js?v=20260726-races-lazy-characters-relationship-network-palette');
+    expect(page.text).toContain('/styles.css?v=20260726-relationship-network-palette');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -309,14 +309,14 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
     expect(application.text).toContain("if (readOnly) editor?.disabled();");
     expect(application.text).not.toContain("if (readOnly) editor.disabled();");
-    expect(application.text).toContain('/relationship-graph.js?v=20260725-galaxy-ripple');
+    expect(application.text).toContain('/relationship-graph.js?v=20260726-network-theme-palette');
     expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
     expect(application.text).not.toContain('${item.evidence.length} 条');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
     expect(graph.text).toContain('statuses.push("待确认")');
     expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
-    expect(application.text).toContain('/race-hierarchy.js?v=20260721-race-hierarchy');
+    expect(application.text).toContain('/race-hierarchy.js?v=20260726-race-filter-order');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
@@ -353,6 +353,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(":root[data-theme=\"dark\"]");
     expect(styles.text).toContain("--relationship-network-surface: #eef2f7");
     expect(styles.text).toContain("--relationship-network-surface: #12121a");
+    expect(styles.text).toContain("--node-color: var(--node-color-light, #626b78)");
+    expect(styles.text).toContain(':root[data-theme="dark"] .relationship-network .mind-node');
+    expect(graph.text).toContain('button.style.setProperty("--node-color-dark", node.darkColor || appearance.darkColor)');
     expect(styles.text).toContain(".relationship-network-card .relationship-map-toolbar");
     expect(styles.text).toContain("background: var(--toast-bg)");
     expect(page.text).toContain('id="platform-ui-settings-button" class="settings-hub-card hidden"');
