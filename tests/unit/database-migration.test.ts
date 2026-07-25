@@ -68,7 +68,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }, { version: 38 }, { version: 39 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }, { version: 38 }, { version: 39 }, { version: 40 }]);
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -191,5 +191,38 @@ describe("数据库版本化迁移", () => {
     expect(repaired.all("PRAGMA table_info(work_memberships)").some((column) => column.name === "permissions_json")).toBe(true);
     expect(repaired.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 35")?.count).toBe(1);
     repaired.close();
+  });
+
+  it("迁移 40 将 query_story_knowledge 重命名为 search_story_entities", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-tool-rename-"));
+    roots.push(root);
+    const filename = join(root, "tool-rename.db");
+    const first = new Database(filename);
+    const timestamp = "2025-01-01T00:00:00.000Z";
+    first.run(
+      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
+       VALUES ('work-tool', '工具迁移', '', '', 'zh-CN', '[]', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    first.run(
+      `INSERT INTO work_ai_settings (work_id, system_prompt, agent_tools_json, updated_at)
+       VALUES ('work-tool', '', ?, ?)`,
+      JSON.stringify(["story_index", "read_chapters", "query_story_knowledge", "grep", "read_character_sections"]),
+      timestamp
+    );
+    first.run("DELETE FROM schema_migrations WHERE version = 40");
+    first.close();
+
+    const second = new Database(filename);
+    expect(JSON.parse(String(second.get("SELECT agent_tools_json FROM work_ai_settings WHERE work_id = 'work-tool'")?.agent_tools_json))).toEqual([
+      "story_index",
+      "read_chapters",
+      "search_story_entities",
+      "grep",
+      "read_character_sections"
+    ]);
+    expect(second.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 40")?.count).toBe(1);
+    second.close();
   });
 });

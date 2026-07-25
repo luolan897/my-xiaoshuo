@@ -32,10 +32,10 @@ describe("AI 角色身份审核与安全合并", () => {
       const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }>; messages: Array<{ content?: string }> };
       completionRound += 1;
       if (completionRound === 1) {
-        expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["read_chapters", "grep", "query_story_knowledge"]);
+        expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["read_chapters", "grep", "search_story_entities"]);
         expect(body.messages[1]?.content).toContain("角色规范表");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
-          { id: "knowledge", type: "function", function: { name: "query_story_knowledge", arguments: JSON.stringify({ query: "安吉拉斯", categories: ["character", "relationship"] }) } },
+          { id: "knowledge", type: "function", function: { name: "search_story_entities", arguments: JSON.stringify({ query: "安吉拉斯", categories: ["character", "relationship"] }) } },
           { id: "grep-left", type: "function", function: { name: "grep", arguments: JSON.stringify({ keyword: "安吉拉斯", limit: 20 }) } },
           { id: "grep-right", type: "function", function: { name: "grep", arguments: JSON.stringify({ keyword: "安基拉斯", limit: 20 }) } },
           ...Array.from({ length: 10 }, (_, index) => ({

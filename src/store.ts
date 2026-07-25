@@ -977,7 +977,9 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge","grep","read_character_sections"]'), ["story_index", "read_chapters", "query_story_knowledge", "grep", "read_character_sections"]),
+      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections"])
+        .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
+        .filter((tool, index, tools) => tools.indexOf(tool) === index),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
