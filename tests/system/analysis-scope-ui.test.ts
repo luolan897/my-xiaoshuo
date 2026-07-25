@@ -22,12 +22,13 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('data-relationship-character-search');
     expect(application).toContain('data-relationship-character-clear');
     expect(application).toContain('input[name="characterIds"]');
-    expect(application).toContain('class="relationship-analysis-note"');
-    expect(application).toContain('class="relationship-analysis-note is-warning"');
+    expect(application).toContain('class="relationship-analysis-helper"');
+    expect(application).toContain('class="relationship-overwrite-card is-disabled"');
     expect(application).toContain('name="replaceExistingRelationships" type="checkbox" disabled');
     expect(application).toContain('relationshipOptions.classList.toggle("hidden", !enabled)');
     expect(application).toContain("relationshipCharacterInputs.some((input) => input.checked)");
     expect(application).toContain("replaceRelationships.disabled = !hasSelectedCharacters");
+    expect(application).toContain('relationshipOverwriteCard.classList.toggle("is-disabled", !hasSelectedCharacters)');
     expect(application).toContain('relationshipCharacterTrigger.addEventListener("click"');
     expect(application).toContain('relationshipCharacterSearch.addEventListener("input", filterRelationshipCharacters)');
     expect(application).toContain('setRelationshipCharacterBubbleOpen(false)');
@@ -36,7 +37,7 @@ describe("AI 分析范围交互", () => {
     expect(styles).toContain(".task-chapter-field select:disabled { cursor: not-allowed; }");
     expect(styles).toContain(".relationship-character-bubble {");
     expect(styles).toContain(".relationship-character-options {");
-    expect(styles).toContain(".relationship-analysis-note {");
-    expect(styles).toContain(".relationship-analysis-note.is-warning {");
+    expect(styles).toContain(".relationship-analysis-helper {");
+    expect(styles).toContain(".relationship-overwrite-card {");
   });
 });

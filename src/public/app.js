@@ -5941,9 +5941,11 @@ async function openTaskDialog() {
   const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
-    <p class="relationship-analysis-note"><strong>分析方式</strong><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。</span></p>
-    <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
-    <p class="relationship-analysis-note is-warning"><strong>覆盖说明</strong><span>仅在选择角色后可用。任务成功时删除所有涉及所选角色的旧关系，再写入本次结果。</span></p>
+    <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。</span></p>
+    <div class="relationship-overwrite-card is-disabled">
+      <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
+      <p>任务成功后，会先删除所有涉及所选角色的旧关系，再写入本次分析结果。</p>
+    </div>
     <label>额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将同时追加到证据收集和全局关系归纳提示词，仅影响本次任务。</small></label>
   </div>`;
   openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
@@ -5976,6 +5978,7 @@ async function openTaskDialog() {
   const relationshipCharacterClear = relationshipOptions.querySelector("[data-relationship-character-clear]");
   const relationshipCharacterEmpty = relationshipOptions.querySelector("[data-relationship-character-empty]");
   const replaceRelationships = relationshipOptions.querySelector('input[name="replaceExistingRelationships"]');
+  const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-overwrite-card");
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
   allSettingsOption.textContent = "全书 + 所有设定";
@@ -6026,6 +6029,7 @@ async function openTaskDialog() {
     if (!enabled) setRelationshipCharacterBubbleOpen(false);
     const hasSelectedCharacters = enabled && relationshipCharacterInputs.some((input) => input.checked);
     replaceRelationships.disabled = !hasSelectedCharacters;
+    relationshipOverwriteCard.classList.toggle("is-disabled", !hasSelectedCharacters);
     if (!hasSelectedCharacters) replaceRelationships.checked = false;
     syncRelationshipCharacterPicker();
     filterRelationshipCharacters();
