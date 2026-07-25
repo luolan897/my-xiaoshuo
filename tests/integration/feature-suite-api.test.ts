@@ -47,6 +47,39 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
   beforeEach(() => { runtime = createTestRuntime(); });
   afterEach(() => runtime.close());
 
+  it("列表接口只返回轻量摘要，不携带资料正文", async () => {
+    const { workId } = await seedWork(runtime);
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "太阳爆发",
+      category: "世界规则",
+      content: "正文内容。".repeat(200)
+    }).expect(201);
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "泰坦",
+      settingsSections: [{ title: "体质", contentMarkdown: "体型巨大。".repeat(100) }]
+    }).expect(201);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "北港守望会",
+      settingsSections: [{ title: "章程", contentMarkdown: "成员必须守望。".repeat(100) }]
+    }).expect(201);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", raceId: race.body.data.id }).expect(201);
+
+    const [settings, races, organizations, characters] = await Promise.all([
+      request(runtime.app).get(`/api/works/${workId}/settings`).expect(200),
+      request(runtime.app).get(`/api/works/${workId}/races`).expect(200),
+      request(runtime.app).get(`/api/works/${workId}/organizations`).expect(200),
+      request(runtime.app).get(`/api/works/${workId}/characters`).expect(200)
+    ]);
+    expect(settings.body.data).toEqual([expect.objectContaining({ id: setting.body.data.id, contentPreview: expect.any(String) })]);
+    expect(settings.body.data[0]).not.toHaveProperty("content");
+    const settingContext = await request(runtime.app).get(`/api/works/${workId}/settings/context`).expect(200);
+    expect(settingContext.body.data[0]).toHaveProperty("content");
+    expect(races.body.data[0]).not.toHaveProperty("settingsSections");
+    expect(races.body.data[0]).not.toHaveProperty("effectiveSettings");
+    expect(organizations.body.data[0]).not.toHaveProperty("settingsSections");
+    expect(characters.body.data.find((item: Record<string, unknown>) => item.id === character.body.data.id).race).not.toHaveProperty("effectiveSettings");
+  });
+
   it("在作品内统一约束主名和全部别名，并规范化无向关系", async () => {
     const { workId } = await seedWork(runtime);
     const first = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉", aliases: ["小魔", "Mothra"] }).expect(201);
@@ -260,7 +293,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(updated.body.data.organizations[0].name).toBe("帝王组织");
     await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({ species: "未登记种族" }).expect(400);
 
-    const races = await request(runtime.app).get(`/api/works/${workId}/races`).expect(200);
+    const races = await request(runtime.app).get(`/api/works/${workId}/races?includeContent=true`).expect(200);
     expect(races.body.data).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "泰坦族", settings: ["可感知地球生态"] }),
       expect.objectContaining({ name: "原生泰坦", memberIds: [created.body.data.id] })

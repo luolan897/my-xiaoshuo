@@ -117,7 +117,7 @@ describe("设定抽取任务", () => {
     const secondRun = await request(runtime.app).post(`/api/tasks/${secondTask.body.data.id}/run`).send({ modelId }).expect(200);
     expect(secondRun.body.data.result).toMatchObject({ candidateCount: 1, createdCount: 0, updatedCount: 1 });
 
-    const settings = await request(runtime.app).get(`/api/works/${workId}/settings`).expect(200);
+    const settings = await request(runtime.app).get(`/api/works/${workId}/settings?includeContent=true`).expect(200);
     expect(settings.body.data).toHaveLength(2);
     const protectedAfter = settings.body.data.find((item: { id: string }) => item.id === protectedSetting.body.data.id);
     expect(protectedAfter).toMatchObject({ content: "只有作者能修改这条设定。", status: "confirmed", locked: true });
