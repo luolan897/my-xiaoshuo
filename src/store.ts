@@ -58,7 +58,6 @@ type CharacterInput = {
   profile?: Record<string, unknown>;
   currentState?: Record<string, unknown>;
   lockedFields?: string[];
-  visibility?: string;
   firstChapterId?: string | null;
 };
 
@@ -98,7 +97,6 @@ type CharacterSnapshot = {
   profile: Record<string, unknown>;
   currentState: Record<string, unknown>;
   lockedFields: string[];
-  visibility: string;
   firstChapterId: string | null;
 };
 
@@ -3192,7 +3190,6 @@ export class Store {
       profile,
       currentState: character.currentState as Record<string, unknown>,
       lockedFields: [...(character.lockedFields as string[])],
-      visibility: String(character.visibility),
       firstChapterId: character.firstChapterId as string | null
     };
   }
@@ -3266,8 +3263,8 @@ export class Store {
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
-         locked_fields_json, visibility, first_chapter_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         locked_fields_json, first_chapter_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
@@ -3279,7 +3276,6 @@ export class Store {
         JSON.stringify(input.profile ?? {}),
         JSON.stringify(input.currentState ?? {}),
         JSON.stringify(input.lockedFields ?? []),
-        input.visibility ?? "author",
         input.firstChapterId ?? null,
         timestamp,
         timestamp
@@ -3806,7 +3802,7 @@ export class Store {
       this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(lockedCurrent.versionNo));
       this.db.run(
         `UPDATE characters SET name = ?, code = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
-         locked_fields_json = ?, visibility = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
+         locked_fields_json = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
         names.name,
         input.code === undefined ? String(current.code) : input.code.trim(),
         JSON.stringify(names.aliases),
@@ -3816,7 +3812,6 @@ export class Store {
         JSON.stringify(input.profile ?? current.profile),
         JSON.stringify(input.currentState ?? current.currentState),
         JSON.stringify(input.lockedFields ?? current.lockedFields),
-        input.visibility ?? String(current.visibility),
         input.firstChapterId === undefined ? (current.firstChapterId as string | null) : input.firstChapterId,
         now(),
         characterId
@@ -3929,8 +3924,8 @@ export class Store {
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
-         locked_fields_json, visibility, first_chapter_id, version_no, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         locked_fields_json, first_chapter_id, version_no, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
@@ -3942,7 +3937,6 @@ export class Store {
         JSON.stringify(snapshot.profile ?? {}),
         JSON.stringify(snapshot.currentState ?? {}),
         JSON.stringify(snapshot.lockedFields ?? []),
-        snapshot.visibility ?? "author",
         snapshot.firstChapterId ?? null,
         nextVersionNo,
         timestamp,
@@ -4055,7 +4049,6 @@ export class Store {
       profileSectionCount,
       currentState: json(requiredString(row, "current_state_json"), {}),
       lockedFields: json(requiredString(row, "locked_fields_json"), []),
-      visibility: requiredString(row, "visibility"),
       firstChapterId: optionalString(row, "first_chapter_id"),
       mergedIntoCharacterId: optionalString(row, "merged_into_character_id"),
       mergedAt: optionalString(row, "merged_at"),
