@@ -301,7 +301,7 @@ type AiConversationMessageInput = {
   role: "user" | "assistant";
   content: string;
   citations?: unknown[];
-  metadata?: { modelDisplayName?: string; outputTokens?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
+  metadata?: { modelDisplayName?: string; outputTokens?: number; cacheHitPercent?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
 };
 
 export type AiConversationContext = {
@@ -5256,6 +5256,13 @@ export class Store {
     const timestamp = now();
     const scope = input.scope ?? { type: "book" };
     const sourceVersions: Record<string, number> = {};
+    if (Array.isArray(scope.characterIds)) {
+      for (const characterId of scope.characterIds) {
+        if (typeof characterId !== "string") throw new AppError(400, "CHARACTER_REQUIRED", "被分析角色标识无效");
+        const character = this.getCharacter(characterId);
+        if (character.workId !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
+      }
+    }
     if (typeof scope.chapterId === "string") {
       const chapter = this.getChapter(scope.chapterId);
       if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
@@ -5453,16 +5460,22 @@ export class Store {
   }
 
   private taskScopeSummaryFromMaps(scope: Record<string, unknown>, chapterSummaries: Map<string, string>, volumeTitles: Map<string, string>): string {
-    if (typeof scope.chapterId === "string") return chapterSummaries.get(scope.chapterId) ?? "章节已删除";
+    const targetedSuffix = Array.isArray(scope.characterIds) && scope.characterIds.length
+      ? ` · 定向 ${scope.characterIds.length} 人${scope.replaceExistingRelationships === true ? " · 覆盖已有关系" : ""}`
+      : "";
+    if (typeof scope.chapterId === "string") return `${chapterSummaries.get(scope.chapterId) ?? "章节已删除"}${targetedSuffix}`;
     if (scope.type === "volume" && typeof scope.volumeId === "string") {
       const title = volumeTitles.get(scope.volumeId);
-      return title ? `分卷 · ${title}` : "分卷已删除";
+      return title ? `分卷 · ${title}${targetedSuffix}` : "分卷已删除";
     }
-    if (scope.type === "book" || Object.keys(scope).length === 0) return "全书";
+    if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 所有设定" : "全书"}${targetedSuffix}`;
     return "未指定范围";
   }
 
   private taskScopeSummary(workId: string, scope: Record<string, unknown>): string {
+    const targetedSuffix = Array.isArray(scope.characterIds) && scope.characterIds.length
+      ? ` · 定向 ${scope.characterIds.length} 人${scope.replaceExistingRelationships === true ? " · 覆盖已有关系" : ""}`
+      : "";
     if (typeof scope.chapterId === "string") {
       const chapter = this.db.get(
         `SELECT chapter.title AS title, volume.title AS volume_title
@@ -5475,13 +5488,13 @@ export class Store {
       if (!chapter) return "章节已删除";
       const title = requiredString(chapter, "title");
       const volumeTitle = requiredString(chapter, "volume_title");
-      return `${volumeTitle} · ${title}`;
+      return `${volumeTitle} · ${title}${targetedSuffix}`;
     }
     if (scope.type === "volume" && typeof scope.volumeId === "string") {
       const volume = this.db.get("SELECT title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);
-      return volume ? `分卷 · ${requiredString(volume, "title")}` : "分卷已删除";
+      return volume ? `分卷 · ${requiredString(volume, "title")}${targetedSuffix}` : "分卷已删除";
     }
-    if (scope.type === "book" || Object.keys(scope).length === 0) return "全书";
+    if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 所有设定" : "全书"}${targetedSuffix}`;
     return "未指定范围";
   }
 

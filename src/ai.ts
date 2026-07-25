@@ -87,6 +87,7 @@ type GenerateResult = {
   callId: string;
   content: string;
   outputTokens: number;
+  cacheHitPercent?: number;
   provider: Record<string, unknown>;
   model: Record<string, unknown>;
   context: string;
@@ -367,6 +368,43 @@ export function resolveOutputTokens(usage: unknown, content: string): number {
   return estimateAiTokens(content);
 }
 
+type InputCacheUsage = { inputTokens: number; cachedInputTokens: number };
+
+function resolveInputCacheUsage(usage: unknown): InputCacheUsage | null {
+  if (!usage || typeof usage !== "object") return null;
+  const record = usage as Record<string, unknown>;
+  const promptDetails = record.prompt_tokens_details && typeof record.prompt_tokens_details === "object"
+    ? record.prompt_tokens_details as Record<string, unknown>
+    : {};
+  const inputDetails = record.input_tokens_details && typeof record.input_tokens_details === "object"
+    ? record.input_tokens_details as Record<string, unknown>
+    : {};
+  const cached = promptDetails.cached_tokens
+    ?? inputDetails.cached_tokens
+    ?? record.prompt_cache_hit_tokens
+    ?? record.cache_read_input_tokens
+    ?? record.cached_input_tokens;
+  if (typeof cached !== "number" || !Number.isFinite(cached)) return null;
+  const reportedInput = record.prompt_tokens ?? record.input_tokens;
+  const missed = record.prompt_cache_miss_tokens;
+  const inputTokens = typeof reportedInput === "number" && Number.isFinite(reportedInput)
+    ? Math.max(0, Math.round(reportedInput))
+    : typeof missed === "number" && Number.isFinite(missed)
+      ? Math.max(0, Math.round(cached)) + Math.max(0, Math.round(missed))
+      : 0;
+  if (inputTokens <= 0) return null;
+  return {
+    inputTokens,
+    cachedInputTokens: Math.min(inputTokens, Math.max(0, Math.round(cached)))
+  };
+}
+
+export function resolveCacheHitPercent(usage: unknown): number | undefined {
+  const resolved = resolveInputCacheUsage(usage);
+  if (!resolved) return undefined;
+  return Math.round(resolved.cachedInputTokens / resolved.inputTokens * 1_000) / 10;
+}
+
 function normalizeModelPreset(input: Record<string, unknown>, modelId = ""): Record<string, unknown> {
   const maxTokens = typeof input.max_tokens === "number" && Number.isFinite(input.max_tokens)
     ? Math.round(clamp(input.max_tokens, 1, 32_768))
@@ -580,17 +618,20 @@ export class ContextBuilder {
       ? [`作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`]
       : [];
     const contentSections: string[] = [];
-    const lockedSettings = this.store.listSettings(workId).filter((item) => item.locked);
+    const availableSettings = this.store.listSettings(workId);
+    const contextualSettings = scope.includeAllSettings ? availableSettings : availableSettings.filter((item) => item.locked);
     const allCharacters = this.store.listCharacters(workId);
     const lockedCharacters = allCharacters.filter(
       (item) => Array.isArray(item.lockedFields) && item.lockedFields.length > 0
     );
     const organizations = this.store.listOrganizations(workId);
-    const relationshipConstraints = selectRelationshipConstraints(this.store, workId, scope.characterIds ?? []);
+    const relationshipConstraints = scope.excludeRelationshipConstraints
+      ? []
+      : selectRelationshipConstraints(this.store, workId, scope.characterIds ?? []);
 
-    if (includeAutomaticContext && lockedSettings.length > 0) {
+    if (includeAutomaticContext && contextualSettings.length > 0) {
       constraints.push(
-        `作者锁定设定（硬约束）：\n${lockedSettings
+        `${scope.includeAllSettings ? "全部作品设定（关系分析参考）" : "作者锁定设定（硬约束）"}：\n${contextualSettings
           .map((item) => `- [${String(item.category)}] ${String(item.title)}：${String(item.content)}`)
           .join("\n")}`
       );
@@ -1315,7 +1356,7 @@ export class AiManager {
       currentRequestActor()?.userId ?? null
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls, processSteps: generated.processSteps };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }), toolCalls: generated.toolCalls, processSteps: generated.processSteps };
   }
 
   async createStreamingChat(
@@ -1342,7 +1383,7 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls, processSteps: generated.processSteps };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }), toolCalls: generated.toolCalls, processSteps: generated.processSteps };
   }
 
   async runSuggestionGuard(suggestionId: string, candidateContent?: string): Promise<Record<string, unknown>> {
@@ -2073,13 +2114,17 @@ export class AiManager {
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       type CompletionPayload = {
-        usage?: { completion_tokens?: number; output_tokens?: number };
+        usage?: Record<string, unknown>;
         choices?: Array<{
           finish_reason?: string | null;
           message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: CompletionToolCall[] };
         }>;
       };
       type CompletionChoice = NonNullable<CompletionPayload["choices"]>[number];
+      let completionRequestCount = 0;
+      let cacheUsageComplete = true;
+      let totalInputTokens = 0;
+      let totalCachedInputTokens = 0;
       const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
@@ -2120,7 +2165,15 @@ export class AiManager {
             });
             if (candidate.ok) {
               try {
-                return JSON.parse(candidate.body) as CompletionPayload;
+                const parsed = JSON.parse(candidate.body) as CompletionPayload;
+                completionRequestCount += 1;
+                const cacheUsage = resolveInputCacheUsage(parsed.usage);
+                if (!cacheUsage) cacheUsageComplete = false;
+                else {
+                  totalInputTokens += cacheUsage.inputTokens;
+                  totalCachedInputTokens += cacheUsage.cachedInputTokens;
+                }
+                return parsed;
               } catch {
                 throw new Error(`Chat Completions returned invalid JSON: ${candidate.body.slice(0, 500)}`);
               }
@@ -2224,6 +2277,9 @@ export class AiManager {
         callId
       );
       const outputTokens = resolveOutputTokens(payload.usage, content);
+      const cacheHitPercent = cacheUsageComplete && completionRequestCount > 0 && totalInputTokens > 0
+        ? Math.round(totalCachedInputTokens / totalInputTokens * 1_000) / 10
+        : undefined;
       logger.info("ai.call.completed", {
         callId,
         workId: input.workId,
@@ -2234,7 +2290,7 @@ export class AiManager {
         outputTokens,
         toolCallCount: executedToolCalls.length
       });
-      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
+      return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -2289,7 +2345,7 @@ export class AiManager {
       const apiKey = this.decryptKey(provider);
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let streamedResult: { content: string; reasoning: string; outputTokens: number } | null = null;
+      let streamedResult: { content: string; reasoning: string; outputTokens: number; cacheHitPercent?: number } | null = null;
       let lastFailure: unknown = null;
       let emitted = false;
       const thinkingStepId = id("process");
@@ -2358,7 +2414,7 @@ export class AiManager {
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
       }
       if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
-      const { content, reasoning, outputTokens } = streamedResult;
+      const { content, reasoning, outputTokens, cacheHitPercent } = streamedResult;
       const processSteps: AiProcessStep[] = reasoning.trim()
         ? [{ id: thinkingStepId, type: "thinking", round: 1, content: reasoning, createdAt: thinkingCreatedAt }]
         : [];
@@ -2377,7 +2433,7 @@ export class AiManager {
         outputChars: content.length,
         outputTokens
       });
-      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
+      return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -2397,7 +2453,7 @@ export class AiManager {
     response: Response,
     onDelta: (delta: string) => void,
     onThinkingDelta: (delta: string) => void
-  ): Promise<{ content: string; reasoning: string; outputTokens: number }> {
+  ): Promise<{ content: string; reasoning: string; outputTokens: number; cacheHitPercent?: number }> {
     if (!response.body) throw new Error("Chat Completions 流式响应缺少正文");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -2415,7 +2471,7 @@ export class AiManager {
       if (!data || data === "[DONE]") return;
       const payload = JSON.parse(data) as {
         error?: { message?: string };
-        usage?: { completion_tokens?: number; output_tokens?: number };
+        usage?: Record<string, unknown>;
         choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null } }>;
       };
       if (payload.error) throw new Error(payload.error.message || "上游流式响应返回错误");
@@ -2443,7 +2499,8 @@ export class AiManager {
     }
     if (buffer.trim()) consumeEvent(buffer);
     if (!content.trim()) throw new Error(`Chat Completions 流式响应缺少可用正文，finish_reason=${finishReason}`);
-    return { content, reasoning, outputTokens: resolveOutputTokens(usage, content) };
+    const cacheHitPercent = resolveCacheHitPercent(usage);
+    return { content, reasoning, outputTokens: resolveOutputTokens(usage, content), ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }) };
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
@@ -3312,6 +3369,16 @@ export class AiManager {
   private async runRelationshipAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const characters = this.store.listCharacters(workId);
     if (characters.length < 2) throw new AppError(409, "CHARACTERS_REQUIRED", "人物关系分析至少需要两个角色档案");
+    const selectedCharacterIds = new Set(scope.characterIds ?? []);
+    for (const characterId of selectedCharacterIds) {
+      const character = characters.find((item) => item.id === characterId);
+      if (!character) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
+    }
+    const targeted = selectedCharacterIds.size > 0;
+    const targetedRoster = characters
+      .filter((character) => selectedCharacterIds.has(String(character.id)))
+      .map((character) => `${String(character.id)} | ${String(character.name)}`)
+      .join("\n");
     const chapters = this.getScopeChapters(workId, scope);
     if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "人物关系分析范围内没有章节");
     const chunks = this.buildChapterChunks(chapters, 12_000);
@@ -3328,10 +3395,28 @@ export class AiManager {
         taskType: "relationship-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts,
-        scope: { type: "selection", selection: text },
+        scope: {
+          type: "selection",
+          selection: text,
+          includeAllSettings: scope.includeAllSettings,
+          ...(targeted ? { characterIds: [...selectedCharacterIds], excludeRelationshipConstraints: scope.replaceExistingRelationships === true } : {})
+        },
         ...(modelId ? { modelId } : {}),
         parameters: { temperature: 0.1 },
-        instruction: [
+        instruction: targeted ? [
+          "你是定向人物关系证据收集器。本阶段只建立跨章节证据账本，不下最终关系结论。",
+          "被分析角色：",
+          targetedRoster,
+          "完整角色规范表：",
+          roster,
+          "规则：",
+          "1. 只记录与至少一名被分析角色直接有关的互动、称谓、亲缘线索、权力行为、情感变化、冲突、回忆或第三方陈述。",
+          "2. 单次见面、同场出现和含糊代词可以作为待汇总线索，但必须如实描述，不能在本阶段升级为长期关系。",
+          "3. 人物引用优先填写规范表中的 characterId；暂时不能确定对方身份时填写 relatedReference，禁止创造角色。",
+          "4. 每条线索只引用一个连续原文短句，quote 不超过 80 字，并准确提供 chapterId、chapterTitle 和 contextType。",
+          "5. 输出 JSON 数组。字段：targetCharacterId、relatedCharacterId、relatedReference、observation、possibleCategory、possibleSubtype、directionHint、timeHint、chapterId、chapterTitle、quote、contextType。",
+          "6. 没有与目标角色直接相关的线索时输出 []。"
+        ].join("\n") : [
           "你是小说人物关系抽取器，不是续写者。只抽取角色规范表中人物之间、对跨章节人物图有长期意义且有原文证据的关系。",
           "角色规范表：",
           roster,
@@ -3362,7 +3447,12 @@ export class AiManager {
           "23. 输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。",
           "24. 共同执行一次任务、同属一个组织、在同一集体场景中被感谢或落泪、替第三人转发消息，都不能单独证明同事、朋友或盟友。此类关系必须有原文明示身份，或至少两个不同章节的持续互动证据。"
         ].join("\n"),
-        extraSystemPrompt: "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。"
+        extraSystemPrompt: [
+          targeted
+            ? "你正在为指定角色收集可审计的跨章节关系线索。不得在证据收集阶段把单次互动直接判定为长期关系。"
+            : "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。",
+          scope.additionalPrompt?.trim() ? `作者追加的关系分析提示：\n${scope.additionalPrompt.trim()}` : ""
+        ].filter(Boolean).join("\n\n")
       });
       const extracted = extractJson<unknown>(generated.content);
       if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "人物关系分析结果必须是数组");
@@ -3384,7 +3474,8 @@ export class AiManager {
       }
     }, (completed) => {
       if (taskId && this.store.getTask(taskId).status === "running") {
-        this.store.updateTask(taskId, { status: "running", progress: Math.min(92, 5 + Math.round(completed / chunks.length * 87)) });
+        const maximumProgress = targeted ? 72 : 92;
+        this.store.updateTask(taskId, { status: "running", progress: Math.min(maximumProgress, 5 + Math.round(completed / chunks.length * (maximumProgress - 5))) });
       }
     });
     let fallbackSegmentCount = 0;
@@ -3403,6 +3494,86 @@ export class AiManager {
         successfulCallCount: callIds.length,
         batchCount: chunks.length
       });
+    }
+
+    const targetedEvidenceCount = targeted ? rawCandidates.length : 0;
+    let aggregationBatchCount = 0;
+    if (targeted && rawCandidates.length > 0) {
+      const evidenceGroups = new Map<string, Array<Record<string, unknown>>>();
+      for (const evidence of rawCandidates) {
+        const target = String(evidence.targetCharacterId ?? "");
+        const related = String(evidence.relatedCharacterId ?? evidence.relatedReference ?? "unknown");
+        const key = `${target}|${related}`;
+        const group = evidenceGroups.get(key) ?? [];
+        group.push(evidence);
+        evidenceGroups.set(key, group);
+      }
+      const evidenceBatches: Array<Array<Record<string, unknown>>> = [];
+      let currentBatch: Array<Record<string, unknown>> = [];
+      let currentLength = 0;
+      for (const group of evidenceGroups.values()) {
+        const groupLength = JSON.stringify(group).length;
+        if (currentBatch.length > 0 && currentLength + groupLength > 60_000) {
+          evidenceBatches.push(currentBatch);
+          currentBatch = [];
+          currentLength = 0;
+        }
+        currentBatch.push(...group);
+        currentLength += groupLength;
+      }
+      if (currentBatch.length > 0) evidenceBatches.push(currentBatch);
+      aggregationBatchCount = evidenceBatches.length;
+      const aggregationResults = await this.processChunks(evidenceBatches, Math.min(concurrency, 4), async (evidenceBatch) => {
+        const generated = await this.generateTaggedJson({
+          workId,
+          taskType: "relationship-analysis",
+          signal: this.taskSignal(taskId),
+          maxAttempts: 2,
+          scope: {
+            type: "entities",
+            includeAllSettings: scope.includeAllSettings,
+            characterIds: [...selectedCharacterIds],
+            excludeRelationshipConstraints: scope.replaceExistingRelationships === true
+          },
+          ...(modelId ? { modelId } : {}),
+          parameters: { temperature: 0.1 },
+          instruction: [
+            "你是小说人物关系全局归纳器。请综合分析范围内为指定角色收集的全部跨章节证据线索，形成最终长期关系候选。",
+            "被分析角色：",
+            targetedRoster,
+            "完整角色规范表：",
+            roster,
+            "证据账本：",
+            JSON.stringify(evidenceBatch),
+            "归纳规则：",
+            "1. 只输出至少一端属于被分析角色的关系，另一端也必须解析为角色规范表中的 characterId。",
+            "2. 综合不同章节、不同阶段和设定信息判断关系；设定只用于身份消歧和辅助理解，不能代替章节原文证据。",
+            "3. 单次见面、同场出现、一次任务协作、同组织或同族不能单独升级为长期朋友、同事、盟友、君臣或亲属。",
+            "4. evidence 只能使用证据账本中的连续原文 quote，必须包含 chapterId、chapterTitle、quote、contextType、supports；quote 不超过 80 字。",
+            "5. category 只能是 family、social、emotional、conflict、uncertain；confidence 低于 0.6 不输出。",
+            "6. subtype 使用稳定简短中文词；父母子女、君臣、师生、倾慕、施害与受害等有方向关系必须正确设置 from、to 和 directed=true。",
+            "7. 同一人物对的阶段变化合并进 timeRange.stages；同一 category/subtype 不得输出反向重复边。",
+            "8. keywords 提供 2 至 8 个描述双方互动、权力结构、情感阶段或剧情张力的中文关键词。",
+            "9. 输出 JSON 数组。字段：fromCharacterId、toCharacterId、category、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。"
+          ].join("\n"),
+          extraSystemPrompt: [
+            "你正在执行指定角色的跨章节关系归纳。所有结论必须能回溯到证据账本中的章节原文，不得沿用缺乏本次证据的旧关系。",
+            scope.additionalPrompt?.trim() ? `作者追加的关系分析提示：\n${scope.additionalPrompt.trim()}` : ""
+          ].filter(Boolean).join("\n\n")
+        });
+        const extracted = extractJson<unknown>(generated.content);
+        if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "定向人物关系归纳结果必须是数组");
+        return {
+          candidates: extracted.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)),
+          callId: generated.callId
+        };
+      }, (completed) => {
+        if (taskId && this.store.getTask(taskId).status === "running") {
+          this.store.updateTask(taskId, { status: "running", progress: Math.min(92, 72 + Math.round(completed / evidenceBatches.length * 20)) });
+        }
+      });
+      rawCandidates.splice(0, rawCandidates.length, ...aggregationResults.flatMap((result) => result.candidates));
+      callIds.push(...aggregationResults.map((result) => result.callId));
     }
 
     const chapterById = new Map(chapters.map((chapter) => [String(chapter.id), chapter]));
@@ -3431,6 +3602,10 @@ export class AiManager {
         : null;
       if (!fromResolved || !toResolved || fromResolved === toResolved) {
         skipped.push({ index, reason: "人物引用无效" });
+        return;
+      }
+      if (targeted && !selectedCharacterIds.has(fromResolved) && !selectedCharacterIds.has(toResolved)) {
+        skipped.push({ index, reason: "关系不涉及本次选定角色" });
         return;
       }
       if (typeof candidate.category !== "string" || !categories.has(candidate.category)) {
@@ -3537,12 +3712,20 @@ export class AiManager {
     }
 
     const relationshipIds: string[] = [];
+    let replacedRelationshipCount = 0;
     this.store.db.transaction(() => {
-      if (scope.type === "book") {
+      if (!targeted && scope.type === "book") {
         this.store.db.run(
           "DELETE FROM relationships WHERE work_id = ? AND confirmation_status = 'pending' AND locked = 0",
           workId
         );
+      }
+      if (targeted && scope.replaceExistingRelationships === true) {
+        const relationshipsToReplace = this.store.listRelationships(workId).filter((relationship) =>
+          selectedCharacterIds.has(String(relationship.fromCharacterId)) || selectedCharacterIds.has(String(relationship.toCharacterId))
+        );
+        for (const relationship of relationshipsToReplace) this.store.deleteRelationship(String(relationship.id));
+        replacedRelationshipCount = relationshipsToReplace.length;
       }
       const existing = this.store.listRelationships(workId).filter((relationship) => relationship.confirmationStatus !== "rejected");
       const unorderedPairKey = (fromCharacterId: unknown, toCharacterId: unknown): string => {
@@ -3731,7 +3914,11 @@ export class AiManager {
       skippedCount: skipped.length,
       fallbackSegmentCount,
       policyOmittedSegmentCount,
-      scopeType: scope.type
+      scopeType: scope.type,
+      targetedCharacterCount: selectedCharacterIds.size,
+      targetedEvidenceCount,
+      aggregationBatchCount,
+      replacedRelationshipCount
     });
     return {
       relationshipIds,
@@ -3742,6 +3929,10 @@ export class AiManager {
       coveredChapterCount: chapters.length,
       fallbackSegmentCount,
       policyOmittedSegmentCount,
+      targetedCharacterIds: [...selectedCharacterIds],
+      targetedEvidenceCount,
+      aggregationBatchCount,
+      replacedRelationshipCount,
       callIds
     };
   }
