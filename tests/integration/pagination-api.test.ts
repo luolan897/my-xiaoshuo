@@ -25,6 +25,23 @@ describe("列表 API 分页", () => {
     }
   });
 
+  it("角色分页返回总数", async () => {
+    const runtime = createTestRuntime();
+    try {
+      const work = await createWork(runtime);
+      const workId = String(work.id);
+      for (let index = 1; index <= 3; index += 1) {
+        runtime.store.createCharacter(workId, { name: `角色${index}` });
+      }
+
+      const page = await request(runtime.app).get(`/api/works/${workId}/characters?limit=2&page=2`).expect(200);
+      expect(page.body.data).toMatchObject({ page: 2, limit: 2, hasMore: false, nextPage: null, total: 3 });
+      expect(page.body.data.items).toHaveLength(1);
+    } finally {
+      runtime.close();
+    }
+  });
+
   it("拒绝超出上限或非法的分页参数", async () => {
     const runtime = createTestRuntime();
     try {
