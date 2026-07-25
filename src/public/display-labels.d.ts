@@ -13,3 +13,4 @@ export function providerConnectionLabel(value: unknown): string;
 export function chapterVersionSourceLabel(value: unknown): string;
 export function occurrenceRoleLabel(value: unknown): string;
 export function searchResultTypeLabel(value: unknown): string;
+export function characterStateFieldLabel(value: unknown): string;

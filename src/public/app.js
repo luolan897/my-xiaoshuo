@@ -1,6 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260725-galaxy-ripple";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260722-inline-code";
+import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
@@ -29,8 +29,9 @@ import {
   searchResultTypeLabel,
   settingStatusLabel,
   taskScopeLabel,
-  timelineStatusLabel
-} from "/display-labels.js?v=20260725-unified-permissions";
+  timelineStatusLabel,
+  characterStateFieldLabel
+} from "/display-labels.js?v=20260725-state-field-zh";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -97,6 +98,9 @@ let presenceParticipants = [];
 let presenceHeartbeatTimer = null;
 let presenceHeartbeatQueued = null;
 let presenceHeartbeatRequest = 0;
+const acknowledgedCollaborativeChangeIds = new Set();
+let collaborativeChangePromptOpen = false;
+let peerPageStale = false;
 let collaborationAutoSaveDisabled = false;
 
 let timelineMultiSelectEnabled = false;
@@ -547,14 +551,16 @@ async function refreshPresence() {
     return [];
   }
   try {
-    const participants = await api(`/api/works/${encodeURIComponent(workId)}/presence`, {
+    const payload = await api(`/api/works/${encodeURIComponent(workId)}/presence`, {
       method: "POST",
       body: { clientId: presenceClientId, page },
       skipOptimisticVersion: true
     });
     if (state.work?.id === workId && presenceHeartbeatRequest === requestId) {
-      presenceParticipants = participants;
+      presenceParticipants = Array.isArray(payload) ? payload : (payload?.participants ?? []);
       renderPresence();
+      const recentChanges = Array.isArray(payload) ? [] : (payload?.recentChanges ?? []);
+      void handleCollaborativeChanges(recentChanges);
     }
   } catch {
     if (state.work?.id === workId) renderPresence();
@@ -562,6 +568,58 @@ async function refreshPresence() {
     if (state.work?.id === workId && presenceHeartbeatRequest === requestId) presenceHeartbeatTimer = setTimeout(refreshPresence, presenceHeartbeatInterval);
   }
   return presenceParticipants;
+}
+
+function localEditingDirty() {
+  return Boolean(state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty);
+}
+
+async function handleCollaborativeChanges(recentChanges) {
+  if (!Array.isArray(recentChanges) || !recentChanges.length || collaborativeChangePromptOpen) return;
+  const localKey = presencePageKey(presencePageForRoute());
+  if (!localKey) return;
+  const selfId = state.user?.userId;
+  const incoming = recentChanges.filter((change) => (
+    change
+    && change.pageKey === localKey
+    && change.actorUserId
+    && change.actorUserId !== selfId
+    && change.id
+    && !acknowledgedCollaborativeChangeIds.has(change.id)
+  ));
+  if (!incoming.length) return;
+  const latest = incoming[0];
+  for (const change of incoming) acknowledgedCollaborativeChangeIds.add(change.id);
+  while (acknowledgedCollaborativeChangeIds.size > 200) {
+    const oldest = acknowledgedCollaborativeChangeIds.values().next().value;
+    acknowledgedCollaborativeChangeIds.delete(oldest);
+  }
+  peerPageStale = true;
+  collaborativeChangePromptOpen = true;
+  const dirtyHint = localEditingDirty()
+    ? "你当前页面还有未保存修改。请先把正在编辑的内容复制保存到别处（本页无法代为另存），再刷新页面后重新提交。"
+    : "请先确认本地没有需要保留的草稿；如有，请复制保存到别处（本页无法代为另存），再刷新页面后继续编辑。";
+  try {
+    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新「${latest.label || "当前页面"}」。${dirtyHint}`, {
+      title: "协作者已更新",
+      confirmLabel: "刷新页面",
+      cancelLabel: "稍后处理"
+    });
+    if (shouldReload) window.location.reload();
+  } finally {
+    collaborativeChangePromptOpen = false;
+  }
+}
+
+async function confirmPeerStaleSave() {
+  if (!peerPageStale) return true;
+  const confirmed = await confirmToast("协作者已更新当前页面。请先把正在编辑的内容复制保存到别处（本页无法代为另存），再刷新页面后重新提交。继续保存可能覆盖对方修改或触发冲突。", {
+    title: "页面内容已过期",
+    confirmLabel: "仍然保存",
+    cancelLabel: "暂不保存"
+  });
+  if (confirmed) peerPageStale = false;
+  return confirmed;
 }
 
 function schedulePresenceHeartbeat() {
@@ -574,6 +632,7 @@ function schedulePresenceHeartbeat() {
 
 async function confirmConcurrentSave() {
   await refreshPresence();
+  if (!(await confirmPeerStaleSave())) return false;
   const localKey = presencePageKey(presencePageForRoute());
   const peers = presenceParticipants.filter((participant) => participant.clientId !== presenceClientId && participant.page.key === localKey);
   if (!peers.length) return true;
@@ -2735,7 +2794,7 @@ function resetWorkScopedUiCaches() {
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
-  const nextWork = await api(`/api/works/${workId}?page=1&limit=100`);
+  const nextWork = await api(`/api/works/${workId}`);
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
@@ -3403,14 +3462,14 @@ async function renderCharacters(page = characterListPage) {
     ${item.aliases.length ? `<div class="character-aliases"><b>别名</b>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
     ${item.code ? `<div class="character-code"><b>编号</b><span class="pill">${esc(item.code)}</span></div>` : ""}
     ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
-    ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
+    ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(characterStateFieldLabel(detail.label))}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
-    ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
+    ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${characterStateFieldLabel(key)}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
     </article>`;
   }).join("")}</div>`;
   const characterRows = () => `<div class="module-row-list">${state.characters.map((item) => {
-    const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join(" ") || "尚未记录当前状态");
+    const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${characterStateFieldLabel(key)}：${value}`).join(" ") || "尚未记录当前状态");
     const meta = [
       item.code ? `编号 ${item.code}` : "",
       item.species ? (racePathLabel(item.race) || item.species) : "",

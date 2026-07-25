@@ -212,6 +212,23 @@ describe("作品、导入和章节版本 API", () => {
     expect(loadedChapter.body.data.content).toBe("这段正文只能通过章节接口返回。");
   });
 
+  it("分页作品目录不会把下一页探测记录计入分卷", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "分页目录作品" }).expect(201);
+    const text = Array.from({ length: 101 }, (_, index) => `第${index + 1}章 章节${index + 1}\n正文${index + 1}`).join("\n");
+    await request(runtime.app)
+      .post(`/api/works/${work.body.data.id}/import`)
+      .attach("file", Buffer.from(text), "分页目录.txt")
+      .expect(201);
+
+    const firstPage = await request(runtime.app).get(`/api/works/${work.body.data.id}?page=1&limit=100`).expect(200);
+    expect(firstPage.body.data.directoryPage).toMatchObject({ hasMore: true, nextPage: 2 });
+    expect(firstPage.body.data.volumes[0].chapters).toHaveLength(100);
+
+    const secondPage = await request(runtime.app).get(`/api/works/${work.body.data.id}?page=2&limit=100`).expect(200);
+    expect(secondPage.body.data.directoryPage).toMatchObject({ hasMore: false, nextPage: null });
+    expect(secondPage.body.data.volumes[0].chapters).toHaveLength(1);
+  });
+
   it("从 DOCX 正文中提取并解析卷章", async () => {
     const zip = new JSZip();
     zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
