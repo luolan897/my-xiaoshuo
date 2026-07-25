@@ -68,6 +68,8 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');
     expect(styles.text).toContain('.editor-toolbar { grid-template-areas: "path" "title" "actions";');
     expect(styles.text).toContain('.chapter-title { min-height: 36px; }');
+    expect(styles.text).toContain('.vditor-editor-host .vditor-toolbar { display: flex; align-items: center; flex: 0 0 auto; }');
+    expect(styles.text).toContain('.markdown-word-count { display: inline-flex; align-items: center; align-self: center; min-height: 28px; margin-left: 24px;');
     expect(styles.text).toContain('.chapter-stats { display: none; }');
     expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }');
     expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; height: 30px; }');
