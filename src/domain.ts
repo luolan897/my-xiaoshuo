@@ -62,4 +62,6 @@ export type ContextScope = {
   includeBookSummary?: boolean;
   includeAllSettings?: boolean;
   additionalPrompt?: string;
+  replaceExistingRelationships?: boolean;
+  excludeRelationshipConstraints?: boolean;
 };

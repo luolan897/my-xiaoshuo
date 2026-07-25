@@ -5905,20 +5905,38 @@ function openReviewDialog() {
   });
 }
 
-function openTaskDialog() {
+async function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
+  let relationshipCharacters = [];
+  try {
+    relationshipCharacters = canReadModule("characters")
+      ? await apiAllPages(`/api/works/${state.work.id}/characters`)
+      : [];
+  } catch (error) {
+    toast(`角色列表加载失败：${error.message}`, "error");
+    return;
+  }
+  const characterOptions = relationshipCharacters.map((character) => [character.id, character.name]);
   const defaultTaskType = ANALYSIS_TYPES[0].value;
   const taskTypeField = `<div class="form-field analysis-type-field"><label>分析类型<select name="taskType" aria-describedby="analysis-type-description">${ANALYSIS_TYPES.map(({ value, label }) => `<option value="${esc(value)}" ${value === defaultTaskType ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label><p id="analysis-type-description" class="analysis-type-description" aria-live="polite">${esc(analysisTypeDescription(defaultTaskType))}</p></div>`;
   const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
-  const relationshipPromptField = `<label class="relationship-analysis-options hidden">额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将追加到人物关系抽取提示词末尾，仅影响本次任务。</small></label>`;
-  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipPromptField, async (form) => {
+  const relationshipFields = `<div class="relationship-analysis-options hidden">
+    ${field("characterIds", "被分析角色（可多选）", "multiselect", [], characterOptions)}
+    <small>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。</small>
+    <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
+    <small>仅在选择角色后可用。任务成功时删除所有涉及所选角色的旧关系，再写入本次结果。</small>
+    <label>额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将同时追加到证据收集和全局关系归纳提示词，仅影响本次任务。</small></label>
+  </div>`;
+  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
     const taskType = String(form.get("taskType"));
     const scopeType = String(form.get("scopeType"));
     const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
+    const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
+    const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
     const scope = taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
-      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}) }
-      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}) };
+      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
     await renderTasks();
   });
@@ -5929,6 +5947,8 @@ function openTaskDialog() {
   const description = $("#analysis-type-description");
   const relationshipOptions = $("#dialog-fields").querySelector(".relationship-analysis-options");
   const relationshipPrompt = relationshipOptions.querySelector('textarea[name="additionalPrompt"]');
+  const relationshipCharacterSelect = relationshipOptions.querySelector('select[name="characterIds"]');
+  const replaceRelationships = relationshipOptions.querySelector('input[name="replaceExistingRelationships"]');
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
   allSettingsOption.textContent = "全书 + 所有设定";
@@ -5947,12 +5967,17 @@ function openTaskDialog() {
     }
     relationshipOptions.classList.toggle("hidden", !enabled);
     relationshipPrompt.disabled = !enabled;
+    relationshipCharacterSelect.disabled = !enabled;
+    const hasSelectedCharacters = enabled && relationshipCharacterSelect.selectedOptions.length > 0;
+    replaceRelationships.disabled = !hasSelectedCharacters;
+    if (!hasSelectedCharacters) replaceRelationships.checked = false;
     syncChapterField();
   };
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
     syncRelationshipOptions();
   });
+  relationshipCharacterSelect.addEventListener("change", syncRelationshipOptions);
   scopeTypeSelect.addEventListener("change", syncChapterField);
   syncRelationshipOptions();
 }

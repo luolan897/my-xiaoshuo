@@ -402,13 +402,21 @@ const relationshipAnalysisScopeSchema = z.object({
   type: z.enum(["chapter", "book"]),
   chapterId: identifier.optional(),
   includeAllSettings: z.boolean().optional(),
-  additionalPrompt: z.string().trim().max(10_000).optional()
+  additionalPrompt: z.string().trim().max(10_000).optional(),
+  characterIds: z.array(identifier).max(20).optional(),
+  replaceExistingRelationships: z.boolean().optional()
 }).strict().superRefine((scope, context) => {
   if (scope.type === "chapter" && !scope.chapterId) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["chapterId"], message: "指定章节分析必须提供章节标识" });
   }
   if (scope.includeAllSettings && scope.type !== "book") {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["includeAllSettings"], message: "包含所有设定仅支持全书人物关系分析" });
+  }
+  if (scope.characterIds && new Set(scope.characterIds).size !== scope.characterIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["characterIds"], message: "被分析角色不能重复" });
+  }
+  if (scope.replaceExistingRelationships && !scope.characterIds?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["replaceExistingRelationships"], message: "覆盖已有关系前必须选择被分析角色" });
   }
 });
 const analysisTaskSchema = z.union([
@@ -419,6 +427,9 @@ const analysisTaskSchema = z.union([
     }
     if (input.scope?.additionalPrompt !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "additionalPrompt"], message: "额外分析提示仅支持人物关系分析" });
+    }
+    if (input.scope?.characterIds !== undefined || input.scope?.replaceExistingRelationships !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "characterIds"], message: "被分析角色仅支持人物关系分析" });
     }
   })
 ]);

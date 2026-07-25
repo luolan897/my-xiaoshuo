@@ -18,7 +18,12 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('chapterFieldElement.setAttribute("aria-disabled", String(disabled))');
     expect(application).toContain('scopeTypeSelect.addEventListener("change", syncChapterField)');
     expect(application).toContain('name="additionalPrompt" maxlength="10000"');
+    expect(application).toContain('field("characterIds", "被分析角色（可多选）", "multiselect"');
+    expect(application).toContain('name="replaceExistingRelationships" type="checkbox" disabled');
     expect(application).toContain('relationshipOptions.classList.toggle("hidden", !enabled)');
+    expect(application).toContain("relationshipCharacterSelect.selectedOptions.length > 0");
+    expect(application).toContain("replaceRelationships.disabled = !hasSelectedCharacters");
+    expect(application).toContain('relationshipCharacterSelect.addEventListener("change", syncRelationshipOptions)');
     expect(application).toContain("includeAllSettings: true");
     expect(styles).toContain(".task-chapter-field.is-disabled { opacity: .48; }");
     expect(styles).toContain(".task-chapter-field select:disabled { cursor: not-allowed; }");
