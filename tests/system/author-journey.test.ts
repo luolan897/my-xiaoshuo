@@ -286,7 +286,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260725-collab-refresh-left-panel-resize');
-    expect(page.text).toContain('/styles.css?v=20260725-vditor-table-dark-left-panel-resize');
+    expect(page.text).toContain('/styles.css?v=20260725-module-count-vditor-left-panel');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -493,6 +493,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.record-markdown-preview { display: -webkit-box;');
     expect(styles.text).toContain('-webkit-line-clamp: 12;');
     expect(styles.text).toContain('.module-header-actions > [data-module-header-action] { order: 1; }');
+    expect(styles.text).toContain('.module-header-actions > .module-count-badge { order: 0; }');
     expect(styles.text).toContain('.module-header-actions > #module-create-button { order: 2; min-height: 36px; }');
     expect(styles.text).toContain('.module-layout-toggle button { display: inline-grid; place-items: center; width: 36px; min-height: 34px;');
     expect(page.text).toContain('data-testid="relationship-fullscreen"');

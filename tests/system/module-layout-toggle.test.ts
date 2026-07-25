@@ -23,7 +23,7 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-vditor-table-dark-left-panel-resize');
+    expect(page.text).toContain('/styles.css?v=20260725-module-count-vditor-left-panel');
     expect(page.text).toContain('/app.js?v=20260725-collab-refresh-left-panel-resize');
     expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-collab-refresh-left-panel-resize"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
@@ -142,6 +142,7 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain(".module-layout-toggle svg { width: 16px; height: 16px;");
     expect(styles.text).toContain(".settings-layout-toolbar, .module-layout-toolbar { display: flex;");
     expect(styles.text).toContain(".module-header-actions { display: flex;");
+    expect(styles.text).toContain(".module-header-actions > .module-count-badge { order: 0; }");
     expect(styles.text).toContain(".module-pagination { display: flex;");
     expect(styles.text).toContain(".module-pagination button { min-width: 58px; min-height: 28px;");
     expect(styles.text).toContain('.entity-editor-page.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"]');
