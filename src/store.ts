@@ -1185,9 +1185,9 @@ export class Store {
       workId,
       ...page.params
     );
-    const chapters = chapterRows.map((row) => this.mapChapterDirectoryEntry(row));
+    const pageResult = paginated(chapterRows.map((row) => this.mapChapterDirectoryEntry(row)), pagination);
     const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
-    for (const chapter of chapters) {
+    for (const chapter of pageResult.items) {
       const volumeId = String(chapter.volumeId);
       const list = chaptersByVolume.get(volumeId) ?? [];
       list.push(chapter);
@@ -1197,7 +1197,7 @@ export class Store {
       ...this.mapVolume(row),
       chapters: chaptersByVolume.get(requiredString(row, "id")) ?? []
     }));
-    return { ...work, volumes, directoryPage: paginated(chapters, pagination) };
+    return { ...work, volumes, directoryPage: pageResult };
   }
 
   listFileVersions(workId: string): Record<string, unknown>[] {
