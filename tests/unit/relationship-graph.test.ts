@@ -251,8 +251,8 @@ describe("人物关系图数据与布局", () => {
 
   it("默认生成更密集的银河背景星群", () => {
     const stars = createGalaxyStarfield("dense-background");
-    expect(stars).toHaveLength(7200);
-    expect(stars.filter((star: { y: number }) => Math.abs(star.y) < 120).length).toBeGreaterThan(3000);
+    expect(stars).toHaveLength(16000);
+    expect(stars.filter((star: { y: number }) => Math.abs(star.y) < 120).length).toBeGreaterThan(8000);
   });
 
   it("点击节点后把三维相机聚焦并放大到该节点", () => {
