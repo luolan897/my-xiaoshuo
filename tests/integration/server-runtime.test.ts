@@ -96,10 +96,13 @@ describe("本地服务运行时", () => {
       })
     }).then(async (response) => {
       expect(response.status).toBe(200);
-      return response.json() as Promise<{ data: Array<{ username: string }> }>;
+      return response.json() as Promise<{ data: { participants: Array<{ username: string }>; recentChanges: unknown[] } }>;
     });
-    expect(presence.data).toEqual(expect.arrayContaining([
-      expect.objectContaining({ username: "dev-bypass" })
-    ]));
+    expect(presence.data).toEqual(expect.objectContaining({
+      participants: expect.arrayContaining([
+        expect.objectContaining({ username: "dev-bypass" })
+      ]),
+      recentChanges: expect.any(Array)
+    }));
   });
 });
