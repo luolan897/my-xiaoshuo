@@ -564,7 +564,13 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("async function renderRaces()");
     expect(application.text).toContain("async function openRaceDialog(item, options)");
     expect(application.text).toContain('field("parentRaceId", "父种族", "select"');
-    expect(application.text).toContain('class="race-tree-node" open');
+    expect(application.text).toContain('class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"}');
+    expect(application.text).toContain("collapsedRaceIds: new Set()");
+    expect(application.text).toContain("function bindRaceTreeNodeToggles()");
+    expect(application.text).toContain("function syncRaceTreeExpandToggle()");
+    expect(application.text).toContain("state.collapsedRaceIds.clear()");
+    expect(application.text).toContain('data-race-tree-expand="${action}"');
+    expect(application.text).toContain("function setAllRaceTreeNodesOpen(open)");
     expect(application.text).toContain('field("raceId", "种族", "select"');
     expect(application.text).not.toContain('field("species", "种族", "text"');
     expect(application.text).toContain('field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips"');

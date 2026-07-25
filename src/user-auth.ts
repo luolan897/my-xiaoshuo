@@ -791,9 +791,23 @@ export function clearSessionCookie(response: Response, secure: boolean): void {
   response.clearCookie(sessionCookieName, { httpOnly: true, sameSite: "lax", secure, path: "/" });
 }
 
-export function createUserSessionMiddleware(auth: UserAuthService, disabled = false): RequestHandler {
+export function createUserSessionMiddleware(
+  auth: UserAuthService,
+  disabledOrOptions: boolean | { disabled?: boolean; resolveBypassUser?: () => AuthUser | null } = false
+): RequestHandler {
+  const options = typeof disabledOrOptions === "boolean"
+    ? { disabled: disabledOrOptions }
+    : disabledOrOptions;
   return (request, response, next) => {
-    if (disabled) return runWithRequestActor(null, next);
+    if (options.disabled) {
+      const bypassUser = options.resolveBypassUser?.() ?? null;
+      if (bypassUser) {
+        request.authUser = bypassUser;
+        request.authMethod = "session";
+        return runWithRequestActor({ ...bypassUser, authentication: "session" }, next);
+      }
+      return runWithRequestActor(null, next);
+    }
     const apiKey = auth.authenticateApiKey(request);
     if (auth.hasApiKeyCredential(request) && !apiKey) {
       logger.warn("auth.request.rejected", { reason: "invalid_api_key", method: request.method, path: sanitizeRequestPath(request.path) });
