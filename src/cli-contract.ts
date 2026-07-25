@@ -153,7 +153,6 @@ export const cliResourceDefinitions = {
         profile: "人物档案对象",
         currentState: "当前状态对象",
         lockedFields: "锁定字段数组",
-        visibility: "public | author | collaborators",
         firstChapterId: "首次出场章节 ID 或 null"
       },
       example: { name: "林舟", aliases: ["阿舟"], attributes: { age: 24 }, profile: { motivation: "寻找失踪的姐姐" }, currentState: { location: "北港" } }

@@ -9,10 +9,6 @@ export function settingStatusLabel(value) {
   return enumLabel({ draft: "草稿", pending: "待确认", confirmed: "已确认", deprecated: "已弃用" }, value, "未知状态");
 }
 
-export function characterVisibilityLabel(value) {
-  return enumLabel({ public: "公开", author: "仅作者", collaborators: "协作者可见" }, value, "未知范围");
-}
-
 export function timelineStatusLabel(value) {
   return enumLabel({ candidate: "候选", pending: "待确认", confirmed: "已确认", deprecated: "已弃用" }, value, "未知状态");
 }

@@ -12,11 +12,10 @@ import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-lay
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
-import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
+import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260725-unified-permissions";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260725-enum-labels-zh";
 import {
   chapterVersionSourceLabel,
-  characterVisibilityLabel,
   foreshadowStatusLabel,
   levelLabel,
   occurrenceRoleLabel,
@@ -31,7 +30,7 @@ import {
   settingStatusLabel,
   taskScopeLabel,
   timelineStatusLabel
-} from "/display-labels.js?v=20260725-enum-labels-zh";
+} from "/display-labels.js?v=20260725-unified-permissions";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -40,6 +39,7 @@ import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
+import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 
 const state = {
   user: null,
@@ -705,6 +705,8 @@ let entityEditorType = null;
 let entityEditorDirty = false;
 let entityEditorReadOnly = false;
 let characterListPage = 1;
+const characterFilters = { raceIds: [], organizationIds: [] };
+let characterFiltersPanelOpen = false;
 let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
@@ -3130,6 +3132,15 @@ function bindModuleLayoutToggle(refresh) {
   }));
 }
 
+function mountCharacterFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="character-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="character-filter-toggle" aria-label="筛选角色" aria-controls="character-filter-panel" aria-expanded="${characterFiltersPanelOpen}" title="筛选角色"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").querySelector('[data-module-header-action="character-filter-toggle"]')?.addEventListener("click", async () => {
+    characterFiltersPanelOpen = !characterFiltersPanelOpen;
+    await renderCharacters(characterListPage);
+  });
+}
+
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
     const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization ?? card.dataset.openReview;
@@ -3248,7 +3259,15 @@ async function renderSettings() {
 }
 
 async function renderCharacters(page = characterListPage) {
-  const characterPage = await apiPage(`/api/works/${state.work.id}/characters`, page);
+  const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
+  const [characterSource, races, organizations] = await Promise.all([
+    hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page),
+    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
+  ]);
+  const characterPage = hasCharacterFilters
+    ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, 50)
+    : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
   state.characters = characterPage.items;
@@ -3257,7 +3276,7 @@ async function renderCharacters(page = characterListPage) {
   const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}<small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(characterVisibilityLabel(item.visibility))}</small>
+    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}${item.lockedFields.length ? `<small>锁定 ${item.lockedFields.length} 项</small>` : ""}
     <h3>${esc(item.name)}</h3>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     ${item.aliases.length ? `<div class="character-aliases">${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
@@ -3280,14 +3299,12 @@ async function renderCharacters(page = characterListPage) {
     const line = meta ? `${meta} · ${preview}` : preview;
     return `
     <article class="record-card module-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
-      <small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(characterVisibilityLabel(item.visibility))}</small>
+      ${item.lockedFields.length ? `<small>锁定 ${item.lockedFields.length} 项</small>` : ""}
       <h3>${esc(item.name)}</h3>
       <p class="module-row-preview" title="${esc(line)}">${esc(line)}</p>
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
-  const hasMultipleCharacters = characterPage.page > 1 || characterPage.hasMore || state.characters.length > 1;
-  const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${hasMultipleCharacters ? "" : "disabled"}>AI 角色查重</button></section>` : "";
   const pagination = state.characters.length && (characterPage.page > 1 || characterPage.hasMore)
     ? `<nav class="module-pagination" aria-label="角色列表分页">
       <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
@@ -3295,30 +3312,53 @@ async function renderCharacters(page = characterListPage) {
       <button type="button" data-character-page="${characterPage.nextPage ?? characterPage.page + 1}" ${characterPage.hasMore ? "" : "disabled"}>下一页</button>
     </nav>`
     : "";
+  const selectedRaceIds = new Set(characterFilters.raceIds);
+  const selectedOrganizationIds = new Set(characterFilters.organizationIds);
+  const selectedRaceNames = races.filter((race) => selectedRaceIds.has(String(race.id))).map((race) => racePathLabel(race) || race.name);
+  const selectedOrganizationNames = organizations.filter((organization) => selectedOrganizationIds.has(String(organization.id))).map((organization) => organization.name);
+  const filterOptionList = (items, selectedIds, valueKey = "id") => items.map((item) => {
+    const value = String(item[valueKey]);
+    const label = valueKey === "id" ? (racePathLabel(item) || item.name) : item.name;
+    return `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedIds.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`;
+  }).join("");
+  const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
+    <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(races, selectedRaceIds)}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按组织筛选</span><strong>${selectedOrganizationNames.length ? `已选 ${selectedOrganizationNames.length} 项` : "全部组织"}</strong></summary><div id="character-organization-filter" class="character-filter-options">${filterOptionList(organizations, selectedOrganizationIds, "id")}</div></details>
+    <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
+  </section>`;
+  mountCharacterFilterToggle();
   if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
-  $("#module-content").innerHTML = auditPanel + (state.characters.length
+  $("#module-content").innerHTML = filterToolbar + (state.characters.length
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
+  const readSelectedValues = (selector) => [...$(selector).querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+  $("#character-race-filter").addEventListener("change", async () => {
+    characterFiltersPanelOpen = true;
+    characterFilters.raceIds = readSelectedValues("#character-race-filter");
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
+  $("#character-organization-filter").addEventListener("change", async () => {
+    characterFiltersPanelOpen = true;
+    characterFilters.organizationIds = readSelectedValues("#character-organization-filter");
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
+  $("#clear-character-filters")?.addEventListener("click", async () => {
+    characterFiltersPanelOpen = true;
+    characterFilters.raceIds = [];
+    characterFilters.organizationIds = [];
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
   $("#module-content").querySelectorAll("[data-character-page]").forEach((button) => button.addEventListener("click", async () => {
     if (button.disabled) return;
     $("#module-content").querySelectorAll("[data-character-page]").forEach((control) => { control.disabled = true; });
     await renderCharacters(Number(button.dataset.characterPage));
   }));
-  $("#create-character-audit-task")?.addEventListener("click", async () => {
-    const button = $("#create-character-audit-task");
-    button.disabled = true;
-    try {
-      await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: "character-identity-audit", scope: { type: "book" } } });
-      toast("角色查重任务已加入分析队列");
-      await showModule("tasks");
-    } catch (error) {
-      toast(error.message, "error");
-      button.disabled = false;
-    }
-  });
-  const openCharacter = async (id, readOnly) => openCharacterEditor(await api(`/api/characters/${encodeURIComponent(id)}`), { readOnly });
-  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => { void openCharacter(button.dataset.editCharacter, false); }));
+  bindRecordPreview("[data-open-character]", (id) => openCharacterEditor(state.characters.find((item) => item.id === id), { readOnly: true }));
+  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
 }
 
 async function renderRaces() {
@@ -5178,7 +5218,6 @@ function renderCharacterEditorFields(item) {
         : organizationOptions.length
         ? field("organizationIds", "所属组织（可多选）", "chips", item?.organizationIds ?? [], organizationOptions)
         : '<div class="character-editor-empty-field"><b>所属组织</b><span>尚未创建组织，可稍后在“组织”模块中补充。</span></div>') +
-      field("visibility", "可见范围", "select", item?.visibility ?? "author", [["author", "仅作者"], ["collaborators", "协作者"], ["public", "公开"]]) +
       (canReadModule("editor")
         ? field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)
         : '<div class="character-editor-empty-field"><b>首次登场章节</b><span>当前账户没有正文读取权限，原有绑定不会被修改。</span></div>')),
@@ -5234,7 +5273,6 @@ function collectCharacterBody(form) {
     },
     currentState: buildCharacterState(form.getAll("stateKey"), form.getAll("stateValue"), item?.currentState ?? {}),
     lockedFields: form.getAll("lockedFields").map((value) => String(value).trim()).filter(Boolean),
-    visibility: String(form.get("visibility") ?? "author"),
     changeNote: String(form.get("changeNote") ?? "").trim()
   };
   if (canReadModule("races")) body.raceId = form.get("raceId") || null;
