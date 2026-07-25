@@ -1859,6 +1859,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .vditor-editor-host .vditor-reset { color: var(--ink); font-family: var(--font-cjk), var(--font-latin), sans-serif; }
 .vditor-editor-host .vditor-ir, .vditor-editor-host .vditor-sv, .vditor-editor-host .vditor-wysiwyg { background: var(--surface); color: var(--ink); }
 .vditor-editor-host .vditor-sv textarea { color: var(--ink); }
+.vditor-editor-host.vditor--dark .vditor-reset table { background: var(--surface); color: var(--ink); }
+.vditor-editor-host.vditor--dark .vditor-reset table tr { background: var(--surface); border-top-color: var(--line); }
+.vditor-editor-host.vditor--dark .vditor-reset table td, .vditor-editor-host.vditor--dark .vditor-reset table th { border-color: var(--line); color: var(--ink); }
+.vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }
 .record-markdown-preview { display: -webkit-box; margin: 12px 0 8px; overflow: hidden; overflow-wrap: anywhere; color: var(--ink); font-size: 12px; line-height: 1.7; -webkit-box-orient: vertical; -webkit-line-clamp: 12; }
 .record-markdown-preview > :first-child, .knowledge-markdown-block .message-body > :first-child { margin-top: 0; }
 .record-markdown-preview > :last-child, .knowledge-markdown-block .message-body > :last-child { margin-bottom: 0; }

@@ -286,7 +286,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260725-module-header-scale');
-    expect(page.text).toContain('/styles.css?v=20260725-module-header-scale');
+    expect(page.text).toContain('/styles.css?v=20260725-vditor-table-dark');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -396,6 +396,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("请先保存当前角色");
     expect(application.text).toContain("保存成功后即可新建 Markdown 档案章节");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
+    expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table { background: var(--surface); color: var(--ink); }');
+    expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }');
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
     expect(styles.text).toContain("#character-section-editor-view");
     expect(styles.text).toContain("#knowledge-section-editor-view");
