@@ -1,5 +1,4 @@
 export function settingStatusLabel(value: unknown): string;
-export function characterVisibilityLabel(value: unknown): string;
 export function timelineStatusLabel(value: unknown): string;
 export function levelLabel(value: unknown): string;
 export function foreshadowStatusLabel(value: unknown): string;

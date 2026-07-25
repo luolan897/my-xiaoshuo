@@ -156,7 +156,6 @@ const characterSchema = z.object({
   profile: jsonObject.optional(),
   currentState: jsonObject.optional(),
   lockedFields: optionalStrings,
-  visibility: z.enum(["public", "author", "collaborators"]).optional(),
   firstChapterId: identifier.nullable().optional()
 }).strict();
 

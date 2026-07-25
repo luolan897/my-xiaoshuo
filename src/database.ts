@@ -203,7 +203,6 @@ export class Database {
         profile_json TEXT NOT NULL DEFAULT '{}',
         current_state_json TEXT NOT NULL DEFAULT '{}',
         locked_fields_json TEXT NOT NULL DEFAULT '[]',
-        visibility TEXT NOT NULL DEFAULT 'author',
         first_chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
         merged_into_character_id TEXT,
         merged_at TEXT,
@@ -812,7 +811,6 @@ export class Database {
             profile: parseJson(character.profile_json, {}),
             currentState: parseJson(character.current_state_json, {}),
             lockedFields: parseJson(character.locked_fields_json, []),
-            visibility: String(character.visibility),
             firstChapterId: character.first_chapter_id === null ? null : String(character.first_chapter_id)
           };
           this.run(
@@ -1590,6 +1588,19 @@ export class Database {
         )`);
         this.run("CREATE INDEX IF NOT EXISTS idx_login_attempts_updated ON login_attempts(updated_at)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (38, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(39)) {
+      this.transaction(() => {
+        const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (characterColumns.has("visibility")) this.run("ALTER TABLE characters DROP COLUMN visibility");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (39, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
