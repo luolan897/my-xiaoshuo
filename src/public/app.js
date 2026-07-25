@@ -3321,10 +3321,7 @@ async function renderCharacters(page = characterListPage) {
 }
 
 async function renderRaces() {
-  [state.races, state.characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/races`),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
   const layout = readModuleLayout();
   const canEditRaces = canEditModule("races");
   const raceActions = (item) => canEditRaces
@@ -3368,10 +3365,7 @@ async function renderRaces() {
 }
 
 async function renderOrganizations() {
-  [state.organizations, state.characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/organizations`),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.organizations = await apiAllPages(`/api/works/${state.work.id}/organizations`);
   const layout = readModuleLayout();
   const canEditOrganizations = canEditModule("organizations");
   const organizationActions = (item) => canEditOrganizations
