@@ -4011,6 +4011,12 @@ async function renderTasks() {
     try {
       button.disabled = true;
       button.textContent = "运行中";
+      const row = button.closest("tr");
+      const optimisticTask = { id: button.dataset.runTask, status: "running", progress: 5 };
+      const statusCell = row?.querySelector(".task-status-cell");
+      const progressCell = row?.querySelector(".task-progress-cell");
+      if (statusCell) statusCell.innerHTML = renderAnalysisTaskStatus(optimisticTask);
+      if (progressCell) progressCell.innerHTML = renderAnalysisTaskProgress(optimisticTask);
       const cancel = button.parentElement.querySelector("[data-cancel-task]");
       if (cancel) cancel.textContent = "取消运行";
       scheduleTaskProgressRefresh(workId, 1);

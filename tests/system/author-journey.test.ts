@@ -297,8 +297,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-task-state-motion');
-    expect(page.text).toContain('/styles.css?v=20260726-task-state-motion');
+    expect(page.text).toContain('/app.js?v=20260726-task-running-feedback');
+    expect(page.text).toContain('/styles.css?v=20260726-task-running-feedback');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -478,6 +478,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="task-auto-run-progress-bar ${runningCount ? "is-running" : "is-waiting"}" max="100" value="${runningProgress}"');
     expect(application.text).toContain("scheduleTaskProgressRefresh(state.work.id, runningCount)");
     expect(application.text).toContain("scheduleTaskProgressRefresh(workId, 1)");
+    expect(application.text).toContain('const optimisticTask = { id: button.dataset.runTask, status: "running", progress: 5 };');
+    expect(application.text).toContain("statusCell.innerHTML = renderAnalysisTaskStatus(optimisticTask)");
+    expect(application.text).toContain("progressCell.innerHTML = renderAnalysisTaskProgress(optimisticTask)");
     expect(application.text).not.toContain("消化 pending 任务");
     expect(application.text).toContain("/tasks/auto-run");
     expect(styles.text).toContain(".task-auto-run-panel");
