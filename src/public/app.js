@@ -692,6 +692,7 @@ let entityEditorDirty = false;
 let entityEditorReadOnly = false;
 let characterListPage = 1;
 const characterFilters = { raceIds: [], organizationIds: [] };
+let characterFiltersPanelOpen = false;
 let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
@@ -3106,6 +3107,15 @@ function bindModuleLayoutToggle(refresh) {
   }));
 }
 
+function mountCharacterFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="character-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="character-filter-toggle" aria-label="筛选角色" aria-controls="character-filter-panel" aria-expanded="${characterFiltersPanelOpen}" title="筛选角色"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").querySelector('[data-module-header-action="character-filter-toggle"]')?.addEventListener("click", async () => {
+    characterFiltersPanelOpen = !characterFiltersPanelOpen;
+    await renderCharacters(characterListPage);
+  });
+}
+
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
     const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openReview;
@@ -3251,28 +3261,39 @@ async function renderCharacters(page = characterListPage) {
     : "";
   const selectedRaceIds = new Set(characterFilters.raceIds);
   const selectedOrganizationIds = new Set(characterFilters.organizationIds);
-  const filterToolbar = `<section class="character-filter-toolbar" aria-label="角色筛选">
-    <label>按种族筛选<select id="character-race-filter" name="raceFilter" multiple size="${Math.min(5, Math.max(2, races.length || 2))}" aria-describedby="character-filter-help">${races.map((race) => `<option value="${esc(race.id)}" ${selectedRaceIds.has(String(race.id)) ? "selected" : ""}>${esc(racePathLabel(race) || race.name)}</option>`).join("")}</select></label>
-    <label>按组织筛选<select id="character-organization-filter" name="organizationFilter" multiple size="${Math.min(5, Math.max(2, organizations.length || 2))}" aria-describedby="character-filter-help">${organizations.map((organization) => `<option value="${esc(organization.id)}" ${selectedOrganizationIds.has(String(organization.id)) ? "selected" : ""}>${esc(organization.name)}</option>`).join("")}</select></label>
-    <div class="character-filter-toolbar-actions"><small id="character-filter-help">可在每组中多选；两组条件同时选择时按“同时满足”筛选。</small><button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>清除筛选</button></div>
+  const selectedRaceNames = races.filter((race) => selectedRaceIds.has(String(race.id))).map((race) => racePathLabel(race) || race.name);
+  const selectedOrganizationNames = organizations.filter((organization) => selectedOrganizationIds.has(String(organization.id))).map((organization) => organization.name);
+  const filterOptionList = (items, selectedIds, valueKey = "id") => items.map((item) => {
+    const value = String(item[valueKey]);
+    const label = valueKey === "id" ? (racePathLabel(item) || item.name) : item.name;
+    return `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedIds.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`;
+  }).join("");
+  const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
+    <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(races, selectedRaceIds)}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按组织筛选</span><strong>${selectedOrganizationNames.length ? `已选 ${selectedOrganizationNames.length} 项` : "全部组织"}</strong></summary><div id="character-organization-filter" class="character-filter-options">${filterOptionList(organizations, selectedOrganizationIds, "id")}</div></details>
+    <div class="character-filter-toolbar-actions"><button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
+  mountCharacterFilterToggle();
   if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
   $("#module-content").innerHTML = filterToolbar + auditPanel + (state.characters.length
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
-  const readSelectedValues = (selector) => [...$(selector).selectedOptions].map((option) => option.value);
+  const readSelectedValues = (selector) => [...$(selector).querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
   $("#character-race-filter").addEventListener("change", async () => {
+    characterFiltersPanelOpen = true;
     characterFilters.raceIds = readSelectedValues("#character-race-filter");
     characterListPage = 1;
     await renderCharacters(1);
   });
   $("#character-organization-filter").addEventListener("change", async () => {
+    characterFiltersPanelOpen = true;
     characterFilters.organizationIds = readSelectedValues("#character-organization-filter");
     characterListPage = 1;
     await renderCharacters(1);
   });
-  $("#clear-character-filters").addEventListener("click", async () => {
+  $("#clear-character-filters")?.addEventListener("click", async () => {
+    characterFiltersPanelOpen = true;
     characterFilters.raceIds = [];
     characterFilters.organizationIds = [];
     characterListPage = 1;
