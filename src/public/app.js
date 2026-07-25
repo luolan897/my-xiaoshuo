@@ -3324,7 +3324,7 @@ async function renderCharacters(page = characterListPage) {
   const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
     <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(races, selectedRaceIds)}</div></details>
     <details class="character-filter-dropdown"><summary><span>按组织筛选</span><strong>${selectedOrganizationNames.length ? `已选 ${selectedOrganizationNames.length} 项` : "全部组织"}</strong></summary><div id="character-organization-filter" class="character-filter-options">${filterOptionList(organizations, selectedOrganizationIds, "id")}</div></details>
-    <div class="character-filter-toolbar-actions"><button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
+    <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
   mountCharacterFilterToggle();
   if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
