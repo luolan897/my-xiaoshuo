@@ -281,7 +281,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260725-character-filter-toggle');
-    expect(page.text).toContain('/styles.css?v=20260725-mobile-shelf-v2');
+    expect(page.text).toContain('/styles.css?v=20260725-mobile-shelf-v4');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
@@ -498,6 +498,10 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".book-shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 14px; }");
     expect(styles.text).toContain(".book-info > span, .book-access-badge { display: none; }");
     expect(styles.text).toContain("#onboarding-dialog, #onboarding-menu-button { display: none !important; }");
+    expect(styles.text).toContain(".topbar { grid-template-columns: minmax(0, 1fr) auto; }");
+    expect(styles.text).toContain(".topbar .work-meta { display: none; }");
+    expect(styles.text).toContain(".account-button > span:last-child { display: none; }");
+    expect(styles.text).toContain(".app-shell.shelf-mode #top-search-button { display: none; }");
     expect(application.text).toContain('function isMobileLayout()');
     expect(application.text).toContain('if (isMobileLayout()) return;');
     expect(styles.text).not.toContain("-webkit-box-orient: vertical; min-height: 2.8em;");
