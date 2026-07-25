@@ -285,8 +285,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-org-row-click');
-    expect(page.text).toContain('/styles.css?v=20260725-org-row-click');
+    expect(page.text).toContain('/app.js?v=20260725-develop-galaxy-ripple');
+    expect(page.text).toContain('/styles.css?v=20260725-develop-galaxy-ripple');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -305,7 +305,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
     expect(application.text).toContain("if (readOnly) editor?.disabled();");
     expect(application.text).not.toContain("if (readOnly) editor.disabled();");
-    expect(application.text).toContain('/relationship-graph.js?v=20260724-relationship-density');
+    expect(application.text).toContain('/relationship-graph.js?v=20260725-galaxy-ripple');
     expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
     expect(application.text).not.toContain('${item.evidence.length} 条');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
@@ -587,6 +587,8 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("camera.yaw += elapsed * GALAXY_ROTATION_RADIANS_PER_MS");
     expect(page.text).toContain('data-testid="galaxy-3d-starfield"');
     expect(page.text).toContain('data-testid="galaxy-3d-relationships"');
+    expect(page.text).toContain('data-testid="galaxy-grid"');
+    expect(page.text).toContain('aria-pressed="false" data-testid="galaxy-grid">显示空间网格');
     expect(graph.text).toContain('expand.dataset.testid = "relationship-map-expand"');
     expect(graph.text).toContain("viewport.dataset.draggedNodeId = node.id");
     expect(graph.text).toContain("viewport.dataset.graphScale = viewScale.toFixed(3)");
