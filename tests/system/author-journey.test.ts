@@ -206,7 +206,7 @@ describe("作者完整创作流程", () => {
     expect(application.text.match(/if \(!\(await closeEntityEditor\(\)\)\) return;/gu)).toHaveLength(2);
     expect(application.text).toContain("async function openOrganizationDialog(item, options)");
     expect(application.text).toContain("function renderCharacterEditorRelationships()");
-    expect(application.text).toContain('class="character-aliases"');
+    expect(application.text).toContain('class="character-aliases"><b>别名</b>');
     expect(application.text).toContain('class="character-species"');
     expect(application.text).toContain("refreshRelationshipSurfaces");
     expect(application.text).toContain("data-character-relationship-edit");
@@ -285,8 +285,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-develop-galaxy-ripple');
-    expect(page.text).toContain('/styles.css?v=20260725-develop-galaxy-ripple');
+    expect(page.text).toContain('/app.js?v=20260725-character-alias-label');
+    expect(page.text).toContain('/styles.css?v=20260725-character-alias-label');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -530,6 +530,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('aria-label="在“${esc(volume.title)}”中新建章节"');
     expect(application.text).toContain('button.dataset.volumeToggle));');
     expect(application.text).toContain('class="record-card character-card preview-record-card has-card-edit" data-open-character');
+    expect(application.text).toContain('class="character-lock-badge"');
+    expect(application.text).toContain('class="record-card module-row character-row character-card preview-record-card"');
+    expect(styles.text).toContain(".character-row { grid-template-columns: minmax(140px, .28fr) minmax(0, 1fr) auto; }");
     expect(application.text).toContain("所属组织");
     expect(application.text).toContain('card.addEventListener("keydown"');
     expect(page.text).toContain('data-module="races"');
