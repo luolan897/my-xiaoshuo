@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 import { works } from "../data.js";
 import { DEMO_CREDENTIALS, isValidDemoLogin } from "../demo-auth.js";
+import { readMainVersion, versionModuleSource } from "../scripts/version.mjs";
 
 test("预制两本不同类型的作品", () => {
   assert.equal(works.length, 2);
@@ -80,4 +81,15 @@ test("Demo 使用公开凭据登录且关闭注册", async () => {
   assert.match(adapter, /registrationOpen: false/);
   assert.match(adapter, /sessionStorage\.getItem\(demoAuthStorageKey\)/);
   assert.match(adapter, /Demo 不开放注册/);
+});
+
+test("Demo 版本直接继承主项目版本", async () => {
+  const mainPackage = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  const demoPackage = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  assert.equal(await readMainVersion(), mainPackage.version);
+  assert.equal(Object.hasOwn(demoPackage, "version"), false);
+  assert.equal(versionModuleSource(mainPackage.version), `export const DEMO_VERSION = ${JSON.stringify(mainPackage.version)};\n`);
+  assert.match(adapter, /version: DEMO_VERSION/);
+  assert.doesNotMatch(adapter, /0\.1\.0-demo/);
 });

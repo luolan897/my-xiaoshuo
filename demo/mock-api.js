@@ -1,5 +1,6 @@
 import { analysisTasks, works as sourceWorks } from "./data.js";
 import { DEMO_CREDENTIALS as demoCredentials, isValidDemoLogin } from "./demo-auth.js";
+import { DEMO_VERSION } from "./demo-version.js";
 
 const now = "2026-07-25T10:00:00.000Z";
 const nativeFetch = window.fetch.bind(window);
@@ -250,7 +251,7 @@ async function mockApi(input, init = {}) {
   const method = String(init.method ?? (typeof input === "string" ? "GET" : input.method) ?? "GET").toUpperCase();
   const path = url.pathname;
 
-  if (path === "/api/health") return success({ ok: true, version: "0.1.0-demo", development: false });
+  if (path === "/api/health") return success({ ok: true, version: DEMO_VERSION, development: false });
   if (path === "/api/ui-settings" || path === "/api/platform/ui-settings") return success({ toastPosition: "bottom-right" });
   if (path === "/api/auth/captcha") {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="52" viewBox="0 0 160 52"><rect width="160" height="52" rx="8" fill="#f2ebe3"/><path d="M8 38 152 12M12 10l138 32" stroke="#a96350" stroke-opacity=".22"/><text x="80" y="35" text-anchor="middle" font-family="monospace" font-size="27" font-weight="700" letter-spacing="8" fill="#5b3028">2468</text></svg>`;
