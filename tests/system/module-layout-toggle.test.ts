@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-chapter-read-mode');
-    expect(page.text).toContain('/app.js?v=20260725-chapter-read-mode');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-chapter-read-mode"></script>');
+    expect(page.text).toContain('/styles.css?v=20260725-module-header-scale');
+    expect(page.text).toContain('/app.js?v=20260725-module-header-scale');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-module-header-scale"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -74,7 +74,7 @@ describe("知识模块布局切换", () => {
     expect(page.text).toContain('id="character-editor-edit"');
     expect(page.text).toContain('id="knowledge-editor-edit"');
     expect(page.text).toContain('id="chapter-edit-button"');
-    expect(page.text).toContain(">编辑正文</button>");
+    expect(page.text).toContain(">编辑</button>");
     expect(application.text).toContain("function applyChapterEditorMode()");
     expect(application.text).toContain("function enterChapterEditMode()");
     expect(application.text).toContain("let chapterEditorReadOnly = true");
@@ -90,14 +90,16 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页");
     expect(application.text).toContain("function mountModuleCount(count)");
     expect(application.text).toContain("class=\"module-count-badge\"");
+    expect(styles.text).toContain(".module-count-badge { display: inline-grid; min-width: 28px; height: 28px;");
+    expect(styles.text).toContain(".module-header h1 { margin: 0 0 6px; font-weight: 500; font-size: 24px;");
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
     expect(application.text).toContain('const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;');
     expect(application.text).toContain('hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`)');
     expect(application.text).toContain('await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)');
-    expect(application.text).toContain('state.races = await apiAllPages(`/api/works/${state.work.id}/races`);');
-    expect(application.text).toContain('state.organizations = await apiAllPages(`/api/works/${state.work.id}/organizations`);');
+    expect(application.text).toContain('apiAllPages(`/api/works/${state.work.id}/races`)');
+    expect(application.text).toContain('apiAllPages(`/api/works/${state.work.id}/organizations`)');
     expect(application.text).toContain('data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"');
     expect(application.text).not.toContain("人工修正");
     expect(application.text).toContain('item ? "编辑设定" : "新建设定"');

@@ -285,8 +285,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-chapter-read-mode');
-    expect(page.text).toContain('/styles.css?v=20260725-chapter-read-mode');
+    expect(page.text).toContain('/app.js?v=20260725-module-header-scale');
+    expect(page.text).toContain('/styles.css?v=20260725-module-header-scale');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -460,8 +460,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('const platformDocumentTitle = "叙界 · 小说 AI 创作工作台"');
     expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');
     expect(application.text).toContain("updateDocumentTitle(state.work)");
+    expect(page.text).toContain('data-module="races"');
+    expect(page.text).toContain('</svg>种族</button>');
     expect(page.text).toContain('data-module="outlines"');
     expect(page.text).toContain('<span class="nav-label">大纲/伏笔</span>');
+    expect(page.text).toMatch(/data-module="races"[\s\S]*id="module-more-button"[\s\S]*class="module-nav-secondary hidden"[^>]*data-module="outlines"/u);
     expect(application.text).not.toContain("navButton.textContent = unresolved.length");
     expect(workPermissions.text).toContain('label: "大纲/伏笔"');
     expect(page.text).toContain('<button class="ai-analysis-entry" type="button" data-module="tasks">');
@@ -469,7 +472,6 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text).toContain('<span class="nav-label">更多</span>');
     expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(4);
-    expect(page.text).toContain('</svg>种族</button>');
     expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(13);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');

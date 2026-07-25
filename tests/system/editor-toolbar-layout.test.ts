@@ -24,7 +24,7 @@ describe("编辑器工具栏布局", () => {
 
     expect(page.text).toContain('<span id="chapter-path" class="eyebrow">未选择章节</span>\n            <input id="chapter-title"');
     expect(page.text).toContain('id="chapter-edit-button" class="primary-button hidden"');
-    expect(page.text).toContain(">编辑正文</button>");
+    expect(page.text).toContain(">编辑</button>");
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
     expect(styles.text).toContain(".editor-view.is-read-only #tidy-blank-lines-button");
     expect(styles.text).toContain(".editor-view.is-read-only #save-button");
