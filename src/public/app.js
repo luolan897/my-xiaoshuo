@@ -3243,14 +3243,10 @@ async function renderSettings() {
 }
 
 async function renderCharacters(page = characterListPage) {
-  const [characterPage, races, organizations] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/characters`, page),
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
-  ]);
+  const characterPage = await apiPage(`/api/works/${state.work.id}/characters`, page);
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
-  [state.characters, state.races, state.organizations] = [characterPage.items, races, organizations];
+  state.characters = characterPage.items;
   const layout = readModuleLayout();
   const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
   const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
