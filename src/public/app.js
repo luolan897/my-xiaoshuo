@@ -726,9 +726,11 @@ let entityHistoryContext = null;
 let moduleContentInteractionsBound = false;
 
 function showEntityEditorPage(type, { readOnly = false } = {}) {
+  const module = type === "setting" ? "settings" : type === "character" ? "characters" : type === "race" ? "races" : "organizations";
+  const viewOnly = readOnly || !canEditModule(module);
   entityEditorType = type;
   entityEditorDirty = false;
-  entityEditorReadOnly = readOnly;
+  entityEditorReadOnly = viewOnly;
   characterSectionEditorDirty = false;
   knowledgeSectionEditorDirty = false;
   $("#entity-editor-view").classList.remove("hidden");
@@ -737,6 +739,7 @@ function showEntityEditorPage(type, { readOnly = false } = {}) {
   $("#knowledge-editor-form").classList.toggle("hidden", !["race", "organization"].includes(type));
   $("#character-section-editor-view").classList.add("hidden");
   $("#knowledge-section-editor-view").classList.add("hidden");
+  ["setting", "character", "knowledge"].forEach((editor) => $(`#${editor}-editor-readonly-badge`).classList.toggle("hidden", !(viewOnly && (editor === "knowledge" ? ["race", "organization"].includes(type) : editor === type))));
   $("#app").inert = true;
   document.body.classList.add("entity-editor-open");
   replacePageRoute(currentPageRoute());

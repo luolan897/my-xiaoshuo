@@ -1701,6 +1701,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .entity-editor-header, .character-editor-header { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) minmax(160px, 1fr); align-items: center; gap: 24px; min-height: 78px; padding: 14px clamp(18px, 3vw, 44px); border-bottom: 1px solid var(--line); background: var(--panel); }
 .entity-editor-heading { min-width: 0; text-align: center; }
 .entity-editor-heading h1 { overflow: hidden; margin: 2px 0 0; font-size: 24px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.entity-editor-readonly-badge { display: inline-block; width: fit-content; margin: 0 auto; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--muted) 55%, var(--line)); border-radius: 999px; color: var(--muted); font-size: 10px; line-height: 1.2; }
+.character-editor-title-row .entity-editor-readonly-badge { margin-left: 6px; vertical-align: middle; }
 .entity-editor-header > .primary-button { justify-self: end; min-width: 112px; }
 .entity-editor-back { justify-self: start; min-height: 36px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; }
 .entity-editor-back::before { content: "←"; margin-right: 7px; }
