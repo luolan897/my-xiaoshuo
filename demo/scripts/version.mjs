@@ -12,3 +12,10 @@ export async function readMainVersion() {
 export function versionModuleSource(version) {
   return `export const DEMO_VERSION = ${JSON.stringify(version)};\n`;
 }
+
+export function versionedDemoAdapterSource(source, version) {
+  return source.replace(
+    'from "./demo-version.js"',
+    `from "./demo-version.js?v=${encodeURIComponent(version)}"`
+  );
+}

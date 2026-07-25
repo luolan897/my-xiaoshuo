@@ -1,13 +1,14 @@
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, normalize, resolve } from "node:path";
-import { readMainVersion, versionModuleSource } from "./version.mjs";
+import { readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "./version.mjs";
 
 const port = Number(process.env.PORT ?? 4173);
 const demoRoot = new URL("../", import.meta.url).pathname;
 const publicRoot = new URL("../../src/public/", import.meta.url).pathname;
 const vditorRoot = new URL("../node_modules/vditor/dist/", import.meta.url).pathname;
-const versionModule = versionModuleSource(await readMainVersion());
+const mainVersion = await readMainVersion();
+const versionModule = versionModuleSource(mainVersion);
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -39,10 +40,13 @@ createServer(async (request, response) => {
     const info = await stat(filePath);
     const target = info.isDirectory() ? resolve(filePath, "index.html") : filePath;
     let body = await readFile(target);
+    if (relativePath === "mock-api.js") {
+      body = Buffer.from(versionedDemoAdapterSource(body.toString("utf8"), mainVersion));
+    }
     if (relativePath === "index.html") {
       body = Buffer.from(body.toString("utf8").replace(
         /<script type="module" src="\/app\.js\?v=[^"]+"><\/script>/u,
-        (appScript) => `<script type="module" src="/mock-api.js?v=20260725-main-version"></script>\n    ${appScript}`
+        (appScript) => `<script type="module" src="/mock-api.js?v=${encodeURIComponent(mainVersion)}"></script>\n    ${appScript}`
       ));
     }
     response.writeHead(200, { "cache-control": "no-store", "content-type": contentTypes[extname(target)] ?? "application/octet-stream" });
