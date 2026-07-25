@@ -66,6 +66,7 @@ type ModelRow = Row & {
 
 type GenerateInput = {
   workId: string;
+  taskId?: string;
   taskType: TaskType;
   instruction: string;
   scope: ContextScope;
@@ -159,6 +160,30 @@ const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_en
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
 type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
+
+type AiCallTraceAttempt = {
+  attempt: number;
+  startedAt: string;
+  completedAt?: string;
+  status: "running" | "completed" | "failed";
+  httpStatus?: number;
+  response?: Record<string, unknown>;
+  failure?: string;
+};
+
+type AiCallTraceRound = {
+  round: number;
+  requestedAt: string;
+  request: {
+    model: string;
+    messages: CompletionMessage[];
+    parameters: Record<string, unknown>;
+    tools: Record<string, unknown>[];
+    toolChoice: "auto" | "none";
+  };
+  attempts: AiCallTraceAttempt[];
+  toolExecutions: AgentToolCallResult[];
+};
 
 export type AgentToolCallResult = {
   id: string;
@@ -1533,6 +1558,7 @@ export class AiManager {
     return this.store.db.all("SELECT * FROM ai_calls WHERE work_id = ? ORDER BY created_at DESC LIMIT 200", workId).map((row) => ({
       id: stringValue(row, "id"),
       workId: stringValue(row, "work_id"),
+      taskId: row.task_id === null ? null : stringValue(row, "task_id"),
       taskType: stringValue(row, "task_type"),
       provider: this.getProvider(stringValue(row, "provider_id")),
       model: this.getModel(stringValue(row, "model_id")),
@@ -1554,6 +1580,7 @@ export class AiManager {
     return paginated(rows.map((row) => ({
       id: stringValue(row, "id"),
       workId: stringValue(row, "work_id"),
+      taskId: row.task_id === null ? null : stringValue(row, "task_id"),
       taskType: stringValue(row, "task_type"),
       provider: this.getProvider(stringValue(row, "provider_id")),
       model: this.getModel(stringValue(row, "model_id")),
@@ -1566,6 +1593,47 @@ export class AiManager {
       createdAt: stringValue(row, "created_at"),
       completedAt: row.completed_at === null ? null : stringValue(row, "completed_at")
     })), pagination);
+  }
+
+  getTaskTrace(taskId: string): Record<string, unknown> {
+    const task = this.store.getTask(taskId);
+    const rows = this.store.db.all(
+      `SELECT call.*, trace.initial_messages_json, trace.rounds_json, trace.created_at AS trace_created_at,
+        trace.updated_at AS trace_updated_at
+       FROM ai_calls call
+       LEFT JOIN ai_call_traces trace ON trace.call_id = call.id
+       WHERE call.task_id = ?
+       ORDER BY call.created_at ASC, call.id ASC`,
+      taskId
+    );
+    const calls = rows.map((row) => {
+      const hasTrace = row.initial_messages_json !== null && row.initial_messages_json !== undefined;
+      return {
+        id: stringValue(row, "id"),
+        taskType: stringValue(row, "task_type"),
+        provider: this.getProvider(stringValue(row, "provider_id")),
+        model: this.getModel(stringValue(row, "model_id")),
+        contextScope: json(stringValue(row, "context_scope_json"), {}),
+        parameters: json(stringValue(row, "parameters_json"), {}),
+        status: stringValue(row, "status"),
+        failure: row.failure === null ? null : stringValue(row, "failure"),
+        inputChars: numberValue(row, "input_chars"),
+        outputChars: numberValue(row, "output_chars"),
+        createdAt: stringValue(row, "created_at"),
+        completedAt: row.completed_at === null ? null : stringValue(row, "completed_at"),
+        trace: hasTrace ? {
+          initialMessages: json(stringValue(row, "initial_messages_json"), []),
+          rounds: json(stringValue(row, "rounds_json"), []),
+          createdAt: stringValue(row, "trace_created_at"),
+          updatedAt: stringValue(row, "trace_updated_at")
+        } : null
+      };
+    });
+    return {
+      taskId,
+      captured: calls.some((call) => call.trace !== null),
+      calls
+    };
   }
 
   async runTask(taskId: string, modelId?: string): Promise<Record<string, unknown>> {
@@ -1613,6 +1681,7 @@ export class AiManager {
       } else {
         const generated = await this.generate({
           workId,
+          taskId,
           taskType: taskType === "book-analysis" ? "book-analysis" : "chapter-analysis",
           instruction: "请基于上下文完成分析，给出有原文依据的中文结论。",
           scope,
@@ -2082,20 +2151,44 @@ export class AiManager {
     });
     const callId = id("call");
     const timestamp = now();
-    this.store.db.run(
-      `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
-       status, input_chars, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
-      callId,
-      input.workId,
-      input.taskType,
-      stringValue(provider, "id"),
-      stringValue(model, "id"),
-      JSON.stringify(input.scope),
-      JSON.stringify(parameters),
-      context.length + input.instruction.length,
-      timestamp,
-      currentRequestActor()?.userId ?? null
-    );
+    const traceRounds: AiCallTraceRound[] = [];
+    this.store.db.transaction(() => {
+      this.store.db.run(
+        `INSERT INTO ai_calls (id, work_id, task_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+         status, input_chars, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+        callId,
+        input.workId,
+        input.taskId ?? null,
+        input.taskType,
+        stringValue(provider, "id"),
+        stringValue(model, "id"),
+        JSON.stringify(input.scope),
+        JSON.stringify(parameters),
+        context.length + input.instruction.length,
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      if (input.taskId) {
+        this.store.db.run(
+          `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, created_at, updated_at)
+           VALUES (?, ?, ?, '[]', ?, ?)`,
+          callId,
+          input.taskId,
+          JSON.stringify(messages),
+          timestamp,
+          timestamp
+        );
+      }
+    });
+    const saveTrace = (): void => {
+      if (!input.taskId) return;
+      this.store.db.run(
+        "UPDATE ai_call_traces SET rounds_json = ?, updated_at = ? WHERE call_id = ?",
+        JSON.stringify(traceRounds),
+        now(),
+        callId
+      );
+    };
     const callStartedAt = process.hrtime.bigint();
     logger.info("ai.call.started", {
       callId,
@@ -2126,10 +2219,32 @@ export class AiManager {
       let totalInputTokens = 0;
       let totalCachedInputTokens = 0;
       const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
+        const traceRound: AiCallTraceRound = {
+          round: traceRounds.length + 1,
+          requestedAt: now(),
+          request: {
+            model: stringValue(model, "model_id"),
+            messages: structuredClone(completionMessages),
+            parameters: structuredClone(parameters),
+            tools: toolChoice === "auto" ? structuredClone(tools) : [],
+            toolChoice
+          },
+          attempts: [],
+          toolExecutions: []
+        };
+        traceRounds.push(traceRound);
+        saveTrace();
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
           let retryable = true;
           const attemptStartedAt = process.hrtime.bigint();
+          const traceAttempt: AiCallTraceAttempt = {
+            attempt,
+            startedAt: now(),
+            status: "running"
+          };
+          traceRound.attempts.push(traceAttempt);
+          saveTrace();
           logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, toolChoice });
           try {
             const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
@@ -2166,6 +2281,11 @@ export class AiManager {
             if (candidate.ok) {
               try {
                 const parsed = JSON.parse(candidate.body) as CompletionPayload;
+                traceAttempt.completedAt = now();
+                traceAttempt.status = "completed";
+                traceAttempt.httpStatus = candidate.status;
+                traceAttempt.response = parsed as Record<string, unknown>;
+                saveTrace();
                 completionRequestCount += 1;
                 const cacheUsage = resolveInputCacheUsage(parsed.usage);
                 if (!cacheUsage) cacheUsageComplete = false;
@@ -2179,12 +2299,23 @@ export class AiManager {
               }
             }
             lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
+            traceAttempt.completedAt = now();
+            traceAttempt.status = "failed";
+            traceAttempt.httpStatus = candidate.status;
+            traceAttempt.failure = `HTTP ${candidate.status}: ${candidate.body.slice(0, 2_000)}`;
+            saveTrace();
             if (candidate.status !== 429 && candidate.status < 500) {
               retryable = false;
               throw lastFailure;
             }
           } catch (error) {
             lastFailure = error;
+            if (traceAttempt.status === "running") {
+              traceAttempt.completedAt = now();
+              traceAttempt.status = "failed";
+              traceAttempt.failure = error instanceof Error ? error.message.slice(0, 2_000) : "AI request failed";
+              saveTrace();
+            }
             logger.warn("ai.call.attempt_failed", {
               callId,
               attempt,
@@ -2243,6 +2374,8 @@ export class AiManager {
           const execution = this.executeAgentTool(input.workId, toolCall);
           logger.info("ai.tool_call.completed", { callId, toolName: execution.name, status: execution.status, round });
           executedToolCalls.push(execution);
+          traceRounds.at(-1)?.toolExecutions.push(execution);
+          saveTrace();
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });
           input.onToolCall?.(execution, round);
           completionMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(execution.result) });
@@ -2508,6 +2641,7 @@ export class AiManager {
     const chapter = this.store.getChapter(scope.chapterId);
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "chapter-analysis",
       signal: this.taskSignal(taskId),
       instruction: "分析本章并输出 JSON 对象，字段为 summary（1至3句）、events（数组）、characters（数组）、settings（数组）、evidence（数组，每项含 conclusion 和 quote）、uncertainties（数组）。",
@@ -2546,6 +2680,7 @@ export class AiManager {
   private async runTimelineAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "timeline-analysis",
       signal: this.taskSignal(taskId),
       instruction: "抽取大事件候选并输出 JSON 数组。每项字段：name、description、eventType、timeLabel、timeSort（无法确定为 null）、location、impactScope、chapterIds、participantIds、evidence。必须区分发生时间与叙述时间；不确定时使用‘时间待定’。",
@@ -2582,6 +2717,7 @@ export class AiManager {
     if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "世界观分析范围内没有章节");
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "book-analysis",
       signal: this.taskSignal(taskId),
       instruction: [
@@ -2674,6 +2810,7 @@ export class AiManager {
       if (taskId && this.store.getTask(taskId).status !== "running") return { candidates: [], callId: null };
       const generated = await this.generateTaggedJson({
         workId,
+        taskId,
         taskType: "book-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts: 2,
@@ -2821,6 +2958,7 @@ export class AiManager {
   private async runConsistencyCheck(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "consistency-check",
       signal: this.taskSignal(taskId),
       instruction: "检查设定、人物状态、关系和时间是否冲突，输出 JSON 数组。每项字段：itemType、severity（low/medium/high）、title、description、entityRefs、evidence、suggestion。没有问题时输出 []。",
@@ -2873,6 +3011,7 @@ export class AiManager {
     }).join("\n");
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "book-analysis",
       signal: this.taskSignal(taskId),
       scope: scope.type === "none" ? scope : { type: "none" },
@@ -2992,6 +3131,7 @@ export class AiManager {
   ): Promise<{ decisions: Map<string, CharacterVerificationDecision>; callId: string }> {
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "book-analysis",
       signal: this.taskSignal(taskId),
       scope: { type: "none" },
@@ -3042,6 +3182,7 @@ export class AiManager {
     const extractChunk = async (text: string, maxAttempts = 3): Promise<{ candidates: Array<Record<string, unknown>>; callId: string }> => {
       const generated = await this.generateTaggedJson({
         workId,
+        taskId,
         taskType: "book-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts,
@@ -3392,6 +3533,7 @@ export class AiManager {
     const extractChunk = async (text: string, maxAttempts = 3): Promise<{ candidates: Array<Record<string, unknown>>; callId: string }> => {
       const generated = await this.generateTaggedJson({
         workId,
+        taskId,
         taskType: "relationship-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts,
@@ -3526,6 +3668,7 @@ export class AiManager {
       const aggregationResults = await this.processChunks(evidenceBatches, Math.min(concurrency, 4), async (evidenceBatch) => {
         const generated = await this.generateTaggedJson({
           workId,
+          taskId,
           taskType: "relationship-analysis",
           signal: this.taskSignal(taskId),
           maxAttempts: 2,

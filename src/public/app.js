@@ -3957,8 +3957,12 @@ async function renderTasks() {
   $("#module-content").querySelectorAll("[data-task-detail]").forEach((button) => button.addEventListener("click", () => {
     if (button.disabled) return;
     button.disabled = true;
-    api(`/api/tasks/${encodeURIComponent(button.dataset.taskDetail)}`)
-      .then((task) => openTaskDetailDialog(task))
+    const taskId = encodeURIComponent(button.dataset.taskDetail);
+    Promise.all([
+      api(`/api/tasks/${taskId}`),
+      api(`/api/tasks/${taskId}/trace`)
+    ])
+      .then(([task, trace]) => openTaskDetailDialog(task, trace))
       .catch((error) => toast(error.message, "error"))
       .finally(() => { button.disabled = false; });
   }));
@@ -4017,7 +4021,137 @@ function scheduleTaskProgressRefresh(workId, runningCount) {
   }, taskProgressRefreshInterval);
 }
 
-function openTaskDetailDialog(task) {
+function taskTraceRoleLabel(role) {
+  if (role === "system") return "系统提示词";
+  if (role === "assistant") return "Agent";
+  if (role === "tool") return "工具结果";
+  return "用户提示词";
+}
+
+function renderTaskTraceMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return '<p class="task-trace-empty">本轮没有消息。</p>';
+  return `<div class="task-trace-messages">${messages.map((message, index) => {
+    const role = String(message?.role || "user");
+    const content = message?.content === null ? "" : String(message?.content ?? "");
+    const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    return `<article class="task-trace-message is-${esc(role)}">
+      <header><span>${esc(taskTraceRoleLabel(role))}</span><small>#${index + 1} · ${content.length.toLocaleString("zh-CN")} 字符</small></header>
+      ${content ? `<pre>${esc(content)}</pre>` : '<p class="task-trace-empty">无文本正文</p>'}
+      ${toolCalls.length ? `<details><summary>Agent 请求的工具调用（${toolCalls.length}）</summary><pre>${esc(JSON.stringify(toolCalls, null, 2))}</pre></details>` : ""}
+      ${message?.tool_call_id ? `<small>工具调用 ID：<code>${esc(message.tool_call_id)}</code></small>` : ""}
+    </article>`;
+  }).join("")}</div>`;
+}
+
+function renderTaskTraceAttempt(attempt) {
+  const response = attempt?.response && typeof attempt.response === "object" ? attempt.response : {};
+  const choice = Array.isArray(response.choices) ? response.choices[0] : null;
+  const message = choice?.message && typeof choice.message === "object" ? choice.message : {};
+  const reasoning = String(message.reasoning_content ?? "");
+  const content = String(message.content ?? "");
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  return `<article class="task-trace-attempt is-${esc(attempt?.status || "failed")}">
+    <header>
+      <strong>尝试 ${esc(String(attempt?.attempt ?? 1))}</strong>
+      <span>${attempt?.status === "completed" ? "响应成功" : attempt?.status === "running" ? "等待响应" : "请求失败"}${attempt?.httpStatus ? ` · HTTP ${esc(String(attempt.httpStatus))}` : ""}</span>
+      <small>${esc(formatDateTime(attempt?.startedAt))}${attempt?.completedAt ? ` → ${esc(formatDateTime(attempt.completedAt))}` : ""}</small>
+    </header>
+    ${reasoning ? `<details class="task-trace-response"><summary>模型思考过程 · ${reasoning.length.toLocaleString("zh-CN")} 字符</summary><pre>${esc(reasoning)}</pre></details>` : ""}
+    ${content ? `<details class="task-trace-response" open><summary>Agent 响应 · ${content.length.toLocaleString("zh-CN")} 字符</summary><pre>${esc(content)}</pre></details>` : ""}
+    ${toolCalls.length ? `<details class="task-trace-response" open><summary>Agent 工具请求 · ${toolCalls.length} 项</summary><pre>${esc(JSON.stringify(toolCalls, null, 2))}</pre></details>` : ""}
+    ${attempt?.failure ? `<pre class="task-trace-failure">${esc(attempt.failure)}</pre>` : ""}
+    ${response.usage ? `<details class="task-trace-response"><summary>Token 用量</summary><pre>${esc(JSON.stringify(response.usage, null, 2))}</pre></details>` : ""}
+  </article>`;
+}
+
+function renderTaskTraceRound(round) {
+  const messages = Array.isArray(round?.request?.messages) ? round.request.messages : [];
+  const attempts = Array.isArray(round?.attempts) ? round.attempts : [];
+  const executions = Array.isArray(round?.toolExecutions) ? round.toolExecutions : [];
+  return `<section class="task-trace-round">
+    <header class="task-trace-round-header">
+      <span class="task-trace-round-index">${esc(String(round?.round ?? 1))}</span>
+      <div><strong>Agent 轮次 ${esc(String(round?.round ?? 1))}</strong><small>${messages.length} 条消息 · ${attempts.length} 次请求尝试 · ${executions.length} 次工具执行</small></div>
+      <time>${esc(formatDateTime(round?.requestedAt))}</time>
+    </header>
+    <div class="task-trace-flow" aria-label="本轮调用流程">
+      <span>完整 Prompt</span><i aria-hidden="true">→</i><span>模型响应</span>${executions.length ? '<i aria-hidden="true">→</i><span>工具执行</span>' : ""}
+    </div>
+    <details class="task-trace-prompt">
+      <summary>查看本轮发出的完整 Prompt（${messages.length} 条消息）</summary>
+      ${renderTaskTraceMessages(messages)}
+      <details class="task-trace-request-meta"><summary>模型参数与工具定义</summary><pre>${esc(JSON.stringify({
+        model: round?.request?.model,
+        parameters: round?.request?.parameters ?? {},
+        toolChoice: round?.request?.toolChoice,
+        tools: round?.request?.tools ?? []
+      }, null, 2))}</pre></details>
+    </details>
+    <div class="task-trace-attempts">${attempts.map(renderTaskTraceAttempt).join("") || '<p class="task-trace-empty">尚未记录模型响应。</p>'}</div>
+    ${executions.length ? `<div class="task-trace-tools"><strong>工具执行结果</strong>${executions.map((execution) => `<details>
+      <summary>${esc(execution.name || "未知工具")} · ${execution.status === "completed" ? "成功" : "失败"}</summary>
+      <div class="task-trace-tool-grid">
+        <div><small>调用参数</small><pre>${esc(JSON.stringify(execution.arguments, null, 2))}</pre></div>
+        <div><small>返回结果</small><pre>${esc(JSON.stringify(execution.result, null, 2))}</pre></div>
+      </div>
+    </details>`).join("")}</div>` : ""}
+  </section>`;
+}
+
+function renderTaskTraceVisualization(trace) {
+  const calls = Array.isArray(trace?.calls) ? trace.calls : [];
+  const capturedCalls = calls.filter((call) => call.trace);
+  const roundCount = capturedCalls.reduce((total, call) => total + (Array.isArray(call.trace?.rounds) ? call.trace.rounds.length : 0), 0);
+  const toolCount = capturedCalls.reduce((total, call) => total + (Array.isArray(call.trace?.rounds)
+    ? call.trace.rounds.reduce((roundTotal, round) => roundTotal + (Array.isArray(round.toolExecutions) ? round.toolExecutions.length : 0), 0)
+    : 0), 0);
+  const promptChars = capturedCalls.reduce((total, call) => total + (Array.isArray(call.trace?.rounds)
+    ? call.trace.rounds.reduce((roundTotal, round) => roundTotal + JSON.stringify(round.request?.messages ?? []).length, 0)
+    : 0), 0);
+  const outputChars = capturedCalls.reduce((total, call) => total + Number(call.outputChars || 0), 0);
+  if (!trace?.captured || capturedCalls.length === 0) {
+    return `<section class="task-trace-section" aria-labelledby="task-trace-title">
+      <header class="task-trace-heading"><div><span class="eyebrow">执行追踪</span><h3 id="task-trace-title">完整全流程上下文</h3></div></header>
+      <div class="task-trace-unavailable"><strong>没有可用的全流程记录</strong><p>${calls.length ? "该任务仅保留了调用摘要，没有保存完整 Prompt 与 Agent 轮次。" : "这是追踪功能启用前创建的历史任务，或任务尚未发起任何模型调用。"}</p></div>
+    </section>`;
+  }
+  return `<section class="task-trace-section" aria-labelledby="task-trace-title">
+    <header class="task-trace-heading">
+      <div><span class="eyebrow">执行追踪</span><h3 id="task-trace-title">完整全流程上下文</h3></div>
+      <p>按模型调用与 Agent 轮次还原实际发送内容、模型响应和工具结果。</p>
+    </header>
+    <div class="task-trace-metrics" aria-label="执行追踪统计">
+      <div><strong>${capturedCalls.length}</strong><span>模型调用</span></div>
+      <div><strong>${roundCount}</strong><span>Agent 轮次</span></div>
+      <div><strong>${toolCount}</strong><span>工具执行</span></div>
+      <div><strong>${promptChars.toLocaleString("zh-CN")}</strong><span>Prompt 字符</span></div>
+      <div><strong>${outputChars.toLocaleString("zh-CN")}</strong><span>输出字符</span></div>
+    </div>
+    <div class="task-trace-calls">${capturedCalls.map((call, index) => {
+      const rounds = Array.isArray(call.trace?.rounds) ? call.trace.rounds : [];
+      const modelName = call.model?.displayName || call.model?.modelId || "未知模型";
+      const providerName = call.provider?.name || "未知供应商";
+      return `<details class="task-trace-call is-${esc(call.status || "failed")}" ${index === 0 ? "open" : ""}>
+        <summary>
+          <span class="task-trace-call-index">${index + 1}</span>
+          <span><strong>${esc(modelName)}</strong><small>${esc(providerName)} · ${rounds.length} 轮 · ${Number(call.inputChars || 0).toLocaleString("zh-CN")} → ${Number(call.outputChars || 0).toLocaleString("zh-CN")} 字符</small></span>
+          <span class="task-trace-status">${call.status === "completed" ? "已完成" : call.status === "running" ? "运行中" : "失败"}</span>
+        </summary>
+        <div class="task-trace-call-body">
+          <div class="task-trace-call-meta"><code>${esc(call.id)}</code><span>${esc(formatDateTime(call.createdAt))}</span></div>
+          <details class="task-trace-initial">
+            <summary>初始完整上下文（${Array.isArray(call.trace?.initialMessages) ? call.trace.initialMessages.length : 0} 条消息）</summary>
+            ${renderTaskTraceMessages(call.trace?.initialMessages)}
+          </details>
+          ${call.failure ? `<pre class="task-trace-failure">${esc(call.failure)}</pre>` : ""}
+          <div class="task-trace-rounds">${rounds.map(renderTaskTraceRound).join("")}</div>
+        </div>
+      </details>`;
+    }).join("")}</div>
+  </section>`;
+}
+
+function openTaskDetailDialog(task, trace) {
   if (!task) return;
   const details = Array.isArray(task.scopeDetails) ? task.scopeDetails : [];
   const detailHtml = details.map((item) => {
@@ -4044,18 +4178,21 @@ function openTaskDetailDialog(task) {
     : "<p>尚无结果</p>";
   openDialog("任务详情",
     `<div class="task-detail">
-      <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code></p>
-      <p><strong>类型</strong> ${esc(analysisTaskTypeLabel(task.taskType))}</p>
-      <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
-      <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
-      <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
-      <div><strong>失败信息</strong>${failureHtml}</div>
-      <div><strong>结果摘要</strong>${resultPreview}</div>
-      <p><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
+      <section class="task-detail-overview">
+        <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code></p>
+        <p><strong>类型</strong> ${esc(analysisTaskTypeLabel(task.taskType))}</p>
+        <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
+        <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
+        <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
+        <div><strong>失败信息</strong>${failureHtml}</div>
+        <div><strong>结果摘要</strong>${resultPreview}</div>
+        <p><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
+      </section>
+      ${renderTaskTraceVisualization(trace)}
     </div>`,
     async () => undefined,
     "AI 分析详情",
-    { submitLabel: "关闭", wide: true });
+    { submitLabel: "关闭", wide: true, trace: true });
 }
 
 function renderProviderCards(providers, models) {
@@ -4566,6 +4703,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dialog-submit").textContent = options.submitLabel ?? "保存";
   $("#dynamic-form .dialog-actions [value='cancel']").classList.toggle("hidden", Boolean(options.hideCancel));
   $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
+  $("#form-dialog").classList.toggle("trace-dialog", Boolean(options.trace));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
   bindVditorEditors($("#dialog-fields"));
