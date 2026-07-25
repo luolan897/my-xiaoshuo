@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260725-mobile-workspace-unify">
+    <link rel="stylesheet" href="/styles.css?v=20260725-avatar-crop">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -590,7 +590,7 @@
           <header class="account-settings-section-header"><h3 id="profile-settings-title">个人资料</h3><p>用于作品协作和历史记录中的作者标识。</p></header>
           <div class="avatar-settings">
             <div id="profile-avatar-preview" class="user-avatar profile-avatar-preview" role="img" aria-label="当前头像"><span class="user-avatar-fallback">作</span></div>
-            <div class="avatar-settings-copy"><strong>头像图片</strong><small>支持 PNG、JPEG、WebP，文件不超过 5 MB，尺寸不超过 4096 × 4096 像素。</small></div>
+            <div class="avatar-settings-copy"><strong>头像图片</strong><small>支持 PNG、JPEG、WebP，文件不超过 5 MB。选择后可框选正方形选区再裁剪上传。</small></div>
             <div class="avatar-settings-actions"><button id="avatar-upload-button" class="ghost-button" type="button">上传头像</button><button id="avatar-remove-button" class="ghost-button hidden" type="button">移除头像</button></div>
           </div>
           <form id="profile-form" class="account-settings-form"><label>显示名称<input id="profile-display-name" name="displayName" maxlength="80" required></label><button class="primary-button" type="submit">保存名称</button></form>
@@ -610,6 +610,37 @@
             </div>
           </div>
         </section>
+      </div>
+    </dialog>
+
+    <dialog id="avatar-crop-dialog" class="dialog avatar-crop-dialog" aria-labelledby="avatar-crop-dialog-title" aria-describedby="avatar-crop-dialog-description">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">个人账户</span>
+          <h2 id="avatar-crop-dialog-title">裁剪头像</h2>
+          <p id="avatar-crop-dialog-description" class="dialog-header-meta">拖动选区或四角手柄调整范围，圆形预览即最终显示效果。</p>
+        </div>
+        <button id="avatar-crop-close" class="dialog-close" aria-label="关闭裁剪" type="button">×</button>
+      </div>
+      <div class="avatar-crop-body">
+        <div id="avatar-crop-stage" class="avatar-crop-stage" tabindex="0" role="img" aria-label="头像裁剪选区">
+          <img id="avatar-crop-image" class="avatar-crop-image" alt="">
+          <div id="avatar-crop-shade" class="avatar-crop-shade" aria-hidden="true"></div>
+          <div id="avatar-crop-selection" class="avatar-crop-selection" hidden>
+            <button type="button" class="avatar-crop-handle" data-avatar-crop-handle="nw" aria-label="调整左上角"></button>
+            <button type="button" class="avatar-crop-handle" data-avatar-crop-handle="ne" aria-label="调整右上角"></button>
+            <button type="button" class="avatar-crop-handle" data-avatar-crop-handle="sw" aria-label="调整左下角"></button>
+            <button type="button" class="avatar-crop-handle" data-avatar-crop-handle="se" aria-label="调整右下角"></button>
+          </div>
+        </div>
+        <aside class="avatar-crop-side">
+          <div id="avatar-crop-preview" class="user-avatar avatar-crop-preview" role="img" aria-label="裁剪预览"></div>
+          <p>预览</p>
+        </aside>
+      </div>
+      <div class="dialog-actions">
+        <button id="avatar-crop-cancel" class="ghost-button" type="button">取消</button>
+        <button id="avatar-crop-confirm" class="primary-button" type="button">确认裁剪</button>
       </div>
     </dialog>
 
@@ -699,6 +730,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260725-mobile-workspace-unify"></script>
+    <script type="module" src="/app.js?v=20260725-avatar-crop"></script>
   </body>
 </html>

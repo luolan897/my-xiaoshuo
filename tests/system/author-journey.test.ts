@@ -285,8 +285,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260725-mobile-workspace-unify');
-    expect(page.text).toContain('/styles.css?v=20260725-mobile-workspace-unify');
+    expect(page.text).toContain('/app.js?v=20260725-avatar-crop');
+    expect(page.text).toContain('/styles.css?v=20260725-avatar-crop');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -322,10 +322,17 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');
     expect(page.text).toContain('id="avatar-remove-button"');
+    expect(page.text).toContain('id="avatar-crop-dialog"');
+    expect(page.text).toContain('id="avatar-crop-confirm"');
+    expect(page.text).toContain("选择后可框选正方形选区再裁剪上传");
+    expect(application.text).toContain('/avatar-crop.js?v=20260725-avatar-crop');
+    expect(application.text).toContain("async function openAvatarCropDialog(file)");
     expect(application.text).toContain('api("/api/auth/avatar", { method: "PUT", body })');
     expect(application.text).toContain('api("/api/auth/avatar", { method: "DELETE" })');
     expect(application.text).toContain("function renderUserAvatar(element, user)");
     expect(styles.text).toContain(".profile-avatar-preview");
+    expect(styles.text).toContain(".avatar-crop-selection");
+    expect(styles.text).toContain(".avatar-crop-preview");
     expect(page.text).toContain('id="api-key-reset-button"');
     expect(page.text).toContain("新 Key 仅显示一次");
     expect(application.text).toContain('api("/api/auth/api-key/reset"');
