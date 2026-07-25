@@ -4740,7 +4740,14 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     placeholder,
     preview: { transform: transformVditorPreview },
     cache: { enable: false },
-    toolbar: ["headings", "bold", "italic", "strike", "|", "line", "quote", "list", "ordered-list", "check", "|", "code", "inline-code", "link", "table", "upload", "|", "undo", "redo", "edit-mode", "fullscreen"],
+    toolbar: ["headings", "bold", "italic", "strike", "|", "line", "quote", "list", "ordered-list", "check", "|", "code", "inline-code", "link", "table", "upload", "|", "undo", "redo", {
+      name: "line-number",
+      tip: "显示/隐藏行号",
+      tipPosition: "s",
+      className: "vditor-line-number-button",
+      icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h3M4 9h3M4 13h3M4 17h3M10 5h10M10 9h10M10 13h10M10 17h10" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/></svg>',
+      click: () => toggleVditorLineNumbers(editor)
+    }, "edit-mode", "fullscreen"],
     upload: {
       accept: "image/*",
       max: 10 * 1024 * 1024,
@@ -4750,11 +4757,13 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     input: (markdown) => {
       normalizeVditorAttachmentImages(editor);
       updateVditorWordCount(editor, markdown);
+      updateVditorLineNumbers(editor, markdown);
       onInput(markdown);
     },
     after: () => {
       normalizeVditorAttachmentImages(editor);
       updateVditorWordCount(editor, value);
+      updateVditorLineNumbers(editor, value);
       if (readOnly) editor?.disabled();
     }
   });
@@ -4763,6 +4772,34 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
   editor.__attachmentObserver = attachmentObserver;
   host.__vditor = editor;
   return editor;
+}
+
+function toggleVditorLineNumbers(editor) {
+  const host = editor?.vditor?.element;
+  if (!host) return;
+  const enabled = host.classList.toggle("show-line-numbers");
+  const button = host.querySelector(".vditor-line-number-button");
+  if (button) button.setAttribute("aria-pressed", String(enabled));
+}
+
+function updateVditorLineNumbers(editor, markdown) {
+  const content = editor?.vditor?.element?.querySelector(".vditor-content");
+  if (!content) return;
+  let gutter = content.querySelector(".vditor-line-numbers");
+  if (!gutter) {
+    gutter = document.createElement("div");
+    gutter.className = "vditor-line-numbers";
+    gutter.setAttribute("aria-hidden", "true");
+    content.prepend(gutter);
+  }
+  const lineCount = Math.max(1, String(markdown ?? "").split(/\r?\n/gu).length);
+  const fragment = document.createDocumentFragment();
+  for (let line = 1; line <= lineCount; line += 1) {
+    const number = document.createElement("span");
+    number.textContent = String(line);
+    fragment.append(number);
+  }
+  gutter.replaceChildren(fragment);
 }
 
 function updateVditorWordCount(editor, markdown) {
