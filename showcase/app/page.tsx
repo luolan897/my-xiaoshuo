@@ -506,7 +506,7 @@ export default function Home() {
       <header className="site-header">
         <Brand />
         <nav aria-label="主导航"><ScrollLink targetId="workspace">工作台</ScrollLink><ScrollLink targetId="abilities">能力</ScrollLink><ScrollLink targetId="relationships">关系图</ScrollLink><ScrollLink targetId="galaxy">银河图</ScrollLink></nav>
-        <a className="header-cta" href="https://github.com/musnows/Scriverse" target="_blank" rel="noreferrer">查看源代码 <span>↗</span></a>
+        <a className="header-cta" href="/demo">在线体验 <span>↗</span></a>
       </header>
 
       <section className="hero">
@@ -514,7 +514,7 @@ export default function Home() {
           <span className="eyebrow">LOCAL-FIRST AI WRITING STUDIO</span>
           <h1>让宏大的故事，<br />始终<span>有迹可循。</span></h1>
           <p>叙界是为长篇小说而生的本地 AI 创作工作台。正文、世界观、人物关系、时间线与每一次灵感，都在同一个叙事系统里彼此关联。</p>
-          <div className="hero-actions"><ScrollLink className="primary-link" targetId="workspace">进入叙界世界</ScrollLink><ScrollLink className="text-link" targetId="relationships">探索人物图谱 <span>↓</span></ScrollLink></div>
+          <div className="hero-actions"><a className="primary-link" href="/demo">打开演示站 <span>↗</span></a><ScrollLink className="text-link" targetId="relationships">探索人物图谱 <span>↓</span></ScrollLink></div>
         </div>
         <div className="hero-orbit" aria-hidden="true">
           <div className="orbit-ring ring-one" /><div className="orbit-ring ring-two" /><div className="orbit-ring ring-three" />
