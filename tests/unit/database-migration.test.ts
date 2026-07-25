@@ -231,4 +231,31 @@ describe("数据库版本化迁移", () => {
     expect(second.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 40")?.count).toBe(1);
     second.close();
   });
+
+  it("从迁移 40 的历史调用表升级并保留任务追踪索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-call-trace-"));
+    roots.push(root);
+    const filename = join(root, "call-trace.db");
+    const current = new Database(filename);
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DROP INDEX idx_calls_task;
+      DROP TABLE ai_call_traces;
+      ALTER TABLE ai_calls DROP COLUMN task_id;
+      DELETE FROM schema_migrations WHERE version = 41;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 41")?.count).toBe(1);
+    expect(migrated.all("PRAGMA table_info(ai_calls)").some((column) => column.name === "task_id")).toBe(true);
+    expect(migrated.all("PRAGMA table_info(ai_call_traces)").map((column) => column.name)).toEqual(
+      expect.arrayContaining(["call_id", "task_id", "initial_messages_json", "rounds_json", "created_at", "updated_at"])
+    );
+    expect(migrated.all("PRAGMA index_list(ai_calls)").some((index) => index.name === "idx_calls_task")).toBe(true);
+    expect(migrated.all("PRAGMA index_list(ai_call_traces)").some((index) => index.name === "idx_ai_call_traces_task")).toBe(true);
+    migrated.close();
+  });
 });
