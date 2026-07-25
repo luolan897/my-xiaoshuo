@@ -2764,7 +2764,13 @@ function renderTree() {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
-    button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
+    button.addEventListener("click", () => {
+      selectChapter(button.dataset.chapterId);
+      if (isMobileViewport()) {
+        panelLayout.leftCollapsed = true;
+        applyPanelLayout(true);
+      }
+    });
     button.addEventListener("contextmenu", (event) => {
       if (!canEditProse()) return;
       event.preventDefault();
@@ -6629,7 +6635,7 @@ $("#module-nav").addEventListener("click", (event) => {
   }
   if (button.dataset.module) {
     void showModule(button.dataset.module).finally(() => {
-      if (window.matchMedia("(max-width: 850px)").matches) {
+      if (isMobileViewport()) {
         panelLayout.leftCollapsed = true;
         applyPanelLayout(true);
       }
