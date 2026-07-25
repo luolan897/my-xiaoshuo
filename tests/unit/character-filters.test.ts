@@ -3,8 +3,8 @@ import { filterCharacters, paginateCharacters } from "../../src/public/character
 
 describe("character filters", () => {
   const characters = [
-    { id: "a", race: { id: "r1" }, organizations: [{ id: "o1" }] },
-    { id: "b", race: { id: "r2" }, organizations: [{ id: "o1" }, { id: "o2" }] },
+    { id: "a", race: { id: "r1" }, organizations: [{ organizationId: "o1" }] },
+    { id: "b", race: { id: "r2" }, organizations: [{ organizationId: "o1" }, { id: "o2" }] },
     { id: "c", race: { id: "r1" }, organizations: [] },
     { id: "d", race: null, organizations: [{ id: "o2" }] }
   ];

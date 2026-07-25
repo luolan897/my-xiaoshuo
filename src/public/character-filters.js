@@ -4,7 +4,7 @@ function characterRaceId(character) {
 
 function characterOrganizationIds(character) {
   return (Array.isArray(character?.organizations) ? character.organizations : [])
-    .map((organization) => String(organization?.id ?? ""))
+    .map((organization) => String(organization?.organizationId ?? organization?.id ?? ""))
     .filter(Boolean);
 }
 
