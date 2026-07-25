@@ -1,5 +1,5 @@
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { demoAssetVersion, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "./version.mjs";
+import { demoAssetVersion, readDemoCoverVersions, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "./version.mjs";
 
 const demoSource = new URL("../", import.meta.url);
 const publicSource = new URL("../../src/public/", import.meta.url);
@@ -13,11 +13,12 @@ await cp(new URL("demo-auth.js", demoSource), new URL("demo-auth.js", output));
 await cp(new URL("browser-ai.js", demoSource), new URL("browser-ai.js", output));
 await cp(new URL("demo-covers/", demoSource), new URL("demo-covers/", output), { recursive: true });
 const mainVersion = await readMainVersion();
+const coverVersions = await readDemoCoverVersions();
 const adapter = await readFile(new URL("mock-api.js", demoSource), "utf8");
 const browserAi = await readFile(new URL("browser-ai.js", demoSource), "utf8");
 const adapterVersion = demoAssetVersion(`${adapter}\n${browserAi}`, mainVersion);
 await writeFile(new URL("mock-api.js", output), versionedDemoAdapterSource(adapter, mainVersion));
-await writeFile(new URL("demo-version.js", output), versionModuleSource(mainVersion));
+await writeFile(new URL("demo-version.js", output), versionModuleSource(mainVersion, coverVersions));
 
 const vditorSource = new URL("../node_modules/vditor/dist/", import.meta.url);
 await cp(vditorSource, new URL("vendor/vditor/dist/", output), { recursive: true });

@@ -1,14 +1,16 @@
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, normalize, resolve } from "node:path";
-import { demoAssetVersion, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "./version.mjs";
+import { demoAssetVersion, demoCoverCacheControl, readDemoCoverVersions, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "./version.mjs";
 
 const port = Number(process.env.PORT ?? 45678);
 const demoRoot = new URL("../", import.meta.url).pathname;
 const publicRoot = new URL("../../src/public/", import.meta.url).pathname;
 const vditorRoot = new URL("../node_modules/vditor/dist/", import.meta.url).pathname;
 const mainVersion = await readMainVersion();
-const versionModule = versionModuleSource(mainVersion);
+const coverVersions = await readDemoCoverVersions();
+const versionModule = versionModuleSource(mainVersion, coverVersions);
 const adapterSource = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
 const browserAiSource = await readFile(new URL("../browser-ai.js", import.meta.url), "utf8");
 const adapterVersion = demoAssetVersion(`${adapterSource}\n${browserAiSource}`, mainVersion);
@@ -29,7 +31,8 @@ createServer(async (request, response) => {
     response.end(versionModule);
     return;
   }
-  const isDemoAsset = relativePath === "data.js" || relativePath === "demo-auth.js" || relativePath === "browser-ai.js" || relativePath === "mock-api.js" || relativePath.startsWith("demo-covers/");
+  const isDemoCover = relativePath.startsWith("demo-covers/");
+  const isDemoAsset = relativePath === "data.js" || relativePath === "demo-auth.js" || relativePath === "browser-ai.js" || relativePath === "mock-api.js" || isDemoCover;
   const isVditorAsset = relativePath.startsWith("vendor/vditor/dist/");
   const root = isDemoAsset ? demoRoot : isVditorAsset ? vditorRoot : publicRoot;
   const rootRelativePath = isVditorAsset ? relativePath.replace(/^vendor\/vditor\/dist\//, "") : relativePath;
@@ -52,7 +55,19 @@ createServer(async (request, response) => {
         (appScript) => `<script type="module" src="/mock-api.js?v=${encodeURIComponent(adapterVersion)}"></script>\n    ${appScript}`
       ));
     }
-    response.writeHead(200, { "cache-control": "no-store", "content-type": contentTypes[extname(target)] ?? "application/octet-stream" });
+    const headers = {
+      "cache-control": isDemoCover ? demoCoverCacheControl() : "no-store",
+      "content-type": contentTypes[extname(target)] ?? "application/octet-stream"
+    };
+    if (isDemoCover) {
+      headers.etag = `"${createHash("sha256").update(body).digest("hex")}"`;
+      if (request.headers["if-none-match"] === headers.etag) {
+        response.writeHead(304, headers);
+        response.end();
+        return;
+      }
+    }
+    response.writeHead(200, headers);
     response.end(body);
   } catch {
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

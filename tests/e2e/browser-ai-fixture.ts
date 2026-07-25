@@ -66,7 +66,7 @@ const mockAi = createServer(async (request, response) => {
       sendToolCalls(response, [
         { id: "browser-index", name: "story_index", arguments: { offset: 0, limit: 1 } },
         { id: "browser-read", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "both" } },
-        { id: "browser-query", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting"] } }
+        { id: "browser-query", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting"] } }
       ]);
       return;
     }
@@ -127,7 +127,7 @@ const mockAi = createServer(async (request, response) => {
   if (latestUserMessage.includes("浏览器工具失败测试")) {
     if (toolMessages.length === 0) {
       sendToolCalls(response, [
-        { id: "browser-invalid", name: "query_story_knowledge", arguments: { query: "", categories: ["unknown"] } },
+        { id: "browser-invalid", name: "search_story_entities", arguments: { query: "", categories: ["unknown"] } },
         { id: "browser-unknown", name: "write_chapter", arguments: {} }
       ]);
       return;

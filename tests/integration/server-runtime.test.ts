@@ -78,5 +78,28 @@ describe("本地服务运行时", () => {
     const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as { data: { development: boolean } };
     expect(session.data).toMatchObject({ authenticated: true, user: { username: "dev-bypass" }, csrfToken: null });
     expect(health.data.development).toBe(true);
+
+    const work = await fetch(`${running.url}/api/works`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "免登录协作作品", author: "dev", description: "" })
+    }).then(async (response) => {
+      expect(response.status).toBe(201);
+      return response.json() as Promise<{ data: { id: string } }>;
+    });
+    const presence = await fetch(`${running.url}/api/works/${work.data.id}/presence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clientId: "54b43f7d-9778-4c8a-8b59-2ae64718cd59",
+        page: { kind: "welcome" }
+      })
+    }).then(async (response) => {
+      expect(response.status).toBe(200);
+      return response.json() as Promise<{ data: Array<{ username: string }> }>;
+    });
+    expect(presence.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ username: "dev-bypass" })
+    ]));
   });
 });

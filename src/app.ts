@@ -376,7 +376,7 @@ const workAiSettingsSchema = z.object({
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"])).max(5).optional()
+  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"])).max(5).optional()
 }).strict();
 
 const contextSchema = z.object({
@@ -601,7 +601,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     logger.info("auth.login.succeeded", { actorRef: accountReference(result.session.user.userId) });
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken });
   });
-  app.use(createUserSessionMiddleware(auth, options.disableUserAuth));
+  app.use(createUserSessionMiddleware(auth, {
+    disabled: options.disableUserAuth === true,
+    resolveBypassUser: getDevelopmentUser
+  }));
   app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
   app.get("/api/cli/session", (request, response) => {

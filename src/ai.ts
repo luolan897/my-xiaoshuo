@@ -154,7 +154,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
 }
 
-const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"] as const;
+const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
 type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
@@ -197,7 +197,7 @@ const grepArguments = z.object({
   keyword: z.string().trim().min(1).max(200),
   limit: z.number().int().min(1).max(100).default(20)
 }).strict();
-const queryStoryKnowledgeArguments = z.object({
+const searchStoryEntitiesArguments = z.object({
   query: z.string().trim().min(1).max(200),
   categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([])
 }).strict();
@@ -231,11 +231,11 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 } }, required: ["keyword"], additionalProperties: false }
     }
   },
-  query_story_knowledge: {
+  search_story_entities: {
     type: "function",
     function: {
-      name: "query_story_knowledge",
-      description: "按关键词查询作品知识：设定、人物及其 Markdown 档案章节、种族、组织、时间线、关系、大纲和伏笔。结果为简要匹配项；人物结果包含 sectionId 时可调用 read_character_sections 精读。",
+      name: "search_story_entities",
+      description: "按短关键词在结构化作品实体中做字面/子串匹配：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义检索或知识库问答；请传入实体名、别名、标题或其子串，不要传入自然语言整句。返回简要匹配项；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 } }, required: ["query"], additionalProperties: false }
     }
   },
@@ -243,7 +243,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "read_character_sections",
-      description: "读取指定人物 Markdown 档案章节的摘要或原文。先通过 query_story_knowledge 获取 sectionId；每次最多读取 3 个章节。",
+      description: "读取指定人物 Markdown 档案章节的摘要或原文。先通过 search_story_entities 获取 sectionId；每次最多读取 3 个章节。",
       parameters: { type: "object", properties: { sectionIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] } }, required: ["sectionIds"], additionalProperties: false }
     }
   }
@@ -1760,7 +1760,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（传入短实体名或关键词子串，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -1854,7 +1854,7 @@ export class AiManager {
     const schema = name === "story_index" ? storyIndexArguments
       : name === "read_chapters" ? readChaptersArguments
       : name === "grep" ? grepArguments
-      : name === "query_story_knowledge" ? queryStoryKnowledgeArguments
+      : name === "search_story_entities" ? searchStoryEntitiesArguments
       : name === "read_character_sections" ? readCharacterSectionsArguments
       : null;
     if (!schema) {
@@ -1945,8 +1945,8 @@ export class AiManager {
         result: { ok: true, data: { keyword, limit, matches } }
       };
     }
-    if (name === "query_story_knowledge") {
-      const { query, categories: categoryList } = args as z.infer<typeof queryStoryKnowledgeArguments>;
+    if (name === "search_story_entities") {
+      const { query, categories: categoryList } = args as z.infer<typeof searchStoryEntitiesArguments>;
       const categories = new Set<string>(categoryList);
       const allowed = new Set(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"]);
       const matches = this.store.search(workId, query).filter((item) => !categories.size || categories.has(String(item.type))).slice(0, 20);
@@ -1956,7 +1956,25 @@ export class AiManager {
         ...this.store.listChapterOutlines(workId).map((item) => ({ type: "outline", id: item.chapterId, title: item.chapterTitle, snippet: `${item.goal} ${item.conflict} ${item.turningPoint} ${item.notes}` })),
         ...this.store.listForeshadows(workId).map((item) => ({ type: "foreshadow", id: item.id, title: item.title, snippet: `${item.description} ${item.resolutionNote}` }))
       ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
-      return { id: toolCall.id, name, calledAt, arguments: { query, categories: categoryList }, status: "completed", result: { ok: true, data: { query, matches: [...matches, ...extra].slice(0, 30) } } };
+      const combined = [...matches, ...extra].slice(0, 30);
+      return {
+        id: toolCall.id,
+        name,
+        calledAt,
+        arguments: { query, categories: categoryList },
+        status: "completed",
+        result: {
+          ok: true,
+          data: {
+            query,
+            matchMode: "literal_substring",
+            matches: combined,
+            ...(combined.length === 0
+              ? { hint: "无字面匹配。请改用更短的实体名、别名或标题子串；也可改用 story_index 浏览目录，或用 grep 搜索正文关键字。" }
+              : {})
+          }
+        }
+      };
     }
     if (name === "read_character_sections") {
       const { sectionIds, include } = args as z.infer<typeof readCharacterSectionsArguments>;
@@ -2776,10 +2794,10 @@ export class AiManager {
   private async runCharacterIdentityAudit(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const characters = this.store.listCharacters(workId);
     if (characters.length < 2) return { characterCount: characters.length, candidateCount: 0, reviewIds: [], skipped: [] };
-    const requiredTools: AgentToolId[] = ["query_story_knowledge", "grep", "read_chapters"];
+    const requiredTools: AgentToolId[] = ["search_story_entities", "grep", "read_chapters"];
     const enabledTools = new Set(this.enabledAgentToolIds(workId, "book-analysis", requiredTools));
-    if (!enabledTools.has("query_story_knowledge") || !enabledTools.has("grep")) {
-      throw new AppError(409, "AI_TOOLS_REQUIRED", "角色查重需要启用“查询作品知识”和“正文搜索”工具");
+    if (!enabledTools.has("search_story_entities") || !enabledTools.has("grep")) {
+      throw new AppError(409, "AI_TOOLS_REQUIRED", "角色查重需要启用“搜索作品实体”和“正文搜索”工具");
     }
     const roster = characters.map((character) => {
       const attributes = character.attributes as Record<string, unknown>;
@@ -2809,7 +2827,7 @@ export class AiManager {
         "审核角色规范表，找出可能把同一个角色误建成两个档案的组合，最多输出 12 组。",
         "角色规范表：",
         roster,
-        "你必须主动使用 query_story_knowledge 查询角色档案和关系，并使用 grep 分别搜索疑似组合两侧的主名或别名；需要上下文时再用 read_chapters。工具调用总数不得超过 48 次。",
+        "你必须主动使用 search_story_entities 按角色主名或别名查找角色档案和关系，并使用 grep 分别搜索疑似组合两侧的主名或别名；需要上下文时再用 read_chapters。工具调用总数不得超过 48 次。",
         "不能仅凭名字相似判断同一人。角色彼此对话、互相提及、同时出现、身份或种族冲突，都是不同角色的强反证。",
         "只把有原文连续引文支持的 same 或 uncertain 组合放入结果；确认是不同角色的组合无需输出。",
         "输出 JSON 数组。每项字段：leftCharacterId、rightCharacterId、verdict（same/uncertain）、confidence（0到1）、reason、evidence（数组，每项含 chapterId、quote、supports）、contradictions（字符串数组）。",
@@ -2818,7 +2836,7 @@ export class AiManager {
       extraSystemPrompt: "你是谨慎的角色身份消歧审核器。任何结论都只是待作者确认的建议，禁止自动合并角色。"
     });
     const toolNames = new Set(generated.toolCalls.filter((call) => call.status === "completed").map((call) => call.name));
-    if (!toolNames.has("query_story_knowledge") || !toolNames.has("grep")) {
+    if (!toolNames.has("search_story_entities") || !toolNames.has("grep")) {
       throw new AppError(502, "CHARACTER_AUDIT_INCOMPLETE", "AI 未完成角色资料查询和正文搜索，本次查重结果未保存");
     }
     const extracted = extractJson<unknown>(generated.content);

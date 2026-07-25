@@ -40,6 +40,16 @@ import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canW
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
+import {
+  clampCropRect,
+  containImageRect,
+  cropOutputSize,
+  defaultCropRect,
+  mapDisplayPointToImage,
+  mapImageRectToDisplay,
+  moveCropRect,
+  resizeCropRect
+} from "/avatar-crop.js?v=20260725-avatar-crop";
 
 const state = {
   user: null,
@@ -68,6 +78,7 @@ const state = {
   relationshipMindMap: null,
   relationshipExpandedMap: null,
   collapsedVolumeIds: new Set(),
+  collapsedRaceIds: new Set(),
   contextChapterId: null
 };
 
@@ -1186,7 +1197,7 @@ const AI_TOOL_DISPLAY_NAMES = {
   story_index: "作品目录与章节概要",
   read_chapters: "读取章节",
   grep: "查询正文关键字",
-  query_story_knowledge: "查询作品知识",
+  search_story_entities: "搜索作品实体",
   read_character_sections: "读取人物 Markdown 章节"
 };
 
@@ -1194,7 +1205,7 @@ const AI_TOOL_DESCRIPTIONS = {
   story_index: "分页读取当前作品的卷章目录和章节概要。",
   read_chapters: "读取指定章节的概要、正文或两者。",
   grep: "查询正文关键字所在的完整段落及章节信息。",
-  query_story_knowledge: "按关键词查询设定、人物、组织、时间线等作品知识。",
+  search_story_entities: "按实体名或关键词子串匹配设定、人物、组织等结构化记录；非语义检索。",
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。"
 };
 
@@ -1804,7 +1815,8 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
-    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+    // Presence is best-effort; a heartbeat 401 must not force the login wall.
+    if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
       state.user = null;
       state.csrfToken = null;
       showAuth(false);
@@ -2700,6 +2712,7 @@ function resetWorkScopedUiCaches() {
   state.settings = [];
   characterListPage = 1;
   state.collapsedVolumeIds.clear();
+  state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
   if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
   aiContextUsageTimer = null;
@@ -3156,11 +3169,83 @@ function mountModuleLayoutToggle(layout, ariaLabel) {
   $("#module-header-actions").insertAdjacentHTML("beforeend", renderModuleLayoutToggle(layout, ariaLabel));
 }
 
+function mountModuleCount(count) {
+  $("#module-header-actions").querySelector('[data-module-header-action="count"]')?.remove();
+  const safeCount = Math.max(0, Number(count) || 0);
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<span class="module-count-badge" data-module-header-action="count" aria-label="列表数量 ${safeCount}">${safeCount}</span>`);
+}
+
 function bindModuleLayoutToggle(refresh) {
   $("#module-header-actions").querySelectorAll("[data-module-layout]").forEach((button) => button.addEventListener("click", async () => {
     saveModuleLayout(button.dataset.moduleLayout);
     await refresh();
   }));
+}
+
+function raceTreeExpandIconMarkup(action) {
+  if (action === "collapse") {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 15 6-6 6 6"></path></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"></path></svg>';
+}
+
+function raceTreeExpandAction() {
+  return state.collapsedRaceIds.size === 0 ? "collapse" : "expand";
+}
+
+function renderRaceTreeExpandToggle() {
+  const action = raceTreeExpandAction();
+  const label = action === "collapse" ? "全部折叠" : "全部展开";
+  return `<div class="module-layout-toolbar race-tree-expand-toolbar" data-module-header-action="race-tree-expand">
+    <div class="module-layout-toggle" role="group" aria-label="种族树展开折叠">
+      <button type="button" data-race-tree-expand="${action}" aria-label="${label}" title="${label}">${raceTreeExpandIconMarkup(action)}</button>
+    </div>
+  </div>`;
+}
+
+function mountRaceTreeExpandToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="race-tree-expand"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", renderRaceTreeExpandToggle());
+}
+
+function syncRaceTreeExpandToggle() {
+  const button = $("#module-header-actions").querySelector("[data-race-tree-expand]");
+  if (!button) return;
+  const action = raceTreeExpandAction();
+  const label = action === "collapse" ? "全部折叠" : "全部展开";
+  button.dataset.raceTreeExpand = action;
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.innerHTML = raceTreeExpandIconMarkup(action);
+}
+
+function setAllRaceTreeNodesOpen(open) {
+  const nodes = $("#module-content").querySelectorAll("details.race-tree-node[data-race-node]");
+  if (open) state.collapsedRaceIds.clear();
+  else nodes.forEach((node) => state.collapsedRaceIds.add(node.dataset.raceNode));
+  nodes.forEach((node) => {
+    node.open = open;
+  });
+  syncRaceTreeExpandToggle();
+}
+
+function bindRaceTreeNodeToggles() {
+  $("#module-content").querySelectorAll("details.race-tree-node[data-race-node]").forEach((node) => {
+    node.addEventListener("toggle", () => {
+      const raceId = node.dataset.raceNode;
+      if (!raceId) return;
+      if (node.open) state.collapsedRaceIds.delete(raceId);
+      else state.collapsedRaceIds.add(raceId);
+      syncRaceTreeExpandToggle();
+    });
+  });
+}
+
+function bindRaceTreeExpandToggle() {
+  $("#module-header-actions").querySelector("[data-race-tree-expand]")?.addEventListener("click", (event) => {
+    const button = event.currentTarget;
+    setAllRaceTreeNodesOpen(button.dataset.raceTreeExpand === "expand");
+  });
 }
 
 function mountCharacterFilterToggle() {
@@ -3276,8 +3361,9 @@ function renderSettingRows(records) {
 }
 
 async function renderSettings() {
-  const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
+  const records = await apiAllPages(`/api/works/${state.work.id}/settings`);
   state.settings = records;
+  mountModuleCount(records.length);
   const layout = readModuleLayout();
   if (records.length) mountModuleLayoutToggle(layout, "设定列表样式");
   $("#module-content").innerHTML = records.length
@@ -3301,7 +3387,8 @@ async function renderCharacters(page = characterListPage) {
     : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
-  state.characters = characterPage.items;
+  [state.characters, state.races, state.organizations] = [characterPage.items, races, organizations];
+  mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
   const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
   const characterLockBadge = (item) => item.lockedFields.length
@@ -3341,7 +3428,7 @@ async function renderCharacters(page = characterListPage) {
   const pagination = state.characters.length && (characterPage.page > 1 || characterPage.hasMore)
     ? `<nav class="module-pagination" aria-label="角色列表分页">
       <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
-      <span>第 ${characterPage.page} 页 · 本页 ${state.characters.length} 个角色</span>
+      <span>第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页 · 本页 ${state.characters.length} 个角色 · 共 ${characterPage.total} 个角色</span>
       <button type="button" data-character-page="${characterPage.nextPage ?? characterPage.page + 1}" ${characterPage.hasMore ? "" : "disabled"}>下一页</button>
     </nav>`
     : "";
@@ -3395,7 +3482,11 @@ async function renderCharacters(page = characterListPage) {
 }
 
 async function renderRaces() {
-  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
+  [state.races, state.characters] = await Promise.all([
+    apiAllPages(`/api/works/${state.work.id}/races`),
+    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+  ]);
+  mountModuleCount(state.races.length);
   const layout = readModuleLayout();
   const canEditRaces = canEditModule("races");
   const raceActions = (item) => canEditRaces
@@ -3404,7 +3495,7 @@ async function renderRaces() {
   const raceCardActions = (item) => canEditRaces
     ? raceActions(item)
     : `<div class="card-actions">${raceActions(item)}</div>`;
-  const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
+  const renderRaceNode = (item) => `<details class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"} data-race-node="${esc(item.id)}">
     <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
     <div class="race-tree-branch">
     <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settingsCount ?? item.settings?.length ?? 0} 条自身设定</small>
@@ -3429,17 +3520,24 @@ async function renderRaces() {
     </article>`;
   }).join("")}</div>`;
   if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
+  if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle();
   $("#module-content").innerHTML = state.races.length
     ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   bindModuleLayoutToggle(renderRaces);
+  bindRaceTreeExpandToggle();
+  bindRaceTreeNodeToggles();
   const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
   bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
 async function renderOrganizations() {
-  state.organizations = await apiAllPages(`/api/works/${state.work.id}/organizations`);
+  [state.organizations, state.characters] = await Promise.all([
+    apiAllPages(`/api/works/${state.work.id}/organizations`),
+    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+  ]);
+  mountModuleCount(state.organizations.length);
   const layout = readModuleLayout();
   const canEditOrganizations = canEditModule("organizations");
   const organizationActions = (item) => canEditOrganizations
@@ -3500,9 +3598,10 @@ function setTimelineMultiSelectMode(enabled) {
 
 async function renderTimeline() {
   const [events, tracks] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/timeline`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/timeline`),
     apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
   ]);
+  mountModuleCount(events.length);
   timelineMultiSelectEnabled = false;
   $("#timeline-tools")?.remove();
   $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button><button id="timeline-multi-select-toggle" class="ghost-button" type="button" aria-pressed="false">多选</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button" hidden>合并所选事件</button>' : ""}</div>`);
@@ -3540,9 +3639,10 @@ async function renderTimeline() {
 async function renderOutlines() {
   const currentChapterId = state.chapter?.id;
   const [outlines, foreshadows] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/outlines`).then((result) => result.items),
-    apiPage(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`).then((result) => result.items)
+    apiAllPages(`/api/works/${state.work.id}/outlines`),
+    apiAllPages(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
   ]);
+  mountModuleCount(outlines.length + foreshadows.length);
   const layout = readModuleLayout();
   const unresolved = foreshadows.filter((item) => item.unresolved);
   const overdue = unresolved.filter((item) => item.overdue);
@@ -3588,7 +3688,8 @@ async function renderOutlines() {
 
 async function renderRelationships() {
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const relationships = (await apiPage(`/api/works/${state.work.id}/relationships`)).items;
+  const relationships = await apiAllPages(`/api/works/${state.work.id}/relationships`);
+  mountModuleCount(relationships.length);
   const nameOf = (id) => state.characters.find((item) => item.id === id)?.name ?? "未知角色";
   state.galaxy?.destroy();
   state.relationshipExpandedMap?.destroy?.();
@@ -3623,9 +3724,10 @@ async function renderReviews() {
   const canMergeCharacters = canResolveReview
     && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
   const [reviews, characters] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/reviews`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/reviews`),
     canReadCharacters ? apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
   ]);
+  mountModuleCount(reviews.length);
   const characterById = new Map(characters.map((character) => [character.id, character]));
   const duplicateCard = (item) => {
     const refs = (item.entityRefs ?? []).filter((reference) => reference?.type === "character" && characterById.has(reference.id));
@@ -3710,11 +3812,12 @@ async function renderReviews() {
 
 async function renderTasks() {
   const [tasks, settings] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/tasks?view=summary`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/tasks?view=summary`),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
       : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
   ]);
+  mountModuleCount(tasks.length);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
   const pendingCount = tasks.filter((item) => item.status === "pending").length;
   const runningCount = tasks.filter((item) => item.status === "running").length;
@@ -3931,13 +4034,13 @@ async function renderBookAiSettings() {
     api(`/api/works/${state.work.id}/task-defaults`)
   ]);
   const host = $("#module-content");
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"]);
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话长期记忆</h2><p>对话历史使用独立预算；达到阈值时先提醒，继续发送会把较早消息整理成带来源的结构化长期记忆，并尽量保留最近八条原文。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">整理提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话长期记忆整理提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存整理阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
-  host.querySelector('input[name="agent-tool"][value="query_story_knowledge"]').closest("label").insertAdjacentHTML(
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话长期记忆</h2><p>对话历史使用独立预算；达到阈值时先提醒，继续发送会把较早消息整理成带来源的结构化长期记忆，并尽量保留最近八条原文。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">整理提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话长期记忆整理提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存整理阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
     `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
   );
-  host.querySelector('input[name="agent-tool"][value="query_story_knowledge"]').closest("label").insertAdjacentHTML(
+  host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "afterend",
     `<label><input name="agent-tool" type="checkbox" value="read_character_sections" ${agentTools.has("read_character_sections") ? "checked" : ""}><span><strong>读取人物 Markdown 章节</strong><small>根据知识查询返回的章节 ID 精读人物背景、能力与经历原文。</small></span></label>`
   );
@@ -6268,6 +6371,196 @@ $("#account-settings-button").addEventListener("click", () => {
 });
 $("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
 $("#avatar-upload-button").addEventListener("click", () => $("#avatar-file").click());
+
+const avatarCropSession = {
+  objectUrl: null,
+  imageWidth: 0,
+  imageHeight: 0,
+  crop: { x: 0, y: 0, size: 0 },
+  display: { x: 0, y: 0, width: 0, height: 0, scale: 0 },
+  drag: null,
+  uploading: false
+};
+
+function releaseAvatarCropObjectUrl() {
+  if (!avatarCropSession.objectUrl) return;
+  URL.revokeObjectURL(avatarCropSession.objectUrl);
+  avatarCropSession.objectUrl = null;
+}
+
+function closeAvatarCropDialog() {
+  const dialog = $("#avatar-crop-dialog");
+  if (dialog?.open) dialog.close();
+}
+
+function resetAvatarCropDialog() {
+  releaseAvatarCropObjectUrl();
+  avatarCropSession.drag = null;
+  avatarCropSession.imageWidth = 0;
+  avatarCropSession.imageHeight = 0;
+  avatarCropSession.crop = { x: 0, y: 0, size: 0 };
+  const image = $("#avatar-crop-image");
+  if (image) image.removeAttribute("src");
+  $("#avatar-crop-selection")?.setAttribute("hidden", "");
+  $("#avatar-crop-preview")?.replaceChildren();
+  const fileInput = $("#avatar-file");
+  if (fileInput) fileInput.value = "";
+}
+
+function stagePointFromEvent(event) {
+  const stage = $("#avatar-crop-stage");
+  const bounds = stage.getBoundingClientRect();
+  return {
+    x: event.clientX - bounds.left,
+    y: event.clientY - bounds.top
+  };
+}
+
+function paintAvatarCropPreview() {
+  const preview = $("#avatar-crop-preview");
+  const image = $("#avatar-crop-image");
+  if (!preview || !image?.naturalWidth || avatarCropSession.crop.size < 1) {
+    preview?.replaceChildren();
+    return;
+  }
+  const output = cropOutputSize(avatarCropSession.crop.size);
+  let canvas = preview.querySelector("canvas");
+  if (!canvas) {
+    preview.replaceChildren();
+    canvas = document.createElement("canvas");
+    preview.append(canvas);
+  }
+  canvas.width = output;
+  canvas.height = output;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.clearRect(0, 0, output, output);
+  context.beginPath();
+  context.arc(output / 2, output / 2, output / 2, 0, Math.PI * 2);
+  context.closePath();
+  context.clip();
+  context.drawImage(
+    image,
+    avatarCropSession.crop.x,
+    avatarCropSession.crop.y,
+    avatarCropSession.crop.size,
+    avatarCropSession.crop.size,
+    0,
+    0,
+    output,
+    output
+  );
+}
+
+function renderAvatarCropSelection() {
+  const stage = $("#avatar-crop-stage");
+  const selection = $("#avatar-crop-selection");
+  const shade = $("#avatar-crop-shade");
+  const image = $("#avatar-crop-image");
+  if (!stage || !selection || !shade || !image?.naturalWidth) return;
+
+  avatarCropSession.display = containImageRect(
+    avatarCropSession.imageWidth,
+    avatarCropSession.imageHeight,
+    stage.clientWidth,
+    stage.clientHeight
+  );
+  const shown = mapImageRectToDisplay(avatarCropSession.crop, avatarCropSession.display);
+  if (shown.size < 1) {
+    selection.setAttribute("hidden", "");
+    shade.style.webkitMaskSize = "100% 100%, 0 0";
+    shade.style.maskSize = "100% 100%, 0 0";
+    return;
+  }
+  selection.hidden = false;
+  selection.style.left = `${shown.x}px`;
+  selection.style.top = `${shown.y}px`;
+  selection.style.width = `${shown.size}px`;
+  selection.style.height = `${shown.size}px`;
+  const hole = `${Math.max(0, shown.size)}px ${Math.max(0, shown.size)}px`;
+  const position = `${shown.x}px ${shown.y}px`;
+  shade.style.webkitMaskSize = `100% 100%, ${hole}`;
+  shade.style.maskSize = `100% 100%, ${hole}`;
+  shade.style.webkitMaskPosition = `0 0, ${position}`;
+  shade.style.maskPosition = `0 0, ${position}`;
+  paintAvatarCropPreview();
+}
+
+function applyAvatarCropRect(next) {
+  avatarCropSession.crop = clampCropRect(next, avatarCropSession.imageWidth, avatarCropSession.imageHeight);
+  renderAvatarCropSelection();
+}
+
+async function openAvatarCropDialog(file) {
+  releaseAvatarCropObjectUrl();
+  const objectUrl = URL.createObjectURL(file);
+  avatarCropSession.objectUrl = objectUrl;
+  const image = $("#avatar-crop-image");
+  const dialog = $("#avatar-crop-dialog");
+  await new Promise((resolve, reject) => {
+    const onLoad = () => {
+      image.removeEventListener("error", onError);
+      resolve();
+    };
+    const onError = () => {
+      image.removeEventListener("load", onLoad);
+      reject(new Error("无法读取所选图片"));
+    };
+    image.addEventListener("load", onLoad, { once: true });
+    image.addEventListener("error", onError, { once: true });
+    image.src = objectUrl;
+  });
+  avatarCropSession.imageWidth = image.naturalWidth;
+  avatarCropSession.imageHeight = image.naturalHeight;
+  if (avatarCropSession.imageWidth > 4096 || avatarCropSession.imageHeight > 4096) {
+    resetAvatarCropDialog();
+    throw new Error("图片尺寸不能超过 4096 × 4096 像素");
+  }
+  avatarCropSession.crop = defaultCropRect(avatarCropSession.imageWidth, avatarCropSession.imageHeight);
+  if (avatarCropSession.crop.size < 1) {
+    resetAvatarCropDialog();
+    throw new Error("图片尺寸无效");
+  }
+  if (!dialog.open) dialog.showModal();
+  requestAnimationFrame(() => {
+    renderAvatarCropSelection();
+    $("#avatar-crop-confirm")?.focus();
+  });
+}
+
+function exportAvatarCropBlob() {
+  const image = $("#avatar-crop-image");
+  if (!image?.naturalWidth || avatarCropSession.crop.size < 1) {
+    return Promise.reject(new Error("请先完成头像裁剪"));
+  }
+  const output = cropOutputSize(avatarCropSession.crop.size);
+  const canvas = document.createElement("canvas");
+  canvas.width = output;
+  canvas.height = output;
+  const context = canvas.getContext("2d");
+  if (!context) return Promise.reject(new Error("当前浏览器无法裁剪图片"));
+  context.drawImage(
+    image,
+    avatarCropSession.crop.x,
+    avatarCropSession.crop.y,
+    avatarCropSession.crop.size,
+    avatarCropSession.crop.size,
+    0,
+    0,
+    output,
+    output
+  );
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("头像裁剪失败"));
+        return;
+      }
+      resolve(blob);
+    }, "image/png");
+  });
+}
+
 $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
@@ -6276,23 +6569,115 @@ $("#avatar-file").addEventListener("change", async (event) => {
     event.target.value = "";
     return;
   }
-  const body = new FormData();
-  body.append("file", file);
+  try {
+    await openAvatarCropDialog(file);
+  } catch (error) {
+    toast(error.message, "error");
+    event.target.value = "";
+  }
+});
+
+$("#avatar-crop-stage").addEventListener("pointerdown", (event) => {
+  if (!$("#avatar-crop-dialog")?.open || avatarCropSession.uploading) return;
+  const handle = event.target.closest("[data-avatar-crop-handle]")?.dataset.avatarCropHandle;
+  const onSelection = event.target.closest("#avatar-crop-selection");
+  if (!handle && !onSelection) return;
+  event.preventDefault();
+  const point = stagePointFromEvent(event);
+  const imagePoint = mapDisplayPointToImage(point, avatarCropSession.display);
+  avatarCropSession.drag = {
+    mode: handle ? "resize" : "move",
+    handle: handle || null,
+    originX: imagePoint.x,
+    originY: imagePoint.y,
+    startCrop: { ...avatarCropSession.crop }
+  };
+  $("#avatar-crop-selection").classList.add("is-dragging");
+  $("#avatar-crop-stage").setPointerCapture(event.pointerId);
+});
+
+$("#avatar-crop-stage").addEventListener("pointermove", (event) => {
+  if (!avatarCropSession.drag) return;
+  const point = stagePointFromEvent(event);
+  const imagePoint = mapDisplayPointToImage(point, avatarCropSession.display);
+  if (avatarCropSession.drag.mode === "move") {
+    applyAvatarCropRect(moveCropRect(
+      avatarCropSession.drag.startCrop,
+      imagePoint.x - avatarCropSession.drag.originX,
+      imagePoint.y - avatarCropSession.drag.originY,
+      avatarCropSession.imageWidth,
+      avatarCropSession.imageHeight
+    ));
+    return;
+  }
+  applyAvatarCropRect(resizeCropRect(
+    avatarCropSession.drag.startCrop,
+    avatarCropSession.drag.handle,
+    imagePoint.x,
+    imagePoint.y,
+    avatarCropSession.imageWidth,
+    avatarCropSession.imageHeight
+  ));
+});
+
+function endAvatarCropDrag(event) {
+  if (!avatarCropSession.drag) return;
+  avatarCropSession.drag = null;
+  $("#avatar-crop-selection")?.classList.remove("is-dragging");
+  if (event?.pointerId != null && $("#avatar-crop-stage")?.hasPointerCapture?.(event.pointerId)) {
+    $("#avatar-crop-stage").releasePointerCapture(event.pointerId);
+  }
+}
+
+$("#avatar-crop-stage").addEventListener("pointerup", endAvatarCropDrag);
+$("#avatar-crop-stage").addEventListener("pointercancel", endAvatarCropDrag);
+
+window.addEventListener("resize", () => {
+  if ($("#avatar-crop-dialog")?.open) renderAvatarCropSelection();
+});
+
+$("#avatar-crop-close").addEventListener("click", () => {
+  if (!avatarCropSession.uploading) closeAvatarCropDialog();
+});
+$("#avatar-crop-cancel").addEventListener("click", () => {
+  if (!avatarCropSession.uploading) closeAvatarCropDialog();
+});
+$("#avatar-crop-dialog").addEventListener("cancel", (event) => {
+  if (avatarCropSession.uploading) event.preventDefault();
+});
+$("#avatar-crop-dialog").addEventListener("close", () => {
+  if (avatarCropSession.uploading) return;
+  resetAvatarCropDialog();
+});
+
+$("#avatar-crop-confirm").addEventListener("click", async () => {
+  if (avatarCropSession.uploading) return;
+  avatarCropSession.uploading = true;
+  $("#avatar-crop-confirm").disabled = true;
+  $("#avatar-crop-cancel").disabled = true;
   $("#avatar-upload-button").disabled = true;
   $("#avatar-remove-button").disabled = true;
   try {
+    const blob = await exportAvatarCropBlob();
+    const body = new FormData();
+    body.append("file", blob, "avatar.png");
     const updated = await api("/api/auth/avatar", { method: "PUT", body });
     applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
     renderProfileAvatar();
+    avatarCropSession.uploading = false;
+    closeAvatarCropDialog();
     toast("头像已更新");
   } catch (error) {
     toast(error.message, "error");
   } finally {
+    avatarCropSession.uploading = false;
+    $("#avatar-crop-confirm").disabled = false;
+    $("#avatar-crop-cancel").disabled = false;
     $("#avatar-upload-button").disabled = false;
     $("#avatar-remove-button").disabled = false;
-    event.target.value = "";
   }
 });
+
 $("#avatar-remove-button").addEventListener("click", async () => {
   if (!state.user?.avatarUrl || !(await confirmToast("确定移除当前头像吗？", { title: "移除头像", confirmLabel: "确认移除" }))) return;
   $("#avatar-upload-button").disabled = true;
