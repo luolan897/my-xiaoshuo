@@ -77,6 +77,10 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("data-character-page");
     expect(application.text).toContain("上一页");
     expect(application.text).toContain("下一页");
+    expect(application.text).toContain("共 ${characterPage.total} 个角色");
+    expect(application.text).toContain("第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页");
+    expect(application.text).toContain("function mountModuleCount(count)");
+    expect(application.text).toContain("class=\"module-count-badge\"");
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");

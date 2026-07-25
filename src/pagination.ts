@@ -12,6 +12,7 @@ export type PaginatedResult<T> = {
   limit: number;
   hasMore: boolean;
   nextPage: number | null;
+  total?: number;
 };
 
 function queryValue(query: unknown, key: string): unknown {
@@ -46,13 +47,14 @@ export function paginationSql(pagination: Pagination): { sql: string; params: [n
   return { sql: " LIMIT ? OFFSET ?", params: [pagination.limit + 1, pagination.offset] };
 }
 
-export function paginated<T>(items: T[], pagination: Pagination): PaginatedResult<T> {
+export function paginated<T>(items: T[], pagination: Pagination, total?: number): PaginatedResult<T> {
   const hasMore = items.length > pagination.limit;
   return {
     items: hasMore ? items.slice(0, pagination.limit) : items,
     page: pagination.page,
     limit: pagination.limit,
     hasMore,
-    nextPage: hasMore ? pagination.page + 1 : null
+    nextPage: hasMore ? pagination.page + 1 : null,
+    ...(total === undefined ? {} : { total })
   };
 }
