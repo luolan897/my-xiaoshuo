@@ -386,7 +386,7 @@ export class Database {
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
-        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge","grep","read_character_sections"]',
+        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections"]',
         updated_at TEXT NOT NULL
       );
 
@@ -1601,6 +1601,37 @@ export class Database {
         const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
         if (characterColumns.has("visibility")) this.run("ALTER TABLE characters DROP COLUMN visibility");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (39, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(40)) {
+      this.transaction(() => {
+        const rows = this.all<{ work_id: string; agent_tools_json: string }>("SELECT work_id, agent_tools_json FROM work_ai_settings");
+        for (const row of rows) {
+          let tools: unknown = [];
+          try {
+            tools = JSON.parse(String(row.agent_tools_json));
+          } catch {
+            tools = [];
+          }
+          if (!Array.isArray(tools)) {
+            this.run(
+              `UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?`,
+              '["story_index","read_chapters","search_story_entities","grep","read_character_sections"]',
+              row.work_id
+            );
+            continue;
+          }
+          const next = [...new Set(tools.map((item) => item === "query_story_knowledge" ? "search_story_entities" : item)
+            .filter((item): item is string => typeof item === "string" && item.length > 0))];
+          this.run(`UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?`, JSON.stringify(next), row.work_id);
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (40, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

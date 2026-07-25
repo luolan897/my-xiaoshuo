@@ -367,7 +367,7 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }>; messages: Array<{ role: string; content?: string }> };
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "tool-call-1", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -409,7 +409,7 @@ describe("AI 供应商、模型与建议 API", () => {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
           id: "race-knowledge",
           type: "function",
-          function: { name: "query_story_knowledge", arguments: { query: "泰坦", categories: ["race", "character"] } }
+          function: { name: "search_story_entities", arguments: { query: "泰坦", categories: ["race", "character"] } }
         }] } }] }), { status: 200 });
       }
       const toolMessage = body.messages.find((message) => message.role === "tool");
@@ -427,7 +427,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
 
     expect(response.body.data.content).toBe("已读取种族层级。");
-    expect(response.body.data.toolCalls).toEqual([expect.objectContaining({ name: "query_story_knowledge", status: "completed" })]);
+    expect(response.body.data.toolCalls).toEqual([expect.objectContaining({ name: "search_story_entities", status: "completed" })]);
   });
 
   it("覆盖所有查询工具的可选参数组合并把结构化结果交回模型", async () => {
@@ -448,8 +448,8 @@ describe("AI 供应商、模型与建议 API", () => {
       { id: "chapter-both", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "both" } },
       { id: "grep-default", name: "grep", arguments: { keyword: "林舟" } },
       { id: "grep-limit", name: "grep", arguments: { keyword: "林舟", limit: 1 } },
-      { id: "knowledge-default", name: "query_story_knowledge", arguments: { query: "跃迁" } },
-      { id: "knowledge-categories", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
+      { id: "knowledge-default", name: "search_story_entities", arguments: { query: "跃迁" } },
+      { id: "knowledge-categories", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
       { id: "character-section-summary", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "summary" } },
       { id: "character-section-content", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "content" } },
       { id: "character-section-both", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "both" } }
@@ -473,8 +473,8 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(results.get("chapter-both")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, summary: "", content: "林舟启动了飞船。" }] } });
       expect(results.get("grep-default")).toMatchObject({ ok: true, data: { keyword: "林舟", limit: 20, matches: [{ chapterId, chapterTitle: "第一章", paragraph: "林舟启动了飞船。" }] } });
       expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
-      expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁" } });
-      expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matches: expect.any(Array) } });
+      expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "literal_substring" } });
+      expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matchMode: "literal_substring", matches: expect.any(Array) } });
       expect(results.get("character-section-summary")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, characterName: "哥斯拉", summary: "哥斯拉在远古时期守护地球生态。" }] } });
       expect(results.get("character-section-summary")).not.toHaveProperty("data.sections.0.contentMarkdown");
       expect(results.get("character-section-content")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, contentMarkdown: "## 远古时期\n\n哥斯拉守护地球生态。" }] } });
@@ -510,7 +510,7 @@ describe("AI 供应商、模型与建议 API", () => {
           { id: "bad-read", type: "function", function: { name: "read_chapters", arguments: { chapterIds: [], include: "invalid" } } },
           { id: "bad-character-section", type: "function", function: { name: "read_character_sections", arguments: { sectionIds: [], include: "invalid" } } },
           { id: "bad-grep", type: "function", function: { name: "grep", arguments: { keyword: "", limit: 0 } } },
-          { id: "bad-query", type: "function", function: { name: "query_story_knowledge", arguments: { query: "", categories: ["unknown"] } } },
+          { id: "bad-query", type: "function", function: { name: "search_story_entities", arguments: { query: "", categories: ["unknown"] } } },
           { id: "unknown", type: "function", function: { name: "write_chapter", arguments: {} } }
         ] } }] }), { status: 200 });
       }

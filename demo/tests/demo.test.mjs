@@ -4,7 +4,7 @@ import test from "node:test";
 import { BROWSER_AI_STORAGE_KEY, buildBrowserAiMessages, createBrowserAiStore, publicProvider, requestBrowserAi } from "../browser-ai.js";
 import { works } from "../data.js";
 import { DEMO_CREDENTIALS, isValidDemoLogin } from "../demo-auth.js";
-import { demoAssetVersion, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "../scripts/version.mjs";
+import { demoAssetVersion, demoCoverCacheControl, readDemoCoverVersions, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "../scripts/version.mjs";
 
 test("预制两本不同类型的作品", () => {
   assert.equal(works.length, 2);
@@ -99,11 +99,23 @@ test("浏览器直接调用 OpenAI 兼容模型并携带作品上下文", async 
 
 test("两本预制作品都设置了项目内封面", async () => {
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
-  assert.match(adapter, /\/demo-covers\/\$\{id\}\.webp/);
+  const server = await readFile(new URL("../scripts/serve.mjs", import.meta.url), "utf8");
+  const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
+  const coverVersions = await readDemoCoverVersions();
+  assert.match(adapter, /DEMO_COVER_VERSIONS/);
+  assert.match(adapter, /\/demo-covers\/\$\{id\}\.webp\?v=\$\{encodeURIComponent\(DEMO_COVER_VERSIONS\[id\] \?\? "0"\)\}/);
+  assert.match(server, /demoCoverCacheControl/);
+  assert.match(server, /isDemoCover/);
+  assert.equal(demoCoverCacheControl(), "public, max-age=31536000, immutable");
+  assert.equal(vercel.headers?.[0]?.source, "/demo-covers/(.*)");
+  assert.equal(vercel.headers?.[0]?.headers?.[0]?.value, "public, max-age=31536000, immutable");
+  assert.deepEqual(Object.keys(coverVersions).sort(), ["city-blank", "silent-tide"]);
   for (const filename of ["silent-tide.webp", "city-blank.webp"]) {
     const cover = await stat(new URL(`../demo-covers/${filename}`, import.meta.url));
     assert.ok(cover.size > 50_000, `${filename} 不是有效的完整封面`);
     assert.ok(cover.size <= 200_000, `${filename} 超过 200 KB`);
+    const id = filename.slice(0, -".webp".length);
+    assert.match(coverVersions[id], /^[a-f0-9]{8}$/u);
   }
   for (const filename of ["silent-tide.png", "city-blank.png"]) {
     const original = await stat(new URL(`../cover-originals/${filename}`, import.meta.url));
@@ -128,7 +140,8 @@ test("Demo 版本直接继承主项目版本", async () => {
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
   assert.equal(await readMainVersion(), mainPackage.version);
   assert.equal(Object.hasOwn(demoPackage, "version"), false);
-  assert.equal(versionModuleSource(mainPackage.version), `export const DEMO_VERSION = ${JSON.stringify(mainPackage.version)};\n`);
+  assert.equal(versionModuleSource(mainPackage.version), `export const DEMO_VERSION = ${JSON.stringify(mainPackage.version)};\nexport const DEMO_COVER_VERSIONS = {};\n`);
+  assert.equal(versionModuleSource(mainPackage.version, { "silent-tide": "abcd1234" }), `export const DEMO_VERSION = ${JSON.stringify(mainPackage.version)};\nexport const DEMO_COVER_VERSIONS = ${JSON.stringify({ "silent-tide": "abcd1234" })};\n`);
   assert.match(demoAssetVersion(adapter, mainPackage.version), new RegExp(`^${mainPackage.version.replaceAll(".", "\\.")}-[a-f0-9]{8}$`));
   assert.match(versionedDemoAdapterSource(adapter, mainPackage.version), new RegExp(`demo-version\\.js\\?v=${mainPackage.version.replaceAll(".", "\\.")}`));
   assert.match(adapter, /version: DEMO_VERSION/);

@@ -23,7 +23,14 @@ describe("编辑器工具栏布局", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
 
     expect(page.text).toContain('<span id="chapter-path" class="eyebrow">未选择章节</span>\n            <input id="chapter-title"');
+    expect(page.text).toContain('id="chapter-edit-button" class="primary-button hidden"');
+    expect(page.text).toContain(">编辑</button>");
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
+    expect(styles.text).toContain(".editor-view.is-read-only #tidy-blank-lines-button");
+    expect(styles.text).toContain(".editor-view.is-read-only #save-button");
+    expect(application.text).toContain("function applyChapterEditorMode()");
+    expect(application.text).toContain("function enterChapterEditMode()");
+    expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", enterChapterEditMode)');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
     expect(styles.text).toContain('.file-button, .add-button { display: grid; place-items: center;');
     expect(page.text).toContain('id="new-volume-button" class="add-button"');
