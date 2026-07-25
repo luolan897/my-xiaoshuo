@@ -97,6 +97,8 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
     expect(application.text).toContain('const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;');
     expect(application.text).toContain('hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`)');
+    expect(application.text).toContain('filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)');
+    expect(application.text).toContain('filterOptionList(organizations, selectedOrganizationIds, "id")');
     expect(application.text).toContain('await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)');
     expect(application.text).toContain('apiAllPages(`/api/works/${state.work.id}/races`)');
     expect(application.text).toContain('apiAllPages(`/api/works/${state.work.id}/organizations`)');
