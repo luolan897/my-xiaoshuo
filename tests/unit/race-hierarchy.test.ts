@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildRaceForest, eligibleRaceParents, raceDescendantIds, racePathLabel } from "../../src/public/race-hierarchy.js";
+import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, raceDescendantIds, racePathLabel } from "../../src/public/race-hierarchy.js";
 
 const races = [
   { id: "human", name: "人类", parentRaceId: null, lineage: [{ id: "human", name: "人类" }] },
@@ -22,5 +22,25 @@ describe("种族层级前端逻辑", () => {
     expect(racePathLabel(races[3])).toBe("泰坦 / 原生泰坦 / 阿尔法泰坦");
     expect([...raceDescendantIds(races, "titan")]).toEqual(expect.arrayContaining(["original", "alpha"]));
     expect(eligibleRaceParents(races, "original").map((race: { id: string }) => race.id)).toEqual(["human", "titan"]);
+  });
+
+  it("筛选选项先展示全部根节点，再按父节点集中排列子节点", () => {
+    const options = [
+      { id: "titan-child-b", name: "贝塔泰坦", parentRaceId: "titan" },
+      { id: "human-child", name: "新人类", parentRaceId: "human" },
+      { id: "titan", name: "泰坦", parentRaceId: null },
+      { id: "titan-grandchild", name: "幼生泰坦", parentRaceId: "titan-child-a" },
+      { id: "human", name: "人类", parentRaceId: null },
+      { id: "titan-child-a", name: "阿尔法泰坦", parentRaceId: "titan" }
+    ];
+
+    expect(orderRaceFilterOptions(options).map((race: { id: string }) => race.id)).toEqual([
+      "human",
+      "titan",
+      "human-child",
+      "titan-child-a",
+      "titan-child-b",
+      "titan-grandchild"
+    ]);
   });
 });

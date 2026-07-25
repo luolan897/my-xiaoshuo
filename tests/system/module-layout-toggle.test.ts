@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260726-task-progress');
-    expect(page.text).toContain('/app.js?v=20260726-task-progress');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260726-task-progress"></script>');
+    expect(page.text).toContain('/styles.css?v=20260726-analysis-settings-task-progress');
+    expect(page.text).toContain('/app.js?v=20260726-analysis-settings-task-progress');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260726-analysis-settings-task-progress"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -97,6 +97,8 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
     expect(application.text).toContain('const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;');
     expect(application.text).toContain('hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`)');
+    expect(application.text).toContain('filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)');
+    expect(application.text).toContain('filterOptionList(organizations, selectedOrganizationIds, "id")');
     expect(application.text).toContain('await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)');
     expect(application.text).toContain('apiAllPages(`/api/works/${state.work.id}/races`)');
     expect(application.text).toContain('apiAllPages(`/api/works/${state.work.id}/organizations`)');

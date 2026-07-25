@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260725-galaxy-ripple";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260726-network-theme-palette";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
@@ -35,7 +35,7 @@ import {
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
-import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
+import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260726-race-filter-order";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
@@ -3504,7 +3504,7 @@ async function renderCharacters(page = characterListPage) {
     return `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedIds.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`;
   }).join("");
   const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
-    <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(races, selectedRaceIds)}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)}</div></details>
     <details class="character-filter-dropdown"><summary><span>按组织筛选</span><strong>${selectedOrganizationNames.length ? `已选 ${selectedOrganizationNames.length} 项` : "全部组织"}</strong></summary><div id="character-organization-filter" class="character-filter-options">${filterOptionList(organizations, selectedOrganizationIds, "id")}</div></details>
     <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
@@ -3544,10 +3544,7 @@ async function renderCharacters(page = characterListPage) {
 }
 
 async function renderRaces() {
-  [state.races, state.characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/races`),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
   mountModuleCount(state.races.length);
   const layout = readModuleLayout();
   const canEditRaces = canEditModule("races");
@@ -3751,6 +3748,7 @@ async function renderOutlines() {
 async function renderRelationships() {
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const relationships = await apiAllPages(`/api/works/${state.work.id}/relationships`);
+  const canEditRelationships = canEditModule("relationships");
   mountModuleCount(relationships.length);
   const nameOf = (id) => state.characters.find((item) => item.id === id)?.name ?? "未知角色";
   state.galaxy?.destroy();
@@ -3760,7 +3758,7 @@ async function renderRelationships() {
   state.relationshipGraph = graph;
   $("#module-content").innerHTML = `<div id="relationship-map-host"></div>${relationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${relationships.map((item) => `
     <tr><td>${esc(nameOf(item.fromCharacterId))} ${item.directed ? "→" : "—"} ${esc(nameOf(item.toCharacterId))}</td>
-    <td>${esc(relationshipCategoryLabel(item.category))} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(relationshipConfirmationLabel(item.confirmationStatus))}</td><td class="relationship-actions"><button data-edit-relationship="${esc(item.id)}">编辑</button><button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
+    <td>${esc(relationshipCategoryLabel(item.category))} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(relationshipConfirmationLabel(item.confirmationStatus))}</td><td class="relationship-actions">${canEditRelationships ? `<button data-edit-relationship="${esc(item.id)}">编辑</button>` : ""}<button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
   const openGalaxy = () => {
     state.galaxy?.destroy();
     state.galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, { workId: state.work.id });
@@ -5933,11 +5931,30 @@ async function openRelationshipDialog(item, options = {}) {
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
-  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
+  const relationshipName = item ? `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}` : "";
+  const management = item && canEditModule("relationships") ? `<section class="entity-dialog-management" aria-label="人物关系操作">
+    <div><strong>关系操作</strong><small>删除操作会记录到版本历史和审计日志。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-relationship-delete>删除关系</button></div>
+  </section>` : "";
+  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false) + management, async (form) => {
     const keywords = uniqueRelationshipKeywords(form.getAll("keywords").map(String));
     await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed", ...(item ? { expectedVersionNo: item.versionNo } : {}) } });
     await refreshRelationshipSurfaces(options.characterId ?? null);
   }, item ? "关系档案" : "人工确认关系");
+  $("#dialog-fields").querySelector("[data-dialog-relationship-delete]")?.addEventListener("click", async () => {
+    const dialog = $("#form-dialog");
+    dialog.close();
+    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return dialog.showModal();
+    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return dialog.showModal();
+    try {
+      await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+      await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
+      toast(`已删除人物关系“${relationshipName}”`);
+    } catch (error) {
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  });
 }
 
 function openReviewDialog() {

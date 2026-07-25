@@ -518,6 +518,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     const uploaded = await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", png, "cover.png").expect(200);
     expect(uploaded.body.data.coverUrl).toContain(`/api/works/${workId}/cover?v=`);
     const cover = await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/png/u);
+    expect(cover.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
     expect(cover.body).toEqual(png);
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x01]);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", jpeg, "cover.jpg").expect(200);

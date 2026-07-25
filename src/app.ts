@@ -1737,18 +1737,28 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       response.type("text/html").send(html);
     };
     app.get(["/", "/index.html"], sendIndexHtml);
+    const setStaticCacheControl = (response: Response) => {
+      const version = response.req.query.v;
+      response.setHeader("Cache-Control", typeof version === "string" && version.length > 0
+        ? "public, max-age=31536000, immutable"
+        : "public, max-age=3600, must-revalidate");
+    };
     const vditorPath = join(process.cwd(), "node_modules", "vditor", "dist");
     if (existsSync(vditorPath)) {
       app.use("/vendor/vditor/dist", express.static(vditorPath, {
+        cacheControl: false,
         index: false,
-        maxAge: 0,
-        setHeaders: (response) => response.setHeader("Cache-Control", "no-store")
+        etag: true,
+        lastModified: true,
+        setHeaders: setStaticCacheControl
       }));
     }
     app.use(express.static(publicPath, {
+      cacheControl: false,
       index: false,
-      maxAge: 0,
-      setHeaders: (response) => response.setHeader("Cache-Control", "no-store")
+      etag: true,
+      lastModified: true,
+      setHeaders: setStaticCacheControl
     }));
     app.get("/{*path}", (request, response, next) => {
       if (request.path.startsWith("/api/")) return next();
