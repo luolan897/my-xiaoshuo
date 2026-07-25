@@ -1019,7 +1019,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .provider-card .model-pill { max-width: 100%; margin: 0; border: 0; text-align: left; white-space: normal; cursor: pointer; }
 .provider-card .model-pill:hover, .provider-card .model-pill:focus-visible { background: var(--surface-hover); color: var(--ink); }
 .provider-card .card-actions { flex-wrap: wrap; }
-.pill { display: inline-block; padding: 3px 7px; margin: 0 4px 4px 0; border-radius: 12px; background: var(--paper-deep); color: var(--muted); font-size: 9px; }
+.pill { display: inline-block; padding: 3px 7px; margin: 0 4px 4px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--muted); font-size: 9px; }
 .organization-links { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 8px 0 6px; }.organization-links b { color: var(--muted); font-size: 9px; font-weight: 500; }.organization-links .pill { margin: 0; }.organization-empty { color: var(--muted); font-size: 9px; }.organization-pill { border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); color: var(--accent-dark); background: color-mix(in srgb, var(--accent) 20%, var(--surface)); }.organization-settings { margin: 10px 0 6px; }.organization-members { margin-top: 9px !important; }.relationship-keyword { white-space: nowrap; }
 .race-settings { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0 6px; }.race-settings .pill { margin: 0; }.race-members { margin-top: 9px !important; }
 .race-tree { display: grid; gap: 12px; }
