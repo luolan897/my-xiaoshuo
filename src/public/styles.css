@@ -619,17 +619,23 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.prose-hidden-mode:not(.shelf-mode) .panel-heading,
 .app-shell.prose-hidden-mode:not(.shelf-mode) #novel-tree { display: none !important; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
-.app-shell.prose-read-only-mode:not(.shelf-mode) #save-button { display: none !important; }
+.app-shell.prose-read-only-mode:not(.shelf-mode) #save-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-edit-button { display: none !important; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-title[readonly],
 .app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-content[readonly] { cursor: default; }
 .app-shell.view-only-mode:not(.shelf-mode) #module-create-button,
 .app-shell.view-only-mode:not(.shelf-mode) [data-work-settings],
 .app-shell.view-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
-.app-shell.view-only-mode:not(.shelf-mode) #save-button { display: none !important; }
+.app-shell.view-only-mode:not(.shelf-mode) #save-button,
+.app-shell.view-only-mode:not(.shelf-mode) #chapter-edit-button { display: none !important; }
 .app-shell.view-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
 .app-shell.view-only-mode:not(.shelf-mode) #chapter-title[readonly],
 .app-shell.view-only-mode:not(.shelf-mode) #chapter-content[readonly] { cursor: default; }
+.editor-view.is-read-only #tidy-blank-lines-button,
+.editor-view.is-read-only #save-button { display: none !important; }
+.editor-view.is-read-only #chapter-title[readonly],
+.editor-view.is-read-only #chapter-content[readonly] { cursor: default; }
 body.work-viewer-mode [data-setting-status],
 body.work-viewer-mode [data-edit-setting],
 body.work-viewer-mode [data-edit-character],

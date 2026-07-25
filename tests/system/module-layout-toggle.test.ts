@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-mobile-workspace-unify');
-    expect(page.text).toContain('/app.js?v=20260725-mobile-workspace-unify');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-mobile-workspace-unify"></script>');
+    expect(page.text).toContain('/styles.css?v=20260725-chapter-read-mode');
+    expect(page.text).toContain('/app.js?v=20260725-chapter-read-mode');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-chapter-read-mode"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -73,6 +73,15 @@ describe("知识模块布局切换", () => {
     expect(page.text).not.toContain('id="setting-change-note-field"');
     expect(page.text).toContain('id="character-editor-edit"');
     expect(page.text).toContain('id="knowledge-editor-edit"');
+    expect(page.text).toContain('id="chapter-edit-button"');
+    expect(page.text).toContain(">编辑正文</button>");
+    expect(application.text).toContain("function applyChapterEditorMode()");
+    expect(application.text).toContain("function enterChapterEditMode()");
+    expect(application.text).toContain("let chapterEditorReadOnly = true");
+    expect(application.text).toContain("async function selectChapter(chapterId, { editMode = false } = {})");
+    expect(application.text).toContain("await selectChapter(chapter.id, { editMode: true })");
+    expect(styles.text).toContain(".editor-view.is-read-only #tidy-blank-lines-button");
+    expect(styles.text).toContain(".editor-view.is-read-only #save-button");
     expect(application.text).toContain('aria-label="角色列表分页"');
     expect(application.text).toContain("data-character-page");
     expect(application.text).toContain("上一页");
