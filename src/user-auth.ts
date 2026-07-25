@@ -617,7 +617,7 @@ export class UserAuthService {
     const row = this.database.get("SELECT * FROM users WHERE id = ?", userId);
     if (!row) throw notFound("用户");
     const calculated = passwordDigest(currentPassword, String(row.password_salt));
-    if (!safeEqual(calculated, String(row.password_hash))) throw new AppError(401, "INVALID_CURRENT_PASSWORD", "当前密码不正确");
+    if (!safeEqual(calculated, String(row.password_hash))) throw new AppError(401, "INVALID_CURRENT_PASSWORD", "当前密码错误，请重新输入");
     const salt = randomBytes(16).toString("base64url");
     const timestamp = new Date().toISOString();
     this.database.transaction(() => {

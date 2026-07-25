@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -247,6 +247,27 @@ describe("人物关系图数据与布局", () => {
     expect(near.x - viewport.width / 2).toBeGreaterThan(far.x - viewport.width / 2);
     expect(getGalaxyNodeDepthOpacity(800)).toBe(1);
     expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
+  });
+
+  it("默认生成更密集的银河背景星群", () => {
+    const stars = createGalaxyStarfield("dense-background");
+    expect(stars).toHaveLength(7200);
+    expect(stars.filter((star: { y: number }) => Math.abs(star.y) < 120).length).toBeGreaterThan(3000);
+  });
+
+  it("拖动角色时让附近星点避让并在松手后回到原位", () => {
+    const stars = [
+      { x: 12, z: 0, originX: 12, originZ: 0, vx: 0, vz: 0 },
+      { x: 400, z: 0, originX: 400, originZ: 0, vx: 0, vz: 0 }
+    ];
+    const energy = stepGalaxyStarfieldPhysics(stars, { x: 0, z: 0 }, { deltaMs: 16, influenceRadius: 100, repulsionStrength: 10 });
+
+    expect(stars[0]!.x).toBeGreaterThan(12);
+    expect(stars[1]!.x).toBe(400);
+    expect(energy).toBeGreaterThan(0);
+
+    for (let index = 0; index < 180; index += 1) stepGalaxyStarfieldPhysics(stars, null, { deltaMs: 16 });
+    expect(Math.abs(stars[0]!.x - 12)).toBeLessThan(0.5);
   });
 
   it("点击节点后把三维相机聚焦并放大到该节点", () => {
