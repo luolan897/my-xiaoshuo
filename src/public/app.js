@@ -12,11 +12,10 @@ import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-lay
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
-import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
+import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260725-unified-permissions";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260725-enum-labels-zh";
 import {
   chapterVersionSourceLabel,
-  characterVisibilityLabel,
   foreshadowStatusLabel,
   levelLabel,
   occurrenceRoleLabel,
@@ -31,7 +30,7 @@ import {
   settingStatusLabel,
   taskScopeLabel,
   timelineStatusLabel
-} from "/display-labels.js?v=20260725-enum-labels-zh";
+} from "/display-labels.js?v=20260725-unified-permissions";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -3257,7 +3256,7 @@ async function renderCharacters(page = characterListPage) {
   const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}<small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(characterVisibilityLabel(item.visibility))}</small>
+    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}${item.lockedFields.length ? `<small>锁定 ${item.lockedFields.length} 项</small>` : ""}
     <h3>${esc(item.name)}</h3>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     ${item.aliases.length ? `<div class="character-aliases">${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
@@ -3280,7 +3279,7 @@ async function renderCharacters(page = characterListPage) {
     const line = meta ? `${meta} · ${preview}` : preview;
     return `
     <article class="record-card module-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
-      <small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(characterVisibilityLabel(item.visibility))}</small>
+      ${item.lockedFields.length ? `<small>锁定 ${item.lockedFields.length} 项</small>` : ""}
       <h3>${esc(item.name)}</h3>
       <p class="module-row-preview" title="${esc(line)}">${esc(line)}</p>
       <div class="card-actions">${characterActions(item)}</div>
@@ -5178,7 +5177,6 @@ function renderCharacterEditorFields(item) {
         : organizationOptions.length
         ? field("organizationIds", "所属组织（可多选）", "chips", item?.organizationIds ?? [], organizationOptions)
         : '<div class="character-editor-empty-field"><b>所属组织</b><span>尚未创建组织，可稍后在“组织”模块中补充。</span></div>') +
-      field("visibility", "可见范围", "select", item?.visibility ?? "author", [["author", "仅作者"], ["collaborators", "协作者"], ["public", "公开"]]) +
       (canReadModule("editor")
         ? field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)
         : '<div class="character-editor-empty-field"><b>首次登场章节</b><span>当前账户没有正文读取权限，原有绑定不会被修改。</span></div>')),
@@ -5234,7 +5232,6 @@ function collectCharacterBody(form) {
     },
     currentState: buildCharacterState(form.getAll("stateKey"), form.getAll("stateValue"), item?.currentState ?? {}),
     lockedFields: form.getAll("lockedFields").map((value) => String(value).trim()).filter(Boolean),
-    visibility: String(form.get("visibility") ?? "author"),
     changeNote: String(form.get("changeNote") ?? "").trim()
   };
   if (canReadModule("races")) body.raceId = form.get("raceId") || null;

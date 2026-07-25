@@ -9,7 +9,6 @@ const fieldLabels = Object.freeze({
   profile: "人物档案与设定章节",
   currentState: "当前状态",
   lockedFields: "锁定字段",
-  visibility: "可见范围",
   firstChapterId: "首次登场章节"
 });
 

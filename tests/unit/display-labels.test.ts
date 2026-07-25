@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   chapterVersionSourceLabel,
-  characterVisibilityLabel,
   foreshadowStatusLabel,
   levelLabel,
   outlineStatusLabel,
@@ -19,7 +18,6 @@ import {
 describe("前端枚举中文标签", () => {
   it("映射各资料模块的数据库枚举", () => {
     expect(settingStatusLabel("confirmed")).toBe("已确认");
-    expect(characterVisibilityLabel("author")).toBe("仅作者");
     expect(timelineStatusLabel("candidate")).toBe("候选");
     expect(levelLabel("high")).toBe("高");
     expect(foreshadowStatusLabel("planted")).toBe("已埋设");
