@@ -3302,12 +3302,16 @@ export class Store {
   listCharactersPage(workId: string, pagination: Pagination, includeProfileSections = false, includeMerged = false, includeRaceMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
+    const count = this.db.get(
+      `SELECT COUNT(*) AS count FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"}`,
+      workId
+    );
     const rows = this.db.all(
       `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name${page.sql}`,
       workId,
       ...page.params
     );
-    return paginated(rows.map((row) => this.mapCharacter(row, includeProfileSections, includeRaceMarkdown)), pagination);
+    return paginated(rows.map((row) => this.mapCharacter(row, includeProfileSections, includeRaceMarkdown)), pagination, Number(count?.count ?? 0));
   }
 
   private mapCharacterProfileSection(row: Row): Record<string, unknown> {

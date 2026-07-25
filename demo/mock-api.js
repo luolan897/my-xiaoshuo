@@ -1,7 +1,7 @@
 import { analysisTasks, works as sourceWorks } from "./data.js";
 import { buildBrowserAiMessages, createBrowserAiStore, normalizeProviderBaseUrl, publicProvider, requestBrowserAi, testBrowserAiProvider } from "./browser-ai.js";
 import { DEMO_CREDENTIALS as demoCredentials, isValidDemoLogin } from "./demo-auth.js";
-import { DEMO_VERSION } from "./demo-version.js";
+import { DEMO_COVER_VERSIONS, DEMO_VERSION } from "./demo-version.js";
 
 const now = "2026-07-25T10:00:00.000Z";
 const nativeFetch = window.fetch.bind(window);
@@ -252,7 +252,7 @@ function buildWork(source) {
     description: source.synopsis,
     accessRole: "owner",
     modulePermissions: null,
-    coverUrl: `/demo-covers/${id}.webp`,
+    coverUrl: `/demo-covers/${id}.webp?v=${encodeURIComponent(DEMO_COVER_VERSIONS[id] ?? "0")}`,
     chapterCount: chapters.length,
     wordCount: wordTotal,
     versionNo: 1,

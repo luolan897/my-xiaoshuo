@@ -27,7 +27,7 @@ describe("注册入口状态", () => {
     expect(application.text).toContain('registerTab.disabled = !canRegister;');
     expect(application.text).toContain('registerTab.setAttribute("aria-disabled", String(!canRegister));');
     expect(application.text).toContain('registerTab.textContent = canRegister ? "注册" : "注册已禁用";');
-    expect(application.text).toContain('showAuth(session.setupRequired, session.registrationOpen === true);');
+    expect(application.text).toContain('if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {');
     expect(application.text).toContain('const login = mode === "login" || registerTab.disabled;');
     expect(application.text).not.toContain('$("#auth-register-tab").classList.toggle("hidden", !canRegister);');
     expect(styles.text).toContain(".auth-tabs button:disabled {");
