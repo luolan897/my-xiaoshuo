@@ -1551,32 +1551,30 @@ export function layoutGalaxy(graph, seed) {
   return { nodes, byId };
 }
 
-export function createGalaxyStarfield(seed, count = 16000) {
+export function createGalaxyStarfield(seed, count = 7200) {
   const random = seededRandom(hashString(seed));
   const stars = [];
   const armCount = 4;
   for (let index = 0; index < count; index += 1) {
     const population = random();
-    const isCore = population < 0.72;
-    const isHalo = !isCore && population > 0.94;
+    const isCore = population < 0.62;
+    const isHalo = !isCore && population > 0.9;
     const radius = isCore
-      ? 22 + Math.pow(random(), 1.84) * 760
-      : isHalo ? 620 + random() * 1300 : 120 + Math.pow(random(), 0.72) * 1740;
+      ? 32 + Math.pow(random(), 1.72) * 720
+      : 160 + Math.pow(random(), 0.68) * 1510;
     const arm = index % armCount;
     const armAngle = arm / armCount * Math.PI * 2;
     const angle = isHalo
       ? random() * Math.PI * 2
-      : armAngle + radius * 0.0078 + (random() - 0.5) * (isCore ? 0.58 : 0.38 + radius / 1300);
-    const thickness = isHalo ? 90 + radius * 0.22 : (isCore ? 10 + radius * 0.055 : 24 + radius * 0.12);
+      : armAngle + radius * 0.0065 + (random() - 0.5) * (isCore ? 0.72 : 0.42 + radius / 1100);
+    const thickness = isHalo ? 70 + radius * 0.2 : (isCore ? 8 + radius * 0.045 : 22 + radius * 0.105);
     const temperature = random();
     stars.push({
-      x: Math.cos(angle) * radius + (random() - 0.5) * (isCore ? 48 : 92),
+      x: Math.cos(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78),
       y: (random() + random() + random() - 1.5) * thickness,
-      z: Math.sin(angle) * radius + (random() - 0.5) * (isCore ? 48 : 92),
-      size: isCore
-        ? (random() > 0.82 ? 1.15 + random() * 1.5 : 0.62 + random() * 0.92)
-        : (random() > 0.975 ? 1.4 + random() * 1.6 : 0.5 + random() * 0.95),
-      brightness: isCore ? 0.36 + random() * 0.64 : 0.18 + random() * 0.72,
+      z: Math.sin(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78),
+      size: isCore && random() > 0.94 ? 1.25 + random() * 1.25 : 0.38 + random() * 0.82,
+      brightness: isCore ? 0.3 + random() * 0.7 : 0.16 + random() * 0.66,
       color: temperature < 0.2 ? "255,218,176" : temperature > 0.78 ? "174,211,255" : "226,237,255"
     });
   }
@@ -1779,18 +1777,6 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
 
     const center = project({ x: 0, y: 0, z: 0 }, width, height);
     const coreRadius = Math.min(width, height) * 0.28 * camera.zoom;
-    context.save();
-    context.translate(center.x, center.y);
-    context.rotate(-0.18);
-    context.scale(1.55, 0.34);
-    const band = context.createRadialGradient(0, 0, 0, 0, 0, coreRadius * 1.9);
-    band.addColorStop(0, "rgba(240,247,255,.16)");
-    band.addColorStop(0.22, "rgba(153,205,241,.1)");
-    band.addColorStop(0.62, "rgba(91,143,193,.035)");
-    band.addColorStop(1, "rgba(0,0,0,0)");
-    context.fillStyle = band;
-    context.fillRect(-coreRadius * 2, -coreRadius * 2, coreRadius * 4, coreRadius * 4);
-    context.restore();
     const core = context.createRadialGradient(center.x, center.y, 0, center.x, center.y, coreRadius);
     core.addColorStop(0, "rgba(235,247,255,.22)");
     core.addColorStop(0.12, "rgba(100,166,230,.14)");
@@ -1807,7 +1793,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       const point = project(star, width, height);
       if (!point.visible || point.x < -8 || point.x > width + 8 || point.y < -8 || point.y > height + 8) continue;
       const perspective = clamp(point.scale / 0.95, 0.32, 2.4);
-      const radius = Math.max(0.42, star.size * perspective);
+      const radius = star.size * perspective;
       const twinkle = 0.82 + Math.sin(index * 12.9898 + camera.yaw * 5) * 0.18;
       const alpha = clamp(star.brightness * twinkle * perspective, 0.08, 0.92);
       context.fillStyle = `rgba(${star.color},${alpha})`;
