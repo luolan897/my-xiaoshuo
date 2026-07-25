@@ -66,6 +66,7 @@ type ModelRow = Row & {
 
 type GenerateInput = {
   workId: string;
+  taskId?: string;
   taskType: TaskType;
   instruction: string;
   scope: ContextScope;
@@ -159,6 +160,80 @@ const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_en
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
 type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
+
+type AiCallTraceAttempt = {
+  attempt: number;
+  startedAt: string;
+  completedAt?: string;
+  status: "running" | "completed" | "failed";
+  httpStatus?: number;
+  response?: Record<string, unknown>;
+  failure?: string;
+};
+
+type AiCallTraceRound = {
+  round: number;
+  requestedAt: string;
+  request: {
+    model: string;
+    messages: CompletionMessage[];
+    parameters: Record<string, unknown>;
+    tools: Record<string, unknown>[];
+    toolChoice: "auto" | "none";
+  };
+  attempts: AiCallTraceAttempt[];
+  toolExecutions: AgentToolCallResult[];
+};
+
+function redactProviderSecret(value: string, apiKey: string): string {
+  if (!apiKey) return value;
+  return value.split(apiKey).join("[REDACTED]");
+}
+
+function redactProviderSecrets(value: unknown, apiKey: string, depth = 0): unknown {
+  if (typeof value === "string") return redactProviderSecret(value, apiKey);
+  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+  if (depth >= 32) return "[REDACTED_DEPTH_LIMIT]";
+  if (Array.isArray(value)) return value.map((item) => redactProviderSecrets(item, apiKey, depth + 1));
+  if (!value || typeof value !== "object") return null;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactProviderSecrets(item, apiKey, depth + 1)]));
+}
+
+function sanitizeCompletionTraceResponse(value: unknown): Record<string, unknown> {
+  const response = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const choices = Array.isArray(response.choices) ? response.choices : [];
+  return {
+    choices: choices.map((choice) => {
+      const choiceRecord = choice && typeof choice === "object" && !Array.isArray(choice) ? choice as Record<string, unknown> : {};
+      const message = choiceRecord.message && typeof choiceRecord.message === "object" && !Array.isArray(choiceRecord.message)
+        ? choiceRecord.message as Record<string, unknown>
+        : {};
+      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      return {
+        finish_reason: typeof choiceRecord.finish_reason === "string" || choiceRecord.finish_reason === null ? choiceRecord.finish_reason : null,
+        message: {
+          content: typeof message.content === "string" || message.content === null ? message.content : null,
+          reasoning_content: typeof message.reasoning_content === "string" || message.reasoning_content === null ? message.reasoning_content : null,
+          tool_calls: toolCalls.map((toolCall) => {
+            const toolCallRecord = toolCall && typeof toolCall === "object" && !Array.isArray(toolCall) ? toolCall as Record<string, unknown> : {};
+            const fn = toolCallRecord.function && typeof toolCallRecord.function === "object" && !Array.isArray(toolCallRecord.function)
+              ? toolCallRecord.function as Record<string, unknown>
+              : {};
+            return {
+              id: typeof toolCallRecord.id === "string" ? toolCallRecord.id : "",
+              type: "function",
+              function: {
+                name: typeof fn.name === "string" ? fn.name : "",
+                arguments: fn.arguments ?? ""
+              }
+            };
+          })
+        }
+      };
+    }),
+    ...(response.usage && typeof response.usage === "object" && !Array.isArray(response.usage) ? { usage: response.usage } : {})
+  };
+}
 
 export type AgentToolCallResult = {
   id: string;
@@ -1533,6 +1608,7 @@ export class AiManager {
     return this.store.db.all("SELECT * FROM ai_calls WHERE work_id = ? ORDER BY created_at DESC LIMIT 200", workId).map((row) => ({
       id: stringValue(row, "id"),
       workId: stringValue(row, "work_id"),
+      taskId: row.task_id === null ? null : stringValue(row, "task_id"),
       taskType: stringValue(row, "task_type"),
       provider: this.getProvider(stringValue(row, "provider_id")),
       model: this.getModel(stringValue(row, "model_id")),
@@ -1554,6 +1630,7 @@ export class AiManager {
     return paginated(rows.map((row) => ({
       id: stringValue(row, "id"),
       workId: stringValue(row, "work_id"),
+      taskId: row.task_id === null ? null : stringValue(row, "task_id"),
       taskType: stringValue(row, "task_type"),
       provider: this.getProvider(stringValue(row, "provider_id")),
       model: this.getModel(stringValue(row, "model_id")),
@@ -1566,6 +1643,59 @@ export class AiManager {
       createdAt: stringValue(row, "created_at"),
       completedAt: row.completed_at === null ? null : stringValue(row, "completed_at")
     })), pagination);
+  }
+
+  getTaskTrace(taskId: string): Record<string, unknown> {
+    this.store.getTask(taskId);
+    const rows = this.store.db.all(
+      `SELECT call.*, trace.initial_messages_json, trace.rounds_json, trace.created_at AS trace_created_at,
+        trace.updated_at AS trace_updated_at, provider.name AS provider_name,
+        model.display_name AS model_display_name, model.model_id AS external_model_id
+       FROM ai_calls call
+       LEFT JOIN ai_call_traces trace ON trace.call_id = call.id
+       LEFT JOIN providers provider ON provider.id = call.provider_id
+       LEFT JOIN models model ON model.id = call.model_id
+       WHERE call.task_id = ?
+       ORDER BY call.created_at ASC, call.id ASC`,
+      taskId
+    );
+    const calls = rows.map((row) => {
+      const hasTrace = row.initial_messages_json !== null && row.initial_messages_json !== undefined;
+      return {
+        id: stringValue(row, "id"),
+        taskType: stringValue(row, "task_type"),
+        provider: {
+          id: stringValue(row, "provider_id"),
+          name: row.provider_name === null ? "已删除的供应商" : stringValue(row, "provider_name"),
+          deleted: row.provider_name === null
+        },
+        model: {
+          id: stringValue(row, "model_id"),
+          displayName: row.model_display_name === null ? "已删除的模型" : stringValue(row, "model_display_name"),
+          modelId: row.external_model_id === null ? null : stringValue(row, "external_model_id"),
+          deleted: row.model_display_name === null
+        },
+        contextScope: json(stringValue(row, "context_scope_json"), {}),
+        parameters: json(stringValue(row, "parameters_json"), {}),
+        status: stringValue(row, "status"),
+        failure: row.failure === null ? null : stringValue(row, "failure"),
+        inputChars: numberValue(row, "input_chars"),
+        outputChars: numberValue(row, "output_chars"),
+        createdAt: stringValue(row, "created_at"),
+        completedAt: row.completed_at === null ? null : stringValue(row, "completed_at"),
+        trace: hasTrace ? {
+          initialMessages: json(stringValue(row, "initial_messages_json"), []),
+          rounds: json(stringValue(row, "rounds_json"), []),
+          createdAt: stringValue(row, "trace_created_at"),
+          updatedAt: stringValue(row, "trace_updated_at")
+        } : null
+      };
+    });
+    return {
+      taskId,
+      captured: calls.some((call) => call.trace !== null),
+      calls
+    };
   }
 
   async runTask(taskId: string, modelId?: string): Promise<Record<string, unknown>> {
@@ -1613,6 +1743,7 @@ export class AiManager {
       } else {
         const generated = await this.generate({
           workId,
+          taskId,
           taskType: taskType === "book-analysis" ? "book-analysis" : "chapter-analysis",
           instruction: "请基于上下文完成分析，给出有原文依据的中文结论。",
           scope,
@@ -2082,20 +2213,44 @@ export class AiManager {
     });
     const callId = id("call");
     const timestamp = now();
-    this.store.db.run(
-      `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
-       status, input_chars, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
-      callId,
-      input.workId,
-      input.taskType,
-      stringValue(provider, "id"),
-      stringValue(model, "id"),
-      JSON.stringify(input.scope),
-      JSON.stringify(parameters),
-      context.length + input.instruction.length,
-      timestamp,
-      currentRequestActor()?.userId ?? null
-    );
+    const traceRounds: AiCallTraceRound[] = [];
+    this.store.db.transaction(() => {
+      this.store.db.run(
+        `INSERT INTO ai_calls (id, work_id, task_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+         status, input_chars, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+        callId,
+        input.workId,
+        input.taskId ?? null,
+        input.taskType,
+        stringValue(provider, "id"),
+        stringValue(model, "id"),
+        JSON.stringify(input.scope),
+        JSON.stringify(parameters),
+        context.length + input.instruction.length,
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      if (input.taskId) {
+        this.store.db.run(
+          `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, created_at, updated_at)
+           VALUES (?, ?, ?, '[]', ?, ?)`,
+          callId,
+          input.taskId,
+          JSON.stringify(messages),
+          timestamp,
+          timestamp
+        );
+      }
+    });
+    const saveTrace = (): void => {
+      if (!input.taskId) return;
+      this.store.db.run(
+        "UPDATE ai_call_traces SET rounds_json = ?, updated_at = ? WHERE call_id = ?",
+        JSON.stringify(traceRounds),
+        now(),
+        callId
+      );
+    };
     const callStartedAt = process.hrtime.bigint();
     logger.info("ai.call.started", {
       callId,
@@ -2108,8 +2263,10 @@ export class AiManager {
       instructionChars: input.instruction.length,
       toolCount: tools.length
     });
+    let activeApiKey = "";
     try {
       const apiKey = this.decryptKey(provider);
+      activeApiKey = apiKey;
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
@@ -2126,10 +2283,32 @@ export class AiManager {
       let totalInputTokens = 0;
       let totalCachedInputTokens = 0;
       const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
+        const traceRound: AiCallTraceRound = {
+          round: traceRounds.length + 1,
+          requestedAt: now(),
+          request: {
+            model: stringValue(model, "model_id"),
+            messages: structuredClone(completionMessages),
+            parameters: structuredClone(parameters),
+            tools: toolChoice === "auto" ? structuredClone(tools) : [],
+            toolChoice
+          },
+          attempts: [],
+          toolExecutions: []
+        };
+        traceRounds.push(traceRound);
+        saveTrace();
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
           let retryable = true;
           const attemptStartedAt = process.hrtime.bigint();
+          const traceAttempt: AiCallTraceAttempt = {
+            attempt,
+            startedAt: now(),
+            status: "running"
+          };
+          traceRound.attempts.push(traceAttempt);
+          saveTrace();
           logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, toolChoice });
           try {
             const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
@@ -2165,7 +2344,12 @@ export class AiManager {
             });
             if (candidate.ok) {
               try {
-                const parsed = JSON.parse(candidate.body) as CompletionPayload;
+                const parsed = redactProviderSecrets(JSON.parse(candidate.body), apiKey) as CompletionPayload;
+                traceAttempt.completedAt = now();
+                traceAttempt.status = "completed";
+                traceAttempt.httpStatus = candidate.status;
+                traceAttempt.response = sanitizeCompletionTraceResponse(parsed);
+                saveTrace();
                 completionRequestCount += 1;
                 const cacheUsage = resolveInputCacheUsage(parsed.usage);
                 if (!cacheUsage) cacheUsageComplete = false;
@@ -2179,12 +2363,25 @@ export class AiManager {
               }
             }
             lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
+            traceAttempt.completedAt = now();
+            traceAttempt.status = "failed";
+            traceAttempt.httpStatus = candidate.status;
+            traceAttempt.failure = redactProviderSecret(`HTTP ${candidate.status}: ${candidate.body.slice(0, 2_000)}`, apiKey);
+            saveTrace();
             if (candidate.status !== 429 && candidate.status < 500) {
               retryable = false;
               throw lastFailure;
             }
           } catch (error) {
             lastFailure = error;
+            if (traceAttempt.status === "running") {
+              traceAttempt.completedAt = now();
+              traceAttempt.status = "failed";
+              traceAttempt.failure = error instanceof Error
+                ? redactProviderSecret(error.message.slice(0, 2_000), apiKey)
+                : "AI request failed";
+              saveTrace();
+            }
             logger.warn("ai.call.attempt_failed", {
               callId,
               attempt,
@@ -2243,6 +2440,8 @@ export class AiManager {
           const execution = this.executeAgentTool(input.workId, toolCall);
           logger.info("ai.tool_call.completed", { callId, toolName: execution.name, status: execution.status, round });
           executedToolCalls.push(execution);
+          traceRounds.at(-1)?.toolExecutions.push(execution);
+          saveTrace();
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });
           input.onToolCall?.(execution, round);
           completionMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(execution.result) });
@@ -2292,7 +2491,7 @@ export class AiManager {
       });
       return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "AI 调用失败";
+      const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
       logger.error("ai.call.failed", {
         callId,
@@ -2508,6 +2707,7 @@ export class AiManager {
     const chapter = this.store.getChapter(scope.chapterId);
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "chapter-analysis",
       signal: this.taskSignal(taskId),
       instruction: "分析本章并输出 JSON 对象，字段为 summary（1至3句）、events（数组）、characters（数组）、settings（数组）、evidence（数组，每项含 conclusion 和 quote）、uncertainties（数组）。",
@@ -2546,6 +2746,7 @@ export class AiManager {
   private async runTimelineAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "timeline-analysis",
       signal: this.taskSignal(taskId),
       instruction: "抽取大事件候选并输出 JSON 数组。每项字段：name、description、eventType、timeLabel、timeSort（无法确定为 null）、location、impactScope、chapterIds、participantIds、evidence。必须区分发生时间与叙述时间；不确定时使用‘时间待定’。",
@@ -2582,6 +2783,7 @@ export class AiManager {
     if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "世界观分析范围内没有章节");
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "book-analysis",
       signal: this.taskSignal(taskId),
       instruction: [
@@ -2674,6 +2876,7 @@ export class AiManager {
       if (taskId && this.store.getTask(taskId).status !== "running") return { candidates: [], callId: null };
       const generated = await this.generateTaggedJson({
         workId,
+        taskId,
         taskType: "book-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts: 2,
@@ -2821,6 +3024,7 @@ export class AiManager {
   private async runConsistencyCheck(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "consistency-check",
       signal: this.taskSignal(taskId),
       instruction: "检查设定、人物状态、关系和时间是否冲突，输出 JSON 数组。每项字段：itemType、severity（low/medium/high）、title、description、entityRefs、evidence、suggestion。没有问题时输出 []。",
@@ -2873,6 +3077,7 @@ export class AiManager {
     }).join("\n");
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "book-analysis",
       signal: this.taskSignal(taskId),
       scope: scope.type === "none" ? scope : { type: "none" },
@@ -2992,6 +3197,7 @@ export class AiManager {
   ): Promise<{ decisions: Map<string, CharacterVerificationDecision>; callId: string }> {
     const generated = await this.generateTaggedJson({
       workId,
+      taskId,
       taskType: "book-analysis",
       signal: this.taskSignal(taskId),
       scope: { type: "none" },
@@ -3042,6 +3248,7 @@ export class AiManager {
     const extractChunk = async (text: string, maxAttempts = 3): Promise<{ candidates: Array<Record<string, unknown>>; callId: string }> => {
       const generated = await this.generateTaggedJson({
         workId,
+        taskId,
         taskType: "book-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts,
@@ -3392,6 +3599,7 @@ export class AiManager {
     const extractChunk = async (text: string, maxAttempts = 3): Promise<{ candidates: Array<Record<string, unknown>>; callId: string }> => {
       const generated = await this.generateTaggedJson({
         workId,
+        taskId,
         taskType: "relationship-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts,
@@ -3526,6 +3734,7 @@ export class AiManager {
       const aggregationResults = await this.processChunks(evidenceBatches, Math.min(concurrency, 4), async (evidenceBatch) => {
         const generated = await this.generateTaggedJson({
           workId,
+          taskId,
           taskType: "relationship-analysis",
           signal: this.taskSignal(taskId),
           maxAttempts: 2,

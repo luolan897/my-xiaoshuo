@@ -969,6 +969,46 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
       .expect(403);
+
+    const analysisTask = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({ taskType: "book-analysis", scope: { type: "book" } })
+      .expect(201);
+    const taskId = String(analysisTask.body.data.id);
+    const traceTimestamp = new Date().toISOString();
+    runtime.database.run(
+      `INSERT INTO ai_calls (id, work_id, task_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+       status, input_chars, output_chars, created_at, completed_at) VALUES (?, ?, ?, 'book-analysis', ?, ?, '{}', '{}',
+       'completed', 16, 2, ?, ?)`,
+      "call_permission_trace",
+      workId,
+      taskId,
+      "deleted_provider_permission_trace",
+      "deleted_model_permission_trace",
+      traceTimestamp,
+      traceTimestamp
+    );
+    runtime.database.run(
+      `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, created_at, updated_at)
+       VALUES (?, ?, ?, '[]', ?, ?)`,
+      "call_permission_trace",
+      taskId,
+      JSON.stringify([{ role: "user", content: "TOP_SECRET_PROSE" }]),
+      traceTimestamp,
+      traceTimestamp
+    );
+    const ownerTrace = await owner.agent.get(`/api/tasks/${taskId}/trace`).expect(200);
+    expect(JSON.stringify(ownerTrace.body.data)).toContain("TOP_SECRET_PROSE");
+
+    const noContentPermissions = Object.fromEntries(Object.keys(basePermissions).map((module) => [module, "none"]));
+    await owner.agent.patch(`/api/works/${workId}/members/${analysisOnly.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: { ...noContentPermissions, "ai-analysis": "write" } })
+      .expect(200);
+    await analysisOnly.agent.get(`/api/tasks/${taskId}`).expect(200);
+    const protectedTrace = await analysisOnly.agent.get(`/api/tasks/${taskId}/trace`).expect(403);
+    expect(protectedTrace.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(protectedTrace.body)).not.toContain("TOP_SECRET_PROSE");
   });
 
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {

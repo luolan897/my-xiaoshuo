@@ -1438,6 +1438,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, ai.startAutoRunBatch(request.params.workId));
   });
   app.get("/api/tasks/:taskId", (request, response) => data(response, store.getTask(request.params.taskId)));
+  app.get("/api/tasks/:taskId/trace", (request, response) => data(response, ai.getTaskTrace(request.params.taskId)));
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
     data(response, await ai.runTask(request.params.taskId, input.modelId));
