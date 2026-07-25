@@ -60,9 +60,8 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('bindRecordPreview("[data-open-review]"');
     expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
     expect(application.text).toContain('hideCancel: true');
-    expect(application.text).toContain('/display-labels.js?v=20260725-enum-labels-zh');
+    expect(application.text).toContain('/display-labels.js?v=20260725-unified-permissions');
     expect(application.text).toContain('settingStatusLabel(item.status)');
-    expect(application.text).toContain('characterVisibilityLabel(item.visibility)');
     expect(application.text).toContain('timelineStatusLabel(item.status)');
     expect(application.text).toContain('relationshipConfirmationLabel(item.confirmationStatus)');
     expect(application.text).not.toContain('<small>${esc(item.taskType)}</small>');
@@ -80,7 +79,8 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
-    expect(application.text).toContain('const characterPage = await apiPage(`/api/works/${state.work.id}/characters`, page);');
+    expect(application.text).toContain('const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;');
+    expect(application.text).toContain('hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`)');
     expect(application.text).toContain('await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)');
     expect(application.text).toContain('state.races = await apiAllPages(`/api/works/${state.work.id}/races`);');
     expect(application.text).toContain('state.organizations = await apiAllPages(`/api/works/${state.work.id}/organizations`);');
