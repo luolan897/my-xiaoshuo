@@ -51,6 +51,7 @@ test("构建产物复制正式前端并注入预制数据适配层", async () =>
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
   assert.match(build, /src\/public/);
   assert.match(build, /mock-api\.js/);
+  assert.doesNotMatch(build, /cover-originals/);
   assert.match(adapter, /window\.fetch = mockApi/);
   assert.doesNotMatch(adapter, /novel\.db|sqlite/iu);
 });
@@ -61,5 +62,10 @@ test("两本预制作品都设置了项目内封面", async () => {
   for (const filename of ["silent-tide.webp", "city-blank.webp"]) {
     const cover = await stat(new URL(`../demo-covers/${filename}`, import.meta.url));
     assert.ok(cover.size > 50_000, `${filename} 不是有效的完整封面`);
+    assert.ok(cover.size <= 200_000, `${filename} 超过 200 KB`);
+  }
+  for (const filename of ["silent-tide.png", "city-blank.png"]) {
+    const original = await stat(new URL(`../cover-originals/${filename}`, import.meta.url));
+    assert.ok(original.size > 2_000_000, `${filename} 不是保留的高分辨率原图`);
   }
 });
