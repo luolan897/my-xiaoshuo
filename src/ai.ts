@@ -185,6 +185,56 @@ type AiCallTraceRound = {
   toolExecutions: AgentToolCallResult[];
 };
 
+function redactProviderSecret(value: string, apiKey: string): string {
+  if (!apiKey) return value;
+  return value.split(apiKey).join("[REDACTED]");
+}
+
+function redactProviderSecrets(value: unknown, apiKey: string, depth = 0): unknown {
+  if (typeof value === "string") return redactProviderSecret(value, apiKey);
+  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+  if (depth >= 32) return "[REDACTED_DEPTH_LIMIT]";
+  if (Array.isArray(value)) return value.map((item) => redactProviderSecrets(item, apiKey, depth + 1));
+  if (!value || typeof value !== "object") return null;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactProviderSecrets(item, apiKey, depth + 1)]));
+}
+
+function sanitizeCompletionTraceResponse(value: unknown): Record<string, unknown> {
+  const response = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const choices = Array.isArray(response.choices) ? response.choices : [];
+  return {
+    choices: choices.map((choice) => {
+      const choiceRecord = choice && typeof choice === "object" && !Array.isArray(choice) ? choice as Record<string, unknown> : {};
+      const message = choiceRecord.message && typeof choiceRecord.message === "object" && !Array.isArray(choiceRecord.message)
+        ? choiceRecord.message as Record<string, unknown>
+        : {};
+      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      return {
+        finish_reason: typeof choiceRecord.finish_reason === "string" || choiceRecord.finish_reason === null ? choiceRecord.finish_reason : null,
+        message: {
+          content: typeof message.content === "string" || message.content === null ? message.content : null,
+          reasoning_content: typeof message.reasoning_content === "string" || message.reasoning_content === null ? message.reasoning_content : null,
+          tool_calls: toolCalls.map((toolCall) => {
+            const toolCallRecord = toolCall && typeof toolCall === "object" && !Array.isArray(toolCall) ? toolCall as Record<string, unknown> : {};
+            const fn = toolCallRecord.function && typeof toolCallRecord.function === "object" && !Array.isArray(toolCallRecord.function)
+              ? toolCallRecord.function as Record<string, unknown>
+              : {};
+            return {
+              id: typeof toolCallRecord.id === "string" ? toolCallRecord.id : "",
+              type: "function",
+              function: {
+                name: typeof fn.name === "string" ? fn.name : "",
+                arguments: fn.arguments ?? ""
+              }
+            };
+          })
+        }
+      };
+    }),
+    ...(response.usage && typeof response.usage === "object" && !Array.isArray(response.usage) ? { usage: response.usage } : {})
+  };
+}
+
 export type AgentToolCallResult = {
   id: string;
   name: string;
@@ -1596,12 +1646,15 @@ export class AiManager {
   }
 
   getTaskTrace(taskId: string): Record<string, unknown> {
-    const task = this.store.getTask(taskId);
+    this.store.getTask(taskId);
     const rows = this.store.db.all(
       `SELECT call.*, trace.initial_messages_json, trace.rounds_json, trace.created_at AS trace_created_at,
-        trace.updated_at AS trace_updated_at
+        trace.updated_at AS trace_updated_at, provider.name AS provider_name,
+        model.display_name AS model_display_name, model.model_id AS external_model_id
        FROM ai_calls call
        LEFT JOIN ai_call_traces trace ON trace.call_id = call.id
+       LEFT JOIN providers provider ON provider.id = call.provider_id
+       LEFT JOIN models model ON model.id = call.model_id
        WHERE call.task_id = ?
        ORDER BY call.created_at ASC, call.id ASC`,
       taskId
@@ -1611,8 +1664,17 @@ export class AiManager {
       return {
         id: stringValue(row, "id"),
         taskType: stringValue(row, "task_type"),
-        provider: this.getProvider(stringValue(row, "provider_id")),
-        model: this.getModel(stringValue(row, "model_id")),
+        provider: {
+          id: stringValue(row, "provider_id"),
+          name: row.provider_name === null ? "已删除的供应商" : stringValue(row, "provider_name"),
+          deleted: row.provider_name === null
+        },
+        model: {
+          id: stringValue(row, "model_id"),
+          displayName: row.model_display_name === null ? "已删除的模型" : stringValue(row, "model_display_name"),
+          modelId: row.external_model_id === null ? null : stringValue(row, "external_model_id"),
+          deleted: row.model_display_name === null
+        },
         contextScope: json(stringValue(row, "context_scope_json"), {}),
         parameters: json(stringValue(row, "parameters_json"), {}),
         status: stringValue(row, "status"),
@@ -2201,8 +2263,10 @@ export class AiManager {
       instructionChars: input.instruction.length,
       toolCount: tools.length
     });
+    let activeApiKey = "";
     try {
       const apiKey = this.decryptKey(provider);
+      activeApiKey = apiKey;
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
@@ -2280,11 +2344,11 @@ export class AiManager {
             });
             if (candidate.ok) {
               try {
-                const parsed = JSON.parse(candidate.body) as CompletionPayload;
+                const parsed = redactProviderSecrets(JSON.parse(candidate.body), apiKey) as CompletionPayload;
                 traceAttempt.completedAt = now();
                 traceAttempt.status = "completed";
                 traceAttempt.httpStatus = candidate.status;
-                traceAttempt.response = parsed as Record<string, unknown>;
+                traceAttempt.response = sanitizeCompletionTraceResponse(parsed);
                 saveTrace();
                 completionRequestCount += 1;
                 const cacheUsage = resolveInputCacheUsage(parsed.usage);
@@ -2302,7 +2366,7 @@ export class AiManager {
             traceAttempt.completedAt = now();
             traceAttempt.status = "failed";
             traceAttempt.httpStatus = candidate.status;
-            traceAttempt.failure = `HTTP ${candidate.status}: ${candidate.body.slice(0, 2_000)}`;
+            traceAttempt.failure = redactProviderSecret(`HTTP ${candidate.status}: ${candidate.body.slice(0, 2_000)}`, apiKey);
             saveTrace();
             if (candidate.status !== 429 && candidate.status < 500) {
               retryable = false;
@@ -2313,7 +2377,9 @@ export class AiManager {
             if (traceAttempt.status === "running") {
               traceAttempt.completedAt = now();
               traceAttempt.status = "failed";
-              traceAttempt.failure = error instanceof Error ? error.message.slice(0, 2_000) : "AI request failed";
+              traceAttempt.failure = error instanceof Error
+                ? redactProviderSecret(error.message.slice(0, 2_000), apiKey)
+                : "AI request failed";
               saveTrace();
             }
             logger.warn("ai.call.attempt_failed", {
@@ -2425,7 +2491,7 @@ export class AiManager {
       });
       return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "AI 调用失败";
+      const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
       logger.error("ai.call.failed", {
         callId,

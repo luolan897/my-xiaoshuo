@@ -13,7 +13,7 @@ describe("AI 分析全流程追踪", () => {
 
   it("保存每轮完整 Prompt、模型响应与工具执行结果", async () => {
     let completionRound = 0;
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       if (String(input).endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "trace-model" }] }), {
           status: 200,
@@ -21,13 +21,15 @@ describe("AI 分析全流程追踪", () => {
         });
       }
       completionRound += 1;
+      const reflectedAuthorization = new Headers(init?.headers).get("Authorization");
       if (completionRound === 1) {
         return new Response(JSON.stringify({
+          debug: { authorization: reflectedAuthorization },
           choices: [{
             finish_reason: "tool_calls",
             message: {
-              content: "先查询角色档案和正文证据。",
-              reasoning_content: "需要完成两项必需查询。",
+              content: `先查询角色档案和正文证据。${reflectedAuthorization}`,
+              reasoning_content: `需要完成两项必需查询。${reflectedAuthorization}`,
               tool_calls: [
                 {
                   id: "tool-search",
@@ -46,7 +48,8 @@ describe("AI 分析全流程追踪", () => {
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       return new Response(JSON.stringify({
-        choices: [{ finish_reason: "stop", message: { content: "<json>[]</json>", reasoning_content: "没有重复角色。" } }],
+        debug: { authorization: reflectedAuthorization },
+        choices: [{ finish_reason: "stop", message: { content: "<json>[]</json>", reasoning_content: `没有重复角色。${reflectedAuthorization}` } }],
         usage: { prompt_tokens: 180, completion_tokens: 12 }
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
@@ -128,9 +131,19 @@ describe("AI 分析全流程追踪", () => {
       expect.objectContaining({ role: "tool", tool_call_id: "tool-grep" })
     ]));
     expect(JSON.stringify(trace)).not.toContain("sk-trace-secret");
+    expect(JSON.stringify(trace)).toContain("Bearer [REDACTED]");
+    expect(trace.calls[0].trace.rounds[0].attempts[0].response).not.toHaveProperty("debug");
 
     const call = runtime.database.get<Record<string, unknown>>("SELECT task_id FROM ai_calls WHERE id = ?", trace.calls[0].id);
     expect(call?.task_id).toBe(task.body.data.id);
+
+    runtime.ai.deleteProvider(provider.body.data.id);
+    const retainedTrace = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace`).expect(200);
+    expect(retainedTrace.body.data.calls[0]).toMatchObject({
+      provider: { id: provider.body.data.id, name: "已删除的供应商", deleted: true },
+      model: { id: model.body.data.id, displayName: "已删除的模型", modelId: null, deleted: true },
+      trace: { rounds: expect.any(Array) }
+    });
   });
 
   it("历史任务没有追踪记录时返回明确的空状态", async () => {
@@ -147,5 +160,46 @@ describe("AI 分析全流程追踪", () => {
       captured: false,
       calls: []
     });
+  });
+
+  it("供应商错误响应反射密钥时统一脱敏调用与追踪失败信息", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "failure-trace-model" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return new Response(`Provider rejected ${authorization}`, { status: 400 });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const work = await request(runtime.app).post("/api/works").send({ title: "失败追踪脱敏" }).expect(201);
+    const workId = work.body.data.id;
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "失败追踪服务",
+      baseUrl: "https://failure-trace.test/v1",
+      apiKey: "sk-failure-trace-secret",
+      status: "enabled"
+    }).expect(201);
+    await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+    const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "失败追踪模型",
+      modelId: "failure-trace-model",
+      purposes: ["book-analysis"]
+    }).expect(201);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "book-analysis",
+      scope: { type: "book" }
+    }).expect(201);
+
+    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId: model.body.data.id }).expect(502);
+    const trace = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace`).expect(200);
+    const serializedTrace = JSON.stringify(trace.body.data);
+    expect(serializedTrace).not.toContain("sk-failure-trace-secret");
+    expect(serializedTrace).toContain("Bearer [REDACTED]");
+    const call = runtime.database.get<Record<string, unknown>>("SELECT failure FROM ai_calls WHERE task_id = ?", task.body.data.id);
+    expect(String(call?.failure)).not.toContain("sk-failure-trace-secret");
+    expect(String(call?.failure)).toContain("Bearer [REDACTED]");
   });
 });

@@ -4000,7 +4000,10 @@ async function renderTasks() {
     const taskId = encodeURIComponent(button.dataset.taskDetail);
     Promise.all([
       api(`/api/tasks/${taskId}`),
-      api(`/api/tasks/${taskId}/trace`)
+      api(`/api/tasks/${taskId}/trace`).catch((error) => {
+        if (error.code === "WORK_MODULE_READ_DENIED") return { restricted: true, captured: false, calls: [] };
+        throw error;
+      })
     ])
       .then(([task, trace]) => openTaskDetailDialog(task, trace))
       .catch((error) => toast(error.message, "error"))
@@ -4145,6 +4148,12 @@ function renderTaskTraceRound(round) {
 }
 
 function renderTaskTraceVisualization(trace) {
+  if (trace?.restricted) {
+    return `<section class="task-trace-section" aria-labelledby="task-trace-title">
+      <header class="task-trace-heading"><div><span class="eyebrow">执行追踪</span><h3 id="task-trace-title">完整全流程上下文</h3></div></header>
+      <div class="task-trace-unavailable"><strong>完整上下文受权限保护</strong><p>当前账号缺少正文或作品资料的读取权限，无法查看原始 Prompt、模型响应与工具结果。</p></div>
+    </section>`;
+  }
   const calls = Array.isArray(trace?.calls) ? trace.calls : [];
   const capturedCalls = calls.filter((call) => call.trace);
   const roundCount = capturedCalls.reduce((total, call) => total + (Array.isArray(call.trace?.rounds) ? call.trace.rounds.length : 0), 0);

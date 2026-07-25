@@ -15,6 +15,8 @@ describe("AI 分析全流程追踪界面", () => {
     expect(application).toContain("function renderTaskTraceVisualization(trace)");
     expect(application).toContain("function renderTaskTraceRound(round)");
     expect(application).toContain("function renderTaskTraceMessages(messages)");
+    expect(application).toContain('error.code === "WORK_MODULE_READ_DENIED"');
+    expect(application).toContain("完整上下文受权限保护");
     expect(application).toContain("完整全流程上下文");
     expect(application).toContain("本轮发出的完整 Prompt");
     expect(application).toContain("工具执行结果");
