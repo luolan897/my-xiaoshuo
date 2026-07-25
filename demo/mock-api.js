@@ -32,6 +32,22 @@ function installDemoLoginHint() {
 
 installDemoLoginHint();
 
+function installDemoFooterNotice() {
+  const mount = () => {
+    document.querySelectorAll("[data-product-footer]").forEach((footer) => {
+      if (footer.querySelector(".demo-product-footer-notice")) return;
+      const notice = document.createElement("span");
+      notice.className = "product-footer-development demo-product-footer-notice";
+      notice.textContent = "演示站 · 数据为预置内容，不会永久保存";
+      footer.append(notice);
+    });
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount, { once: true });
+  else mount();
+}
+
+installDemoFooterNotice();
+
 const wordCount = (text) => Array.from(String(text ?? "").replace(/\s/gu, "")).length;
 const page = (items, url) => {
   const pageNumber = Math.max(1, Number(url.searchParams.get("page") ?? 1));

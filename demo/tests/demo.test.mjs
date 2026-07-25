@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 import { works } from "../data.js";
 import { DEMO_CREDENTIALS, isValidDemoLogin } from "../demo-auth.js";
-import { readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "../scripts/version.mjs";
+import { demoAssetVersion, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "../scripts/version.mjs";
 
 test("预制两本不同类型的作品", () => {
   assert.equal(works.length, 2);
@@ -56,6 +56,8 @@ test("构建产物复制正式前端并注入预制数据适配层", async () =>
   assert.match(build, /mock-api\.js/);
   assert.doesNotMatch(build, /cover-originals/);
   assert.match(adapter, /window\.fetch = mockApi/);
+  assert.match(adapter, /\[data-product-footer\]/);
+  assert.match(adapter, /演示站 · 数据为预置内容，不会永久保存/);
   assert.doesNotMatch(adapter, /novel\.db|sqlite/iu);
 });
 
@@ -91,6 +93,7 @@ test("Demo 版本直接继承主项目版本", async () => {
   assert.equal(await readMainVersion(), mainPackage.version);
   assert.equal(Object.hasOwn(demoPackage, "version"), false);
   assert.equal(versionModuleSource(mainPackage.version), `export const DEMO_VERSION = ${JSON.stringify(mainPackage.version)};\n`);
+  assert.match(demoAssetVersion(adapter, mainPackage.version), new RegExp(`^${mainPackage.version.replaceAll(".", "\\.")}-[a-f0-9]{8}$`));
   assert.match(versionedDemoAdapterSource(adapter, mainPackage.version), new RegExp(`demo-version\\.js\\?v=${mainPackage.version.replaceAll(".", "\\.")}`));
   assert.match(adapter, /version: DEMO_VERSION/);
   assert.doesNotMatch(adapter, /0\.1\.0-demo/);

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 const mainPackageUrl = new URL("../../package.json", import.meta.url);
@@ -18,4 +19,9 @@ export function versionedDemoAdapterSource(source, version) {
     'from "./demo-version.js"',
     `from "./demo-version.js?v=${encodeURIComponent(version)}"`
   );
+}
+
+export function demoAssetVersion(source, version) {
+  const digest = createHash("sha256").update(source).digest("hex").slice(0, 8);
+  return `${version}-${digest}`;
 }
