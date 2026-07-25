@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 
 const mainPackageUrl = new URL("../../package.json", import.meta.url);
+const demoCoversUrl = new URL("../demo-covers/", import.meta.url);
 
 export async function readMainVersion() {
   const packageJson = JSON.parse(await readFile(mainPackageUrl, "utf8"));
@@ -10,8 +11,20 @@ export async function readMainVersion() {
   return version;
 }
 
-export function versionModuleSource(version) {
-  return `export const DEMO_VERSION = ${JSON.stringify(version)};\n`;
+export async function readDemoCoverVersions() {
+  const entries = await readdir(demoCoversUrl);
+  const versions = {};
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith(".webp")) continue;
+    const id = entry.slice(0, -".webp".length);
+    const bytes = await readFile(new URL(entry, demoCoversUrl));
+    versions[id] = createHash("sha256").update(bytes).digest("hex").slice(0, 8);
+  }
+  return versions;
+}
+
+export function versionModuleSource(version, coverVersions = {}) {
+  return `export const DEMO_VERSION = ${JSON.stringify(version)};\nexport const DEMO_COVER_VERSIONS = ${JSON.stringify(coverVersions)};\n`;
 }
 
 export function versionedDemoAdapterSource(source, version) {
@@ -24,4 +37,8 @@ export function versionedDemoAdapterSource(source, version) {
 export function demoAssetVersion(source, version) {
   const digest = createHash("sha256").update(source).digest("hex").slice(0, 8);
   return `${version}-${digest}`;
+}
+
+export function demoCoverCacheControl() {
+  return "public, max-age=31536000, immutable";
 }
