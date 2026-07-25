@@ -601,7 +601,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     logger.info("auth.login.succeeded", { actorRef: accountReference(result.session.user.userId) });
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken });
   });
-  app.use(createUserSessionMiddleware(auth, options.disableUserAuth));
+  app.use(createUserSessionMiddleware(auth, {
+    disabled: options.disableUserAuth === true,
+    resolveBypassUser: getDevelopmentUser
+  }));
   app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
   app.get("/api/cli/session", (request, response) => {
