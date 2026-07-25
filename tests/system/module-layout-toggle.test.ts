@@ -24,8 +24,8 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260725-ui-collaboration');
-    expect(page.text).toContain('/app.js?v=20260725-character-pagination-total');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-character-pagination-total"></script>');
+    expect(page.text).toContain('/app.js?v=20260725-character-pagination-page-ratio');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-character-pagination-page-ratio"></script>');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -73,7 +73,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("上一页");
     expect(application.text).toContain("下一页");
     expect(application.text).toContain("共 ${characterPage.total} 个角色");
-    expect(application.text).toContain("Math.ceil(characterPage.total / characterPage.limit)");
+    expect(application.text).toContain("第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页");
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");

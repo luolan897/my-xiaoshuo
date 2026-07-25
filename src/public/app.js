@@ -3253,7 +3253,7 @@ async function renderCharacters(page = characterListPage) {
   const pagination = state.characters.length && (characterPage.page > 1 || characterPage.hasMore)
     ? `<nav class="module-pagination" aria-label="角色列表分页">
       <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
-      <span>第 ${characterPage.page} 页 · 本页 ${state.characters.length} 个角色 · 共 ${characterPage.total} 个角色 · 共 ${Math.ceil(characterPage.total / characterPage.limit)} 页</span>
+      <span>第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页 · 本页 ${state.characters.length} 个角色 · 共 ${characterPage.total} 个角色</span>
       <button type="button" data-character-page="${characterPage.nextPage ?? characterPage.page + 1}" ${characterPage.hasMore ? "" : "disabled"}>下一页</button>
     </nav>`
     : "";
