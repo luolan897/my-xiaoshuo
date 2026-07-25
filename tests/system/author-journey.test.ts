@@ -316,7 +316,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
     expect(graph.text).toContain('statuses.push("待确认")');
     expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
-    expect(application.text).toContain('/race-hierarchy.js?v=20260721-race-hierarchy');
+    expect(application.text).toContain('/race-hierarchy.js?v=20260726-race-filter-order');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
