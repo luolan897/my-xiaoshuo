@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="叙界长篇小说 AI 创作工作台静态体验 Demo，内置两部完整示例作品。">
+    <meta name="theme-color" content="#f3f0e9">
+    <meta property="og:title" content="叙界 Demo · 让宏大的故事有迹可循">
+    <meta property="og:description" content="浏览正文、角色、设定、时间线、关系图与 AI 分析的完整样貌。">
+    <meta property="og:image" content="/og.png">
+    <title>叙界 Demo · 小说 AI 创作工作台</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="demo-banner"><span>静态体验模式</span><p>这里的所有数据均为预制内容，操作不会上传或永久保存。</p><button type="button" data-action="show-demo-help">了解 Demo</button></div>
+    <div class="app-shell">
+      <header class="topbar">
+        <button class="brand" type="button" data-action="shelf" aria-label="返回书架"><span>叙</span><strong>叙界<small>SCRIVERSE DEMO</small></strong></button>
+        <div class="work-meta" id="work-meta"><span class="status-dot"></span><strong>静默潮汐</strong><small>星际科幻 · 悬疑</small></div>
+        <label class="global-search"><span>⌕</span><input id="search-input" type="search" placeholder="搜索正文、角色与设定" aria-label="全文搜索"><kbd>⌘ K</kbd></label>
+        <div class="top-actions">
+          <span class="save-state" id="save-state">只读演示</span>
+          <button class="icon-button" type="button" data-action="theme" aria-label="切换深浅主题">◐</button>
+          <button class="account" type="button" data-action="account"><span>体</span><strong>体验作者<small>只读访客</small></strong></button>
+        </div>
+      </header>
+
+      <aside class="sidebar">
+        <button class="work-switcher" type="button" data-action="work-switcher" aria-expanded="false"><span class="book-swatch" id="book-swatch">静</span><span><strong id="sidebar-work-title">静默潮汐</strong><small id="sidebar-work-genre">星际科幻 · 悬疑</small></span><b>⌄</b></button>
+        <div class="work-menu hidden" id="work-menu" role="menu"></div>
+        <nav class="module-nav" aria-label="作品功能">
+          <button class="active" type="button" data-view="editor"><span>文</span>正文</button>
+          <button type="button" data-view="characters"><span>角</span>角色</button>
+          <button type="button" data-view="settings"><span>设</span>设定库</button>
+          <button type="button" data-view="organizations"><span>织</span>组织</button>
+          <button type="button" data-view="races"><span>族</span>种族</button>
+          <button type="button" data-view="timeline"><span>时</span>时间线</button>
+          <button type="button" data-view="relationships"><span>联</span>人物关系</button>
+          <button type="button" data-view="outlines"><span>纲</span>大纲 / 伏笔</button>
+          <button type="button" data-view="tasks"><span>析</span>AI 分析</button>
+        </nav>
+        <div class="sidebar-footer"><span>DEMO DATASET</span><strong id="dataset-size">28 章 · 8 位角色</strong></div>
+      </aside>
+
+      <aside class="chapter-panel" id="chapter-panel">
+        <header><span>作品目录</span><button type="button" data-action="demo-write" aria-label="新建章节">＋</button></header>
+        <div id="chapter-tree"></div>
+      </aside>
+
+      <main class="main-panel" id="main-panel">
+        <section class="view editor-view" id="editor-view">
+          <div class="editor-header">
+            <div><span class="eyebrow" id="chapter-path">卷一 烬城来信 / 第 1 章</span><h1 id="chapter-title">失重来信</h1></div>
+            <div class="editor-actions"><span id="chapter-stats">3,104 字 · v3</span><button type="button" data-action="versions">版本</button><button class="primary" type="button" data-action="demo-save">保存正文</button></div>
+          </div>
+          <div class="editor-content-wrap">
+            <aside class="line-numbers" id="line-numbers" aria-hidden="true"></aside>
+            <article class="manuscript" id="manuscript"></article>
+            <aside class="chapter-insight"><span class="eyebrow">章节概览</span><strong>本章摘要</strong><p id="chapter-summary"></p><hr><strong>出场角色</strong><div class="chip-row" id="chapter-cast"></div><hr><strong>创作状态</strong><p><span class="status-dot green"></span><span id="chapter-status">已定稿</span></p></aside>
+          </div>
+        </section>
+        <section class="view hidden" id="module-view"><header class="module-header"><div><span class="eyebrow" id="module-eyebrow">作品知识</span><h1 id="module-title">角色档案</h1><p id="module-description"></p></div><button class="primary" type="button" data-action="demo-write">＋ 新建条目</button></header><div class="module-toolbar"><label><span>⌕</span><input id="module-filter" type="search" placeholder="筛选当前列表" aria-label="筛选当前列表"></label><span id="module-count"></span></div><div class="module-content" id="module-content"></div></section>
+        <section class="view hidden shelf-view" id="shelf-view"><header><span class="eyebrow">预制作品</span><h1>从一本已经开始呼吸的故事进入</h1><p>两部作品覆盖不同类型、结构与知识密度，所有模块均已填充可浏览内容。</p></header><div class="shelf-grid" id="shelf-grid"></div></section>
+      </main>
+
+      <aside class="ai-panel">
+        <header><span><i></i><strong>AI 创作助手</strong></span><button type="button" data-action="clear-chat">清空</button></header>
+        <div class="context-meter"><span>当前上下文</span><strong id="context-size">6.8k / 32k</strong><div><i></i></div><small>已引用当前章节、角色档案与锁定设定</small></div>
+        <div class="chat" id="chat"><article class="assistant-message"><span>AI</span><div><small>基于 4 条作品资料</small><p>我已经读取当前章节。你可以让我检查设定一致性、梳理人物动机，或给出三种后续剧情方向。</p><div class="source-list"><button type="button"># 当前章节</button><button type="button"># 角色档案</button><button type="button"># 锁定设定</button></div></div></article></div>
+        <div class="prompt-suggestions"><button type="button" data-prompt="检查这一章与设定是否冲突">检查设定冲突</button><button type="button" data-prompt="给出三种后续剧情方向">三种剧情方向</button><button type="button" data-prompt="分析本章人物动机">分析人物动机</button></div>
+        <form class="chat-form" id="chat-form"><textarea id="chat-input" rows="3" placeholder="询问当前作品……" aria-label="询问 AI"></textarea><button type="submit" aria-label="发送">↑</button><small>演示回答由本地预置，不会调用真实模型</small></form>
+      </aside>
+    </div>
+
+    <dialog id="detail-dialog"><button class="dialog-close" type="button" data-action="close-dialog" aria-label="关闭">×</button><div id="dialog-content"></div></dialog>
+    <dialog id="search-dialog"><button class="dialog-close" type="button" data-action="close-search" aria-label="关闭">×</button><span class="eyebrow">全书检索</span><h2>搜索结果</h2><p id="search-summary"></p><div class="search-results" id="search-results"></div></dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
