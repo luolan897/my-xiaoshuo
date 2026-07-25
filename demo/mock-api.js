@@ -38,7 +38,7 @@ function installDemoFooterNotice() {
       if (footer.querySelector(".demo-product-footer-notice")) return;
       const notice = document.createElement("span");
       notice.className = "product-footer-development demo-product-footer-notice";
-      notice.textContent = "演示站 · 数据为预置内容，不会永久保存";
+      notice.textContent = "演示站";
       footer.append(notice);
     });
   };

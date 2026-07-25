@@ -57,7 +57,7 @@ test("构建产物复制正式前端并注入预制数据适配层", async () =>
   assert.doesNotMatch(build, /cover-originals/);
   assert.match(adapter, /window\.fetch = mockApi/);
   assert.match(adapter, /\[data-product-footer\]/);
-  assert.match(adapter, /演示站 · 数据为预置内容，不会永久保存/);
+  assert.match(adapter, /notice\.textContent = "演示站"/);
   assert.doesNotMatch(adapter, /novel\.db|sqlite/iu);
 });
 
