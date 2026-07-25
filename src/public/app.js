@@ -4777,6 +4777,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
     }
   };
   $("#form-dialog").showModal();
+  $("#dialog-fields").scrollTop = 0;
 }
 
 function openWorkDialog() {

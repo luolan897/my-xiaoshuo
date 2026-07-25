@@ -297,8 +297,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-task-running-feedback');
-    expect(page.text).toContain('/styles.css?v=20260726-task-running-feedback');
+    expect(page.text).toContain('/app.js?v=20260726-dialog-scroll-after-open');
+    expect(page.text).toContain('/styles.css?v=20260726-dialog-scroll-after-open');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -468,6 +468,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })");
     expect(application.text).not.toContain("${esc(model.displayName)} · ${esc(model.modelId)}");
     expect(application.text).toContain("function openTaskDetailDialog(task, trace)");
+    expect(application.text).toContain('$("#dialog-fields").scrollTop = 0;');
     expect(application.text).toContain('id="task-auto-run-enabled"');
     expect(application.text).toContain("自动执行待分析任务");
     expect(application.text).toContain("不会自动创建人物关系、世界观或其他分析");
