@@ -84,7 +84,7 @@ const mockAi = createServer(async (incoming, outgoing) => {
     const results = toolResults(body);
     if (joined.includes("E2E_TOOL_MATRIX")) {
       if (results.size === 0) {
-        assert.deepEqual(body.tools?.map((tool) => tool.function?.name), ["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"]);
+        assert.deepEqual(body.tools?.map((tool) => tool.function?.name), ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
         toolCalls(outgoing, [
           { id: "index-default", name: "story_index", arguments: {} },
           { id: "index-boundary", name: "story_index", arguments: JSON.stringify({ offset: 1, limit: 50 }) },
@@ -92,8 +92,8 @@ const mockAi = createServer(async (incoming, outgoing) => {
           { id: "chapter-content", name: "read_chapters", arguments: { chapterIds: chapterIds.slice(0, 2), include: "content" } },
           { id: "chapter-both", name: "read_chapters", arguments: { chapterIds, include: "both" } },
           { id: "chapter-errors", name: "read_chapters", arguments: { chapterIds: [chapterIds[0], "missing-chapter", otherWorkChapterId] } },
-          { id: "knowledge-default", name: "query_story_knowledge", arguments: { query: "跃迁" } },
-          { id: "knowledge-all", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
+          { id: "knowledge-default", name: "search_story_entities", arguments: { query: "跃迁" } },
+          { id: "knowledge-all", name: "search_story_entities", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
           { id: "character-section", name: "read_character_sections", arguments: { sectionIds: [characterSectionId], include: "both" } }
         ]);
         return;
@@ -114,7 +114,11 @@ const mockAi = createServer(async (incoming, outgoing) => {
       assert.equal(object(errorChapters[1]?.error).message, "The requested chapter was not found.");
       assert.equal(object(errorChapters[2]?.error).message, "The requested chapter belongs to a different work.");
       assert.deepEqual(object(results.get("knowledge-default")).ok, true);
+      assert.equal(object(object(results.get("knowledge-default")).data).matchMode, "literal_substring");
+      const defaultMatches = array(object(object(results.get("knowledge-default")).data).matches).map(object);
+      assert.equal(defaultMatches.some((item) => String(item.type) === "setting" && String(item.title).includes("跃迁")), true);
       assert.equal(array(object(object(results.get("knowledge-all")).data).matches).length >= 1, true);
+      assert.equal(object(object(results.get("knowledge-all")).data).matchMode, "literal_substring");
       const characterSection = object(array(object(object(results.get("character-section")).data).sections)[0]);
       assert.equal(characterSection.characterName, "哥斯拉");
       assert.match(String(characterSection.contentMarkdown), /守护地球生态/u);
@@ -128,7 +132,7 @@ const mockAi = createServer(async (incoming, outgoing) => {
           { id: "bad-json", name: "story_index", arguments: "{" },
           { id: "bad-index", name: "story_index", arguments: { limit: 0, extra: true } },
           { id: "bad-read", name: "read_chapters", arguments: { chapterIds: [], include: "invalid" } },
-          { id: "bad-query", name: "query_story_knowledge", arguments: { query: "", categories: ["unknown"] } },
+          { id: "bad-query", name: "search_story_entities", arguments: { query: "", categories: ["unknown"] } },
           { id: "unknown", name: "write_chapter", arguments: {} }
         ]);
         return;
