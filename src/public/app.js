@@ -287,10 +287,6 @@ function hasCompletedOnboarding() {
   return state.user?.onboardingCompleted === true;
 }
 
-function isMobileLayout() {
-  return window.matchMedia("(max-width: 640px)").matches;
-}
-
 function isMobileViewport() {
   return window.matchMedia("(max-width: 850px)").matches;
 }
@@ -649,15 +645,6 @@ function applyPanelLayout(persist = false) {
   if (persist) {
     try { localStorage.setItem(panelLayoutStorageKey, JSON.stringify(panelLayout)); } catch { /* 浏览器禁用存储时仅保留当前布局 */ }
   }
-}
-
-function setMobilePanel(panel, open) {
-  const app = $("#app");
-  const isLeft = panel === "left";
-  app.classList.toggle("mobile-left-panel-open", isLeft && open);
-  app.classList.toggle("mobile-ai-panel-open", !isLeft && open);
-  $("#mobile-outline-toggle").setAttribute("aria-expanded", String(isLeft && open));
-  $("#mobile-ai-toggle").setAttribute("aria-expanded", String(!isLeft && open));
 }
 
 function ensureAiPanelExpanded() {
@@ -2779,7 +2766,10 @@ function renderTree() {
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => {
       selectChapter(button.dataset.chapterId);
-      if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("left", false);
+      if (isMobileViewport()) {
+        panelLayout.leftCollapsed = true;
+        applyPanelLayout(true);
+      }
     });
     button.addEventListener("contextmenu", (event) => {
       if (!canEditProse()) return;
@@ -6614,7 +6604,6 @@ $("#add-line-citation").addEventListener("click", addSelectedLinesAsCitation);
 $("#left-panel-toggle").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
   applyPanelLayout(true);
-  if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("left", false);
 });
 $("#mobile-module-tab").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
@@ -6627,15 +6616,6 @@ $("#mobile-panel-backdrop").addEventListener("click", () => {
 $("#ai-panel-toggle").addEventListener("click", () => {
   panelLayout.aiCollapsed = !panelLayout.aiCollapsed;
   applyPanelLayout(true);
-  if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("ai", false);
-});
-$("#mobile-outline-toggle").addEventListener("click", () => {
-  const open = !$("#app").classList.contains("mobile-left-panel-open");
-  setMobilePanel("left", open);
-});
-$("#mobile-ai-toggle").addEventListener("click", () => {
-  const open = !$("#app").classList.contains("mobile-ai-panel-open");
-  setMobilePanel("ai", open);
 });
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
@@ -6659,7 +6639,6 @@ $("#module-nav").addEventListener("click", (event) => {
         panelLayout.leftCollapsed = true;
         applyPanelLayout(true);
       }
-      if (isMobileLayout()) setMobilePanel("left", false);
     });
   }
 });
