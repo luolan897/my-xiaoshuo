@@ -10,11 +10,16 @@ describe("AI 分析范围交互", () => {
       readFile(join(publicPath, "styles.css"), "utf8")
     ]);
 
-    expect(application).toContain('const disabled = scopeTypeSelect.value === "book"');
+    expect(application).toContain('allSettingsOption.textContent = "全书 + 所有设定"');
+    expect(application).toContain('const enabled = taskTypeSelect.value === "relationship-analysis"');
+    expect(application).toContain('const disabled = scopeTypeSelect.value !== "chapter"');
     expect(application).toContain("chapterSelect.disabled = disabled");
     expect(application).toContain('chapterFieldElement.classList.toggle("is-disabled", disabled)');
     expect(application).toContain('chapterFieldElement.setAttribute("aria-disabled", String(disabled))');
     expect(application).toContain('scopeTypeSelect.addEventListener("change", syncChapterField)');
+    expect(application).toContain('name="additionalPrompt" maxlength="10000"');
+    expect(application).toContain('relationshipOptions.classList.toggle("hidden", !enabled)');
+    expect(application).toContain("includeAllSettings: true");
     expect(styles).toContain(".task-chapter-field.is-disabled { opacity: .48; }");
     expect(styles).toContain(".task-chapter-field select:disabled { cursor: not-allowed; }");
   });

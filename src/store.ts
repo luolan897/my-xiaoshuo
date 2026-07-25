@@ -5458,7 +5458,7 @@ export class Store {
       const title = volumeTitles.get(scope.volumeId);
       return title ? `分卷 · ${title}` : "分卷已删除";
     }
-    if (scope.type === "book" || Object.keys(scope).length === 0) return "全书";
+    if (scope.type === "book" || Object.keys(scope).length === 0) return scope.includeAllSettings === true ? "全书 + 所有设定" : "全书";
     return "未指定范围";
   }
 
@@ -5481,7 +5481,7 @@ export class Store {
       const volume = this.db.get("SELECT title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);
       return volume ? `分卷 · ${requiredString(volume, "title")}` : "分卷已删除";
     }
-    if (scope.type === "book" || Object.keys(scope).length === 0) return "全书";
+    if (scope.type === "book" || Object.keys(scope).length === 0) return scope.includeAllSettings === true ? "全书 + 所有设定" : "全书";
     return "未指定范围";
   }
 

@@ -5910,9 +5910,16 @@ function openTaskDialog() {
   const defaultTaskType = ANALYSIS_TYPES[0].value;
   const taskTypeField = `<div class="form-field analysis-type-field"><label>分析类型<select name="taskType" aria-describedby="analysis-type-description">${ANALYSIS_TYPES.map(({ value, label }) => `<option value="${esc(value)}" ${value === defaultTaskType ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label><p id="analysis-type-description" class="analysis-type-description" aria-live="polite">${esc(analysisTypeDescription(defaultTaskType))}</p></div>`;
   const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
-  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField, async (form) => {
-    const scope = form.get("taskType") === "character-identity-audit" || form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
-    await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
+  const relationshipPromptField = `<label class="relationship-analysis-options hidden">额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将追加到人物关系抽取提示词末尾，仅影响本次任务。</small></label>`;
+  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipPromptField, async (form) => {
+    const taskType = String(form.get("taskType"));
+    const scopeType = String(form.get("scopeType"));
+    const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
+    const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
+    const scope = taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
+      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}) }
+      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}) };
+    await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
     await renderTasks();
   });
   const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
@@ -5920,17 +5927,34 @@ function openTaskDialog() {
   const chapterSelect = $("#dialog-fields").querySelector('select[name="chapterId"]');
   const chapterFieldElement = chapterSelect.closest(".task-chapter-field");
   const description = $("#analysis-type-description");
+  const relationshipOptions = $("#dialog-fields").querySelector(".relationship-analysis-options");
+  const relationshipPrompt = relationshipOptions.querySelector('textarea[name="additionalPrompt"]');
+  const allSettingsOption = document.createElement("option");
+  allSettingsOption.value = "book-with-settings";
+  allSettingsOption.textContent = "全书 + 所有设定";
   const syncChapterField = () => {
-    const disabled = scopeTypeSelect.value === "book";
+    const disabled = scopeTypeSelect.value !== "chapter";
     chapterSelect.disabled = disabled;
     chapterFieldElement.classList.toggle("is-disabled", disabled);
     chapterFieldElement.setAttribute("aria-disabled", String(disabled));
   };
+  const syncRelationshipOptions = () => {
+    const enabled = taskTypeSelect.value === "relationship-analysis";
+    if (enabled && !allSettingsOption.isConnected) scopeTypeSelect.append(allSettingsOption);
+    if (!enabled && allSettingsOption.isConnected) {
+      if (scopeTypeSelect.value === allSettingsOption.value) scopeTypeSelect.value = "book";
+      allSettingsOption.remove();
+    }
+    relationshipOptions.classList.toggle("hidden", !enabled);
+    relationshipPrompt.disabled = !enabled;
+    syncChapterField();
+  };
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
+    syncRelationshipOptions();
   });
   scopeTypeSelect.addEventListener("change", syncChapterField);
-  syncChapterField();
+  syncRelationshipOptions();
 }
 
 function openProviderDialog(item) {

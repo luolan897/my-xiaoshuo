@@ -580,7 +580,8 @@ export class ContextBuilder {
       ? [`作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`]
       : [];
     const contentSections: string[] = [];
-    const lockedSettings = this.store.listSettings(workId).filter((item) => item.locked);
+    const availableSettings = this.store.listSettings(workId);
+    const contextualSettings = scope.includeAllSettings ? availableSettings : availableSettings.filter((item) => item.locked);
     const allCharacters = this.store.listCharacters(workId);
     const lockedCharacters = allCharacters.filter(
       (item) => Array.isArray(item.lockedFields) && item.lockedFields.length > 0
@@ -588,9 +589,9 @@ export class ContextBuilder {
     const organizations = this.store.listOrganizations(workId);
     const relationshipConstraints = selectRelationshipConstraints(this.store, workId, scope.characterIds ?? []);
 
-    if (includeAutomaticContext && lockedSettings.length > 0) {
+    if (includeAutomaticContext && contextualSettings.length > 0) {
       constraints.push(
-        `作者锁定设定（硬约束）：\n${lockedSettings
+        `${scope.includeAllSettings ? "全部作品设定（关系分析参考）" : "作者锁定设定（硬约束）"}：\n${contextualSettings
           .map((item) => `- [${String(item.category)}] ${String(item.title)}：${String(item.content)}`)
           .join("\n")}`
       );
@@ -3328,7 +3329,7 @@ export class AiManager {
         taskType: "relationship-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts,
-        scope: { type: "selection", selection: text },
+        scope: { type: "selection", selection: text, includeAllSettings: scope.includeAllSettings },
         ...(modelId ? { modelId } : {}),
         parameters: { temperature: 0.1 },
         instruction: [
@@ -3362,7 +3363,10 @@ export class AiManager {
           "23. 输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。",
           "24. 共同执行一次任务、同属一个组织、在同一集体场景中被感谢或落泪、替第三人转发消息，都不能单独证明同事、朋友或盟友。此类关系必须有原文明示身份，或至少两个不同章节的持续互动证据。"
         ].join("\n"),
-        extraSystemPrompt: "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。"
+        extraSystemPrompt: [
+          "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。",
+          scope.additionalPrompt?.trim() ? `作者追加的关系分析提示：\n${scope.additionalPrompt.trim()}` : ""
+        ].filter(Boolean).join("\n\n")
       });
       const extracted = extractJson<unknown>(generated.content);
       if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "人物关系分析结果必须是数组");

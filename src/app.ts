@@ -397,6 +397,32 @@ const contextSchema = z.object({
   includeBookSummary: z.boolean().optional()
 });
 
+const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
+const relationshipAnalysisScopeSchema = z.object({
+  type: z.enum(["chapter", "book"]),
+  chapterId: identifier.optional(),
+  includeAllSettings: z.boolean().optional(),
+  additionalPrompt: z.string().trim().max(10_000).optional()
+}).strict().superRefine((scope, context) => {
+  if (scope.type === "chapter" && !scope.chapterId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["chapterId"], message: "指定章节分析必须提供章节标识" });
+  }
+  if (scope.includeAllSettings && scope.type !== "book") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["includeAllSettings"], message: "包含所有设定仅支持全书人物关系分析" });
+  }
+});
+const analysisTaskSchema = z.union([
+  z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional() }).strict(),
+  z.object({ taskType: analysisTaskTypeSchema, scope: jsonObject.optional() }).strict().superRefine((input, context) => {
+    if (input.scope?.includeAllSettings !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "includeAllSettings"], message: "包含所有设定仅支持人物关系分析" });
+    }
+    if (input.scope?.additionalPrompt !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "additionalPrompt"], message: "额外分析提示仅支持人物关系分析" });
+    }
+  })
+]);
+
 export type RuntimeOptions = {
   databasePath: string;
   masterSecret: string;
@@ -1394,7 +1420,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       : store.listTasks(request.params.workId));
   });
   app.post("/api/works/:workId/tasks", (request, response) => {
-    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
+    const input = parse(analysisTaskSchema, request.body);
     data(response, store.createTask(request.params.workId, input), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {

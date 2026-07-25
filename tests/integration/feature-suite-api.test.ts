@@ -898,6 +898,60 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0]).toMatchObject({ subtype: "朋友", keywords: ["长期信任", "共同守望"], confirmationStatus: "pending" });
   });
 
+  it("关系分析可将所有设定和额外提示加入每个抽取批次", async () => {
+    const systemPrompts: string[] = [];
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
+      systemPrompts.push(body.messages[0]?.content ?? "");
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId } = await seedWork(runtime);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "未锁定王位规则", category: "社会制度", content: "摄政者退位后仍保留导师身份。", locked: false
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "锁定继承规则", category: "社会制度", content: "王位只能由正式继承人承接。", locked: true
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        additionalPrompt: "重点检查退位者与继承人的师承变化。"
+      }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定");
+    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(userPrompts.length).toBeGreaterThan(0);
+    expect(userPrompts.every((prompt) => prompt.includes("全部作品设定（关系分析参考）"))).toBe(true);
+    expect(userPrompts.every((prompt) => prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
+    expect(userPrompts.every((prompt) => prompt.includes("王位只能由正式继承人承接"))).toBe(true);
+    expect(systemPrompts.every((prompt) => prompt.includes("作者追加的关系分析提示") && prompt.includes("重点检查退位者与继承人的师承变化"))).toBe(true);
+  });
+
+  it("非关系任务和指定章节关系任务拒绝所有设定选项", async () => {
+    runtime = createTestRuntime(vi.fn<typeof fetch>());
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", includeAllSettings: true }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", additionalPrompt: "不应被接受" }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "chapter", chapterId: chapters[0].id, includeAllSettings: true }
+    }).expect(400);
+  });
+
   it("已有强关系时忽略同人物对的弱语义重复边", async () => {
     let firstChapterId = "";
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
