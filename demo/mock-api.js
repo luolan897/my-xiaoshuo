@@ -1,7 +1,35 @@
 import { analysisTasks, works as sourceWorks } from "./data.js";
+import { DEMO_CREDENTIALS as demoCredentials, isValidDemoLogin } from "./demo-auth.js";
 
 const now = "2026-07-25T10:00:00.000Z";
 const nativeFetch = window.fetch.bind(window);
+const demoAuthStorageKey = "scriverse-demo-authenticated";
+const demoUser = Object.freeze({
+  userId: "demo-user",
+  username: demoCredentials.username,
+  displayName: "体验作者",
+  role: "admin",
+  status: "active",
+  onboardingCompleted: true,
+  avatarUrl: null
+});
+
+function installDemoLoginHint() {
+  const mount = () => {
+    if (document.querySelector("#demo-login-hint")) return;
+    const description = document.querySelector("#auth-description");
+    if (!description) return;
+    const hint = document.createElement("p");
+    hint.id = "demo-login-hint";
+    hint.className = "auth-security-hint";
+    hint.textContent = `演示账号：${demoCredentials.username}　密码：${demoCredentials.password}　验证码：${demoCredentials.captchaAnswer}`;
+    description.insertAdjacentElement("afterend", hint);
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount, { once: true });
+  else mount();
+}
+
+installDemoLoginHint();
 
 const wordCount = (text) => Array.from(String(text ?? "").replace(/\s/gu, "")).length;
 const page = (items, url) => {
@@ -224,13 +252,30 @@ async function mockApi(input, init = {}) {
 
   if (path === "/api/health") return success({ ok: true, version: "0.1.0-demo", development: false });
   if (path === "/api/ui-settings" || path === "/api/platform/ui-settings") return success({ toastPosition: "bottom-right" });
-  if (path === "/api/auth/session") return success({
-    authenticated: true,
-    csrfToken: "demo-csrf-token",
-    user: { userId: "demo-user", username: "demo", displayName: "体验作者", role: "admin", status: "active", onboardingCompleted: true, avatarUrl: null }
-  });
+  if (path === "/api/auth/captcha") {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="52" viewBox="0 0 160 52"><rect width="160" height="52" rx="8" fill="#f2ebe3"/><path d="M8 38 152 12M12 10l138 32" stroke="#a96350" stroke-opacity=".22"/><text x="80" y="35" text-anchor="middle" font-family="monospace" font-size="27" font-weight="700" letter-spacing="8" fill="#5b3028">2468</text></svg>`;
+    return success({ captchaId: "demo-captcha", imageDataUrl: `data:image/svg+xml;base64,${btoa(svg)}` });
+  }
+  if (path === "/api/auth/login" && method === "POST") {
+    const body = await bodyOf(init);
+    if (!isValidDemoLogin(body)) return failure("演示账号、密码或验证码不正确", 401);
+    sessionStorage.setItem(demoAuthStorageKey, "true");
+    return success(demoUser);
+  }
+  if (path === "/api/auth/session" && method === "DELETE") {
+    sessionStorage.removeItem(demoAuthStorageKey);
+    return success(null, 204);
+  }
+  if (path === "/api/auth/session") {
+    const authenticated = sessionStorage.getItem(demoAuthStorageKey) === "true";
+    return success(authenticated
+      ? { authenticated: true, csrfToken: "demo-csrf-token", user: demoUser }
+      : { authenticated: false, setupRequired: false, registrationOpen: false });
+  }
+  if (path === "/api/auth/register") return failure("Demo 不开放注册，请使用页面提供的演示账号", 403);
+  if (sessionStorage.getItem(demoAuthStorageKey) !== "true") return failure("请先登录演示账号", 401);
   if (path === "/api/auth/api-key") return success({ configured: false });
-  if (path === "/api/auth/onboarding/complete") return success({ userId: "demo-user", username: "demo", displayName: "体验作者", role: "admin", status: "active", onboardingCompleted: true });
+  if (path === "/api/auth/onboarding/complete") return success(demoUser);
   if (path === "/api/works" && method === "GET") return success(page(works.map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, relationships, reviews, tasks, ...work }) => work), url));
   if (path === "/api/users") return success(page([], url));
   if (path === "/api/users/directory") return success([]);

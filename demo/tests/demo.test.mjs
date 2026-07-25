@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 import { works } from "../data.js";
+import { DEMO_CREDENTIALS, isValidDemoLogin } from "../demo-auth.js";
 
 test("预制两本不同类型的作品", () => {
   assert.equal(works.length, 2);
@@ -68,4 +69,15 @@ test("两本预制作品都设置了项目内封面", async () => {
     const original = await stat(new URL(`../cover-originals/${filename}`, import.meta.url));
     assert.ok(original.size > 2_000_000, `${filename} 不是保留的高分辨率原图`);
   }
+});
+
+test("Demo 使用公开凭据登录且关闭注册", async () => {
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  assert.deepEqual(DEMO_CREDENTIALS, { username: "demo", password: "scriverse-demo", captchaAnswer: "2468" });
+  assert.equal(isValidDemoLogin({ ...DEMO_CREDENTIALS, captchaId: "demo-captcha" }), true);
+  assert.equal(isValidDemoLogin({ ...DEMO_CREDENTIALS, password: "wrong", captchaId: "demo-captcha" }), false);
+  assert.equal(isValidDemoLogin({ ...DEMO_CREDENTIALS, captchaAnswer: "0000", captchaId: "demo-captcha" }), false);
+  assert.match(adapter, /registrationOpen: false/);
+  assert.match(adapter, /sessionStorage\.getItem\(demoAuthStorageKey\)/);
+  assert.match(adapter, /Demo 不开放注册/);
 });

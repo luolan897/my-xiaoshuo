@@ -18,7 +18,7 @@ const contentTypes = {
 createServer(async (request, response) => {
   const pathname = decodeURIComponent(new URL(request.url ?? "/", `http://${request.headers.host}`).pathname);
   const relativePath = pathname === "/" ? "index.html" : normalize(pathname).replace(/^\/+/, "");
-  const isDemoAsset = relativePath === "data.js" || relativePath === "mock-api.js" || relativePath.startsWith("demo-covers/");
+  const isDemoAsset = relativePath === "data.js" || relativePath === "demo-auth.js" || relativePath === "mock-api.js" || relativePath.startsWith("demo-covers/");
   const isVditorAsset = relativePath.startsWith("vendor/vditor/dist/");
   const root = isDemoAsset ? demoRoot : isVditorAsset ? vditorRoot : publicRoot;
   const rootRelativePath = isVditorAsset ? relativePath.replace(/^vendor\/vditor\/dist\//, "") : relativePath;
@@ -35,7 +35,7 @@ createServer(async (request, response) => {
     if (relativePath === "index.html") {
       body = Buffer.from(body.toString("utf8").replace(
         /<script type="module" src="\/app\.js\?v=[^"]+"><\/script>/u,
-        (appScript) => `<script type="module" src="/mock-api.js?v=20260725-cover-art"></script>\n    ${appScript}`
+        (appScript) => `<script type="module" src="/mock-api.js?v=20260725-demo-login"></script>\n    ${appScript}`
       ));
     }
     response.writeHead(200, { "cache-control": "no-store", "content-type": contentTypes[extname(target)] ?? "application/octet-stream" });
