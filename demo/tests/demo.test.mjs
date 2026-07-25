@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 import { works } from "../data.js";
 
@@ -53,4 +53,13 @@ test("构建产物复制正式前端并注入预制数据适配层", async () =>
   assert.match(build, /mock-api\.js/);
   assert.match(adapter, /window\.fetch = mockApi/);
   assert.doesNotMatch(adapter, /novel\.db|sqlite/iu);
+});
+
+test("两本预制作品都设置了项目内封面", async () => {
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  assert.match(adapter, /\/demo-covers\/\$\{id\}\.webp/);
+  for (const filename of ["silent-tide.webp", "city-blank.webp"]) {
+    const cover = await stat(new URL(`../demo-covers/${filename}`, import.meta.url));
+    assert.ok(cover.size > 50_000, `${filename} 不是有效的完整封面`);
+  }
 });

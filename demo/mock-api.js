@@ -177,7 +177,7 @@ function buildWork(source) {
     description: source.synopsis,
     accessRole: "owner",
     modulePermissions: null,
-    coverUrl: null,
+    coverUrl: `/demo-covers/${id}.webp`,
     chapterCount: chapters.length,
     wordCount: wordTotal,
     versionNo: 1,
