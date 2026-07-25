@@ -5888,11 +5888,30 @@ async function openRelationshipDialog(item, options = {}) {
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
-  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
+  const relationshipName = item ? `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}` : "";
+  const management = item ? `<section class="entity-dialog-management" aria-label="人物关系操作">
+    <div><strong>关系操作</strong><small>删除操作会记录到版本历史和审计日志。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-relationship-delete>删除关系</button></div>
+  </section>` : "";
+  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false) + management, async (form) => {
     const keywords = uniqueRelationshipKeywords(form.getAll("keywords").map(String));
     await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed", ...(item ? { expectedVersionNo: item.versionNo } : {}) } });
     await refreshRelationshipSurfaces(options.characterId ?? null);
   }, item ? "关系档案" : "人工确认关系");
+  $("#dialog-fields").querySelector("[data-dialog-relationship-delete]")?.addEventListener("click", async () => {
+    const dialog = $("#form-dialog");
+    dialog.close();
+    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return dialog.showModal();
+    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return dialog.showModal();
+    try {
+      await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+      await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
+      toast(`已删除人物关系“${relationshipName}”`);
+    } catch (error) {
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  });
 }
 
 function openReviewDialog() {
