@@ -45,7 +45,7 @@ test("开发服务器直接复用正式站点前端资源", async () => {
   const server = await readFile(new URL("../scripts/serve.mjs", import.meta.url), "utf8");
   assert.match(server, /src\/public/);
   assert.match(server, /mock-api\.js/);
-  assert.match(server, /process\.env\.PORT \?\? 13212/);
+  assert.match(server, /process\.env\.PORT \?\? 45678/);
   assert.doesNotMatch(server, /novel\.db|sqlite/iu);
 });
 

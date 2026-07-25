@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, normalize, resolve } from "node:path";
 import { readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "./version.mjs";
 
-const port = Number(process.env.PORT ?? 13212);
+const port = Number(process.env.PORT ?? 45678);
 const demoRoot = new URL("../", import.meta.url).pathname;
 const publicRoot = new URL("../../src/public/", import.meta.url).pathname;
 const vditorRoot = new URL("../node_modules/vditor/dist/", import.meta.url).pathname;
