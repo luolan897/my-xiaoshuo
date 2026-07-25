@@ -57,7 +57,8 @@ tests/
 ### 运行与数据边界
 
 - 开发服务默认运行在 `http://127.0.0.1:13210`。
-- `npm run dev` 启动监听模式；`npm run build && npm start` 启动生产构建。
+- 本地人工查看或调试必须使用 `NODE_ENV=development APP_DEV_SKIP_AUTH=true npm run dev` 启动监听模式，直接跳过登录；禁止仅使用普通 `npm run dev` 或 `APP_ALLOW_REGISTRATION=true` 代替。若隔离开发数据库没有活跃用户，应先在该隔离数据库创建测试管理员，不得因此修改真实数据库。
+- `npm run build && npm start` 启动生产构建。
 - `.data/` 包含真实数据库和密钥，不得提交、删除、覆盖或用于破坏性测试。
 - `dist/` 是构建产物，不直接编辑。
 - 禁止读取、修改或删除工作区以外的文件，除非用户明确授权且任务确实需要。

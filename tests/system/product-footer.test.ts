@@ -43,4 +43,22 @@ describe("产品信息页脚", () => {
     expect(styles.text).toContain(".product-footer-development {");
     expect(health.body.data).toMatchObject({ version: APP_VERSION, development: true });
   });
+
+  it("缓存带版本静态资源并保持页面和接口不可缓存", async () => {
+    const page = await request(runtime.app).get("/").expect(200);
+    const versionedApplication = await request(runtime.app).get("/app.js?v=asset-version").expect(200);
+    const cachedApplication = await request(runtime.app).get("/app.js?v=asset-version")
+      .set("If-None-Match", String(versionedApplication.headers.etag))
+      .expect(304);
+    const unversionedApplication = await request(runtime.app).get("/app.js").expect(200);
+    const versionedVendor = await request(runtime.app).get("/vendor/vditor/dist/index.min.js?v=3.11.2").expect(200);
+    const health = await request(runtime.app).get("/api/health").expect(200);
+
+    expect(page.headers["cache-control"]).toBe("no-store");
+    expect(versionedApplication.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    expect(cachedApplication.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    expect(versionedVendor.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    expect(unversionedApplication.headers["cache-control"]).toBe("public, max-age=3600, must-revalidate");
+    expect(health.headers["cache-control"]).toBe("no-store");
+  });
 });
