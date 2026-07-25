@@ -33,4 +33,20 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain("await ensureAiReferencesLoaded();");
     expect(application).toContain("await ensureAiConversationsLoaded();");
   });
+
+  it("种族列表不预加载角色，编辑器按需加载成员选项", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderRacesSource = application.slice(
+      application.indexOf("async function renderRaces()"),
+      application.indexOf("async function renderOrganizations()")
+    );
+    const openKnowledgeEditorSource = application.slice(
+      application.indexOf("async function openKnowledgeEditor(kind, item"),
+      application.indexOf("async function openRaceDialog(item, options)")
+    );
+
+    expect(renderRacesSource).toContain('state.races = await apiAllPages(`/api/works/${state.work.id}/races`)');
+    expect(renderRacesSource).not.toContain('/characters');
+    expect(openKnowledgeEditorSource).toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
+  });
 });
