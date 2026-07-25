@@ -39,6 +39,7 @@ import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
+import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 
 const state = {
   user: null,
@@ -704,6 +705,7 @@ let entityEditorType = null;
 let entityEditorDirty = false;
 let entityEditorReadOnly = false;
 let characterListPage = 1;
+const characterFilters = { raceIds: [], organizationIds: [] };
 let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
@@ -3247,7 +3249,15 @@ async function renderSettings() {
 }
 
 async function renderCharacters(page = characterListPage) {
-  const characterPage = await apiPage(`/api/works/${state.work.id}/characters`, page);
+  const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
+  const [characterSource, races, organizations] = await Promise.all([
+    hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page),
+    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
+  ]);
+  const characterPage = hasCharacterFilters
+    ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, 50)
+    : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
   state.characters = characterPage.items;
@@ -3294,11 +3304,35 @@ async function renderCharacters(page = characterListPage) {
       <button type="button" data-character-page="${characterPage.nextPage ?? characterPage.page + 1}" ${characterPage.hasMore ? "" : "disabled"}>下一页</button>
     </nav>`
     : "";
+  const selectedRaceIds = new Set(characterFilters.raceIds);
+  const selectedOrganizationIds = new Set(characterFilters.organizationIds);
+  const filterToolbar = `<section class="character-filter-toolbar" aria-label="角色筛选">
+    <label>按种族筛选<select id="character-race-filter" name="raceFilter" multiple size="${Math.min(5, Math.max(2, races.length || 2))}" aria-describedby="character-filter-help">${races.map((race) => `<option value="${esc(race.id)}" ${selectedRaceIds.has(String(race.id)) ? "selected" : ""}>${esc(racePathLabel(race) || race.name)}</option>`).join("")}</select></label>
+    <label>按组织筛选<select id="character-organization-filter" name="organizationFilter" multiple size="${Math.min(5, Math.max(2, organizations.length || 2))}" aria-describedby="character-filter-help">${organizations.map((organization) => `<option value="${esc(organization.id)}" ${selectedOrganizationIds.has(String(organization.id)) ? "selected" : ""}>${esc(organization.name)}</option>`).join("")}</select></label>
+    <div class="character-filter-toolbar-actions"><small id="character-filter-help">可在每组中多选；两组条件同时选择时按“同时满足”筛选。</small><button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>清除筛选</button></div>
+  </section>`;
   if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
-  $("#module-content").innerHTML = auditPanel + (state.characters.length
+  $("#module-content").innerHTML = filterToolbar + auditPanel + (state.characters.length
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
+  const readSelectedValues = (selector) => [...$(selector).selectedOptions].map((option) => option.value);
+  $("#character-race-filter").addEventListener("change", async () => {
+    characterFilters.raceIds = readSelectedValues("#character-race-filter");
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
+  $("#character-organization-filter").addEventListener("change", async () => {
+    characterFilters.organizationIds = readSelectedValues("#character-organization-filter");
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
+  $("#clear-character-filters").addEventListener("click", async () => {
+    characterFilters.raceIds = [];
+    characterFilters.organizationIds = [];
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
   $("#module-content").querySelectorAll("[data-character-page]").forEach((button) => button.addEventListener("click", async () => {
     if (button.disabled) return;
     $("#module-content").querySelectorAll("[data-character-page]").forEach((control) => { control.disabled = true; });
