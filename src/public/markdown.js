@@ -199,6 +199,22 @@ export function renderMarkdown(value) {
     }
     flushQuote();
     if (!line.trim()) {
+      // CommonMark 松散列表：同类型列表项之间的空行不结束列表，
+      // 否则每个条目会各自生成 <ol>/<ul>，有序序号会全部显示为 1。
+      if (list) {
+        let nextIndex = lineIndex + 1;
+        while (nextIndex < lines.length && !lines[nextIndex].trim()) nextIndex += 1;
+        if (nextIndex < lines.length) {
+          const nextListItem = lines[nextIndex].match(/^(\s*)([-+*]|\d+\.)\s+(.+)$/u);
+          if (nextListItem) {
+            const nextTag = /\d+\./u.test(nextListItem[2]) ? "ol" : "ul";
+            if (nextTag === list.tag) {
+              flushParagraph();
+              continue;
+            }
+          }
+        }
+      }
       flushBlocks();
       continue;
     }
