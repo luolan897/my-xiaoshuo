@@ -3386,7 +3386,7 @@ async function renderOrganizations() {
     const preview = moduleRowPreview(item.description || "尚未填写组织简介");
     const members = item.members.length ? item.members.map((member) => member.name).join("、") : "暂无绑定角色";
     return `
-    <article class="record-card module-row organization-card">
+    <article class="record-card module-row organization-card" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}">
       <small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3>
       <p class="module-row-preview" title="${esc(`${preview} · 成员：${members}`)}">${esc(preview)} · ${esc(members)}</p>

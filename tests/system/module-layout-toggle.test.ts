@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-readonly-indicator');
-    expect(page.text).toContain('/app.js?v=20260725-readonly-indicator');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-readonly-indicator"></script>');
+    expect(page.text).toContain('/styles.css?v=20260725-org-row-click');
+    expect(page.text).toContain('/app.js?v=20260725-org-row-click');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-org-row-click"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -84,6 +84,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)');
     expect(application.text).toContain('state.races = await apiAllPages(`/api/works/${state.work.id}/races`);');
     expect(application.text).toContain('state.organizations = await apiAllPages(`/api/works/${state.work.id}/organizations`);');
+    expect(application.text).toContain('data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"');
     expect(application.text).not.toContain("人工修正");
     expect(application.text).toContain('item ? "编辑设定" : "新建设定"');
     expect(application.text).toContain('const changeNote = item ? await inputToast(');
