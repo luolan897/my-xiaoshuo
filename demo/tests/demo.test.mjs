@@ -26,11 +26,18 @@ test("两本作品都覆盖主要知识模块", () => {
   }
 });
 
-test("静态入口包含关键界面与可访问名称", async () => {
-  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
-  assert.match(html, /静态体验模式/);
-  assert.match(html, /人物关系/);
-  assert.match(html, /AI 分析/);
-  assert.match(html, /aria-label="全文搜索"/);
-  assert.doesNotMatch(html, /<script[^>]+https?:\/\//);
+test("开发服务器直接复用正式站点前端资源", async () => {
+  const server = await readFile(new URL("../scripts/serve.mjs", import.meta.url), "utf8");
+  assert.match(server, /src\/public/);
+  assert.match(server, /mock-api\.js/);
+  assert.doesNotMatch(server, /novel\.db|sqlite/iu);
+});
+
+test("构建产物复制正式前端并注入预制数据适配层", async () => {
+  const build = await readFile(new URL("../scripts/build.mjs", import.meta.url), "utf8");
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  assert.match(build, /src\/public/);
+  assert.match(build, /mock-api\.js/);
+  assert.match(adapter, /window\.fetch = mockApi/);
+  assert.doesNotMatch(adapter, /novel\.db|sqlite/iu);
 });
