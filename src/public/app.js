@@ -4532,6 +4532,8 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   bindRelationshipKeywordControls($("#dialog-fields"));
   bindVditorEditors($("#dialog-fields"));
   const form = $("#dynamic-form");
+  form.onclick = null;
+  form.onkeydown = null;
   form.onsubmit = async (event) => {
     if (event.submitter?.value === "cancel") {
       void discardPendingMarkdownAttachments();
@@ -5917,11 +5919,28 @@ async function openTaskDialog() {
     return;
   }
   const characterOptions = relationshipCharacters.map((character) => [character.id, character.name]);
+  const relationshipCharacterPicker = `<div class="form-field relationship-character-field">
+    <span id="relationship-character-label">被分析角色（可多选）</span>
+    <div class="relationship-character-picker">
+      <button class="relationship-character-trigger" type="button" aria-expanded="false" aria-controls="relationship-character-bubble" aria-labelledby="relationship-character-label relationship-character-summary">
+        <span id="relationship-character-summary">选择需要定向分析的角色</span>
+        <span class="relationship-character-trigger-meta"><span data-relationship-character-count>未选择</span><span class="relationship-character-chevron" aria-hidden="true">⌄</span></span>
+      </button>
+      <div id="relationship-character-bubble" class="relationship-character-bubble hidden">
+        <label class="relationship-character-search">筛选角色<input type="search" data-relationship-character-search placeholder="输入角色名" autocomplete="off"></label>
+        <div class="relationship-character-bubble-meta"><span>共 ${characterOptions.length} 个角色</span><button type="button" data-relationship-character-clear disabled>清空选择</button></div>
+        <div class="relationship-character-options" role="group" aria-labelledby="relationship-character-label">
+          ${characterOptions.map(([characterId, characterName]) => `<label class="relationship-character-chip" data-character-search-name="${esc(String(characterName).toLocaleLowerCase())}"><input type="checkbox" name="characterIds" value="${esc(characterId)}" data-character-name="${esc(characterName)}"><span>${esc(characterName)}</span></label>`).join("")}
+        </div>
+        <p class="relationship-character-empty hidden" data-relationship-character-empty>没有匹配的角色</p>
+      </div>
+    </div>
+  </div>`;
   const defaultTaskType = ANALYSIS_TYPES[0].value;
   const taskTypeField = `<div class="form-field analysis-type-field"><label>分析类型<select name="taskType" aria-describedby="analysis-type-description">${ANALYSIS_TYPES.map(({ value, label }) => `<option value="${esc(value)}" ${value === defaultTaskType ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label><p id="analysis-type-description" class="analysis-type-description" aria-live="polite">${esc(analysisTypeDescription(defaultTaskType))}</p></div>`;
   const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   const relationshipFields = `<div class="relationship-analysis-options hidden">
-    ${field("characterIds", "被分析角色（可多选）", "multiselect", [], characterOptions)}
+    ${relationshipCharacterPicker}
     <small>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。</small>
     <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
     <small>仅在选择角色后可用。任务成功时删除所有涉及所选角色的旧关系，再写入本次结果。</small>
@@ -5947,7 +5966,15 @@ async function openTaskDialog() {
   const description = $("#analysis-type-description");
   const relationshipOptions = $("#dialog-fields").querySelector(".relationship-analysis-options");
   const relationshipPrompt = relationshipOptions.querySelector('textarea[name="additionalPrompt"]');
-  const relationshipCharacterSelect = relationshipOptions.querySelector('select[name="characterIds"]');
+  const relationshipCharacterPickerElement = relationshipOptions.querySelector(".relationship-character-picker");
+  const relationshipCharacterTrigger = relationshipOptions.querySelector(".relationship-character-trigger");
+  const relationshipCharacterBubble = relationshipOptions.querySelector(".relationship-character-bubble");
+  const relationshipCharacterSearch = relationshipOptions.querySelector("[data-relationship-character-search]");
+  const relationshipCharacterInputs = [...relationshipOptions.querySelectorAll('input[name="characterIds"]')];
+  const relationshipCharacterSummary = relationshipOptions.querySelector("#relationship-character-summary");
+  const relationshipCharacterCount = relationshipOptions.querySelector("[data-relationship-character-count]");
+  const relationshipCharacterClear = relationshipOptions.querySelector("[data-relationship-character-clear]");
+  const relationshipCharacterEmpty = relationshipOptions.querySelector("[data-relationship-character-empty]");
   const replaceRelationships = relationshipOptions.querySelector('input[name="replaceExistingRelationships"]');
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
@@ -5958,6 +5985,32 @@ async function openTaskDialog() {
     chapterFieldElement.classList.toggle("is-disabled", disabled);
     chapterFieldElement.setAttribute("aria-disabled", String(disabled));
   };
+  const setRelationshipCharacterBubbleOpen = (open) => {
+    relationshipCharacterBubble.classList.toggle("hidden", !open);
+    relationshipCharacterTrigger.setAttribute("aria-expanded", String(open));
+    if (open) relationshipCharacterSearch.focus();
+  };
+  const syncRelationshipCharacterPicker = () => {
+    const selected = relationshipCharacterInputs.filter((input) => input.checked);
+    const selectedNames = selected.map((input) => input.dataset.characterName);
+    relationshipCharacterSummary.textContent = selectedNames.length
+      ? `${selectedNames.slice(0, 2).join("、")}${selectedNames.length > 2 ? ` 等 ${selectedNames.length} 人` : ""}`
+      : "选择需要定向分析的角色";
+    relationshipCharacterCount.textContent = selected.length ? `已选 ${selected.length}` : "未选择";
+    relationshipCharacterClear.disabled = selected.length === 0;
+    relationshipCharacterTrigger.setAttribute("aria-label", `筛选被分析角色，已选择 ${selected.length} 个`);
+  };
+  const filterRelationshipCharacters = () => {
+    const query = relationshipCharacterSearch.value.trim().toLocaleLowerCase();
+    let visibleCount = 0;
+    for (const input of relationshipCharacterInputs) {
+      const chip = input.closest(".relationship-character-chip");
+      const visible = !query || chip.dataset.characterSearchName.includes(query);
+      chip.classList.toggle("hidden", !visible);
+      if (visible) visibleCount += 1;
+    }
+    relationshipCharacterEmpty.classList.toggle("hidden", visibleCount > 0);
+  };
   const syncRelationshipOptions = () => {
     const enabled = taskTypeSelect.value === "relationship-analysis";
     if (enabled && !allSettingsOption.isConnected) scopeTypeSelect.append(allSettingsOption);
@@ -5967,17 +6020,39 @@ async function openTaskDialog() {
     }
     relationshipOptions.classList.toggle("hidden", !enabled);
     relationshipPrompt.disabled = !enabled;
-    relationshipCharacterSelect.disabled = !enabled;
-    const hasSelectedCharacters = enabled && relationshipCharacterSelect.selectedOptions.length > 0;
+    relationshipCharacterTrigger.disabled = !enabled;
+    relationshipCharacterSearch.disabled = !enabled;
+    for (const input of relationshipCharacterInputs) input.disabled = !enabled;
+    if (!enabled) setRelationshipCharacterBubbleOpen(false);
+    const hasSelectedCharacters = enabled && relationshipCharacterInputs.some((input) => input.checked);
     replaceRelationships.disabled = !hasSelectedCharacters;
     if (!hasSelectedCharacters) replaceRelationships.checked = false;
+    syncRelationshipCharacterPicker();
+    filterRelationshipCharacters();
     syncChapterField();
   };
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
     syncRelationshipOptions();
   });
-  relationshipCharacterSelect.addEventListener("change", syncRelationshipOptions);
+  relationshipCharacterTrigger.addEventListener("click", () => {
+    setRelationshipCharacterBubbleOpen(relationshipCharacterTrigger.getAttribute("aria-expanded") !== "true");
+  });
+  relationshipCharacterSearch.addEventListener("input", filterRelationshipCharacters);
+  for (const input of relationshipCharacterInputs) input.addEventListener("change", syncRelationshipOptions);
+  relationshipCharacterClear.addEventListener("click", () => {
+    for (const input of relationshipCharacterInputs) input.checked = false;
+    syncRelationshipOptions();
+  });
+  $("#dynamic-form").onclick = (event) => {
+    if (!relationshipCharacterPickerElement.contains(event.target)) setRelationshipCharacterBubbleOpen(false);
+  };
+  $("#dynamic-form").onkeydown = (event) => {
+    if (event.key !== "Escape" || relationshipCharacterBubble.classList.contains("hidden")) return;
+    event.preventDefault();
+    setRelationshipCharacterBubbleOpen(false);
+    relationshipCharacterTrigger.focus();
+  };
   scopeTypeSelect.addEventListener("change", syncChapterField);
   syncRelationshipOptions();
 }

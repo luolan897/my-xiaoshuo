@@ -285,8 +285,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-targeted-relationship-analysis');
-    expect(page.text).toContain('/styles.css?v=20260725-module-count-vditor-left-panel');
+    expect(page.text).toContain('/app.js?v=20260726-relationship-character-filter');
+    expect(page.text).toContain('/styles.css?v=20260726-relationship-character-filter');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
