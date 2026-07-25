@@ -3103,7 +3103,7 @@ function mountModuleLayoutToggle(layout, ariaLabel) {
 function mountModuleCount(count) {
   $("#module-header-actions").querySelector('[data-module-header-action="count"]')?.remove();
   const safeCount = Math.max(0, Number(count) || 0);
-  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<span class="module-count-badge" data-module-header-action="count" aria-label="列表数量 ${safeCount}">+${safeCount}</span>`);
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<span class="module-count-badge" data-module-header-action="count" aria-label="列表数量 ${safeCount}">${safeCount}</span>`);
 }
 
 function bindModuleLayoutToggle(refresh) {
