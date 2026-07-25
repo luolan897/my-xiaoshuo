@@ -987,8 +987,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-duplicate-pair section > small { color: var(--muted); }
 .character-duplicate-pair section p { margin: 0; }
 .character-duplicate-evidence { display: grid; gap: 8px; margin: 13px 0; padding: 0; list-style: none; }
-.character-duplicate-evidence li { display: grid; gap: 5px; padding: 10px 12px; border-left: 2px solid var(--accent); background: var(--surface-soft); }
-.character-duplicate-evidence q { color: var(--text); line-height: 1.55; }
+.character-duplicate-evidence li { display: grid; gap: 5px; padding: 10px 12px; border-left: 2px solid var(--accent); background: var(--surface-soft); font-size: 12px; }
+.character-duplicate-evidence q { color: var(--text); font-size: 12px; line-height: 1.45; }
 .character-duplicate-evidence small, .review-resolution-note { color: var(--muted); }
 .character-duplicate-actions { flex-wrap: wrap; }
 .card-actions { display: flex; gap: 6px; margin-top: 15px; }
