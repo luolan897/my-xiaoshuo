@@ -190,17 +190,15 @@ function applyWorkAccessMode() {
   $("#import-file-button").setAttribute("title", proseReadOnly ? "当前权限不能导入正文" : "导入 TXT / DOCX");
   $("#import-file").disabled = proseReadOnly;
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
-  $("#chapter-title").readOnly = proseReadOnly;
-  $("#chapter-content").readOnly = proseReadOnly;
-  $("#chapter-title").setAttribute("aria-readonly", String(proseReadOnly));
-  $("#chapter-content").setAttribute("aria-readonly", String(proseReadOnly));
   $("#ai-prompt").readOnly = aiReadOnly;
   $("#ai-prompt").setAttribute("aria-readonly", String(aiReadOnly));
   $("#ai-send").classList.toggle("permission-hidden", aiReadOnly);
   if (proseReadOnly) {
+    chapterEditorReadOnly = true;
     cancelChapterAutoSave();
     state.dirty = false;
   }
+  applyChapterEditorMode();
 }
 
 const $ = (selector) => document.querySelector(selector);
@@ -504,12 +502,12 @@ function syncChapterAutoSaveWithPresence() {
   collaborationAutoSaveDisabled = hasOtherCollaborators();
   if (collaborationAutoSaveDisabled) {
     cancelChapterAutoSave();
-    if (state.chapter && canEditProse()) {
+    if (state.chapter && canEditProse() && !chapterEditorReadOnly) {
       setSaveState(state.dirty ? "多人协作，自动保存已关闭" : "自动保存已关闭", state.dirty);
     }
     return;
   }
-  if (wasDisabled && state.dirty && state.chapter && canEditProse()) scheduleChapterAutoSave(250);
+  if (wasDisabled && state.dirty && state.chapter && canEditProse() && !chapterEditorReadOnly) scheduleChapterAutoSave(250);
 }
 
 function renderPresence() {
@@ -715,6 +713,7 @@ let settingsReturnContext = null;
 let entityEditorType = null;
 let entityEditorDirty = false;
 let entityEditorReadOnly = false;
+let chapterEditorReadOnly = true;
 let characterListPage = 1;
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
@@ -737,6 +736,28 @@ let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
 let entityHistoryContext = null;
 let moduleContentInteractionsBound = false;
+
+function applyChapterEditorMode() {
+  const permissionBlocked = Boolean(state.work) && !canEditProse();
+  const viewOnly = permissionBlocked || chapterEditorReadOnly;
+  $("#editor-view").classList.toggle("is-read-only", viewOnly);
+  $("#chapter-title").readOnly = viewOnly;
+  $("#chapter-content").readOnly = viewOnly;
+  $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
+  $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
+  $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
+  if (viewOnly) cancelChapterAutoSave();
+}
+
+function enterChapterEditMode() {
+  if (!state.chapter || !canEditProse()) return;
+  chapterEditorReadOnly = false;
+  applyChapterEditorMode();
+  const draft = chapterDraftSnapshot();
+  if (!sameChapterSnapshot(draft, lastSavedChapterSnapshot)) scheduleChapterAutoSave(120);
+  else setSaveState("已保存");
+  $("#chapter-content").focus();
+}
 
 function showEntityEditorPage(type, { readOnly = false } = {}) {
   const module = type === "setting" ? "settings" : type === "character" ? "characters" : type === "race" ? "races" : "organizations";
@@ -2096,7 +2117,7 @@ function cancelChapterAutoSave() {
 }
 
 function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
-  if (!state.chapter || !canEditProse()) return;
+  if (!state.chapter || !canEditProse() || chapterEditorReadOnly) return;
   cancelChapterAutoSave();
   if (collaborationAutoSaveDisabled) {
     setSaveState("多人协作，自动保存已关闭", true);
@@ -2110,7 +2131,7 @@ function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
 }
 
 async function persistChapter({ automatic = false } = {}) {
-  if (!canEditProse()) return null;
+  if (!canEditProse() || chapterEditorReadOnly) return null;
   if (!state.chapter) {
     if (!automatic) toast("请先选择章节", "error");
     return null;
@@ -2725,6 +2746,7 @@ async function selectWork(workId, preferredChapterId = null) {
   settingsReturnContext = null;
   state.work = nextWork;
   state.chapter = null;
+  chapterEditorReadOnly = true;
   if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
   applyWorkAccessMode();
   updateDocumentTitle(state.work);
@@ -2813,11 +2835,12 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
   menu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - rect.height - 8))}px`;
 }
 
-async function selectChapter(chapterId) {
+async function selectChapter(chapterId, { editMode = false } = {}) {
   if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) return;
   cancelChapterAutoSave();
   state.chapter = await api(`/api/chapters/${chapterId}`);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
+  chapterEditorReadOnly = !canEditProse() || !editMode;
   state.module = "editor";
   applyWorkAccessMode();
   markActiveModule("editor");
@@ -2837,6 +2860,7 @@ async function selectChapter(chapterId) {
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
+  else if (chapterEditorReadOnly) setSaveState("阅读模式");
   else if (spacingChanged) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   renderTree();
@@ -2856,6 +2880,7 @@ async function saveChapter() {
 
 function tidyChapterBlankLines() {
   if (!state.chapter) return toast("请先选择章节", "error");
+  if (chapterEditorReadOnly || !canEditProse()) return toast("请先进入编辑模式", "error");
   const input = $("#chapter-content");
   const normalized = normalizeParagraphSpacing(input.value);
   if (normalized === input.value) return toast("正文空行已经符合要求");
@@ -4591,7 +4616,7 @@ async function openChapterDialog(volumeId = null) {
   openDialog("新建章节", field("title", "章节标题") + field("volumeId", "所属卷", "select", selectedVolumeId, state.work.volumes.map((volume) => [volume.id, volume.title])) + field("chapterType", "章节类型", "select", "正文", chapterTypes.map((value) => [value, value])), async (form) => {
     const chapter = await api(`/api/works/${state.work.id}/chapters`, { method: "POST", body: { title: form.get("title"), volumeId: form.get("volumeId"), chapterType: form.get("chapterType"), content: "" } });
     state.work = await api(`/api/works/${state.work.id}`);
-    await selectChapter(chapter.id);
+    await selectChapter(chapter.id, { editMode: true });
   });
 }
 
@@ -6892,6 +6917,7 @@ $("#platform-new-provider").addEventListener("click", () => openProviderDialog()
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
+$("#chapter-edit-button").addEventListener("click", enterChapterEditMode);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
