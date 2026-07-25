@@ -2794,7 +2794,7 @@ function resetWorkScopedUiCaches() {
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
-  const nextWork = await api(`/api/works/${workId}?page=1&limit=100`);
+  const nextWork = await api(`/api/works/${workId}`);
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
