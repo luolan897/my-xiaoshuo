@@ -7,7 +7,7 @@ async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), {
+  return worker.fetch(new Request("http://localhost", { headers: { accept: "text/html" } }), {
     ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
   }, { waitUntil() {}, passThroughOnException() {} });
 }
@@ -22,6 +22,10 @@ test("服务端渲染叙界介绍页", async () => {
   assert.match(html, /人物关系/);
   assert.match(html, /银河图/);
   assert.match(html, /AI 创作助手/);
+  assert.match(html, /href="https:\/\/showcase\.scriverse\.top\/"[^>]*>在线体验/);
+  assert.match(html, /data-scroll-target="workspace"[^>]*>进入叙界世界/);
+  assert.doesNotMatch(html, /打开演示站/);
+  assert.doesNotMatch(html, /href="\/demo"/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/);
 });
 

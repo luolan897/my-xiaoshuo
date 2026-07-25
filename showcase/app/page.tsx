@@ -506,7 +506,7 @@ export default function Home() {
       <header className="site-header">
         <Brand />
         <nav aria-label="主导航"><ScrollLink targetId="workspace">工作台</ScrollLink><ScrollLink targetId="abilities">能力</ScrollLink><ScrollLink targetId="relationships">关系图</ScrollLink><ScrollLink targetId="galaxy">银河图</ScrollLink></nav>
-        <a className="header-cta" href="https://github.com/musnows/Scriverse" target="_blank" rel="noreferrer">查看源代码 <span>↗</span></a>
+        <a className="header-cta" href="https://showcase.scriverse.top/">在线体验 <span>↗</span></a>
       </header>
 
       <section className="hero">

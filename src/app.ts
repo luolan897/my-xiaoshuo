@@ -952,9 +952,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/settings", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listSettingsPage(request.params.workId, pagination) : store.listSettings(request.params.workId));
+    const includeContent = request.query.includeContent === "true";
+    data(response, pagination ? store.listSettingsPage(request.params.workId, pagination, includeContent) : store.listSettings(request.params.workId, includeContent));
   });
   app.post("/api/works/:workId/settings", (request, response) => data(response, store.createSetting(request.params.workId, parse(settingSchema, request.body)), 201));
+  app.get("/api/works/:workId/settings/context", (request, response) => data(response, store.listSettings(request.params.workId, true)));
   app.get("/api/settings/:settingId", (request, response) => data(response, store.getSetting(request.params.settingId)));
   app.patch("/api/settings/:settingId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(settingSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
@@ -972,10 +974,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       includeMerged: z.enum(["0", "1"]).default("0")
     }), request.query);
     const pagination = parsePagination(request.query);
+    const includeRaceMarkdown = request.query.includeContent === "true";
     const permissions = requestPermissions(request, request.params.workId);
     const characters = pagination
-      ? store.listCharactersPage(request.params.workId, pagination, includeSections === "true", includeMerged === "1")
-      : store.listCharacters(request.params.workId, includeSections === "true", includeMerged === "1");
+      ? store.listCharactersPage(request.params.workId, pagination, includeSections === "true", includeMerged === "1", includeRaceMarkdown)
+      : store.listCharacters(request.params.workId, includeSections === "true", includeMerged === "1", includeRaceMarkdown);
     data(response, mapRecords(characters, (character) => redactCharacterLinks(character, permissions)));
   });
   app.post("/api/works/:workId/characters", (request, response) => {
@@ -1101,7 +1104,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/races", (request, response) => {
     const pagination = parsePagination(request.query);
-    const races = pagination ? store.listRacesPage(request.params.workId, pagination) : store.listRaces(request.params.workId);
+    const includeMarkdown = request.query.includeContent === "true";
+    const races = pagination ? store.listRacesPage(request.params.workId, pagination, includeMarkdown) : store.listRaces(request.params.workId, includeMarkdown);
     const permissions = requestPermissions(request, request.params.workId);
     data(response, mapRecords(races, (race) => redactRaceMembers(race, permissions)));
   });
@@ -1131,7 +1135,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/organizations", (request, response) => {
     const pagination = parsePagination(request.query);
-    const organizations = pagination ? store.listOrganizationsPage(request.params.workId, pagination) : store.listOrganizations(request.params.workId);
+    const includeMarkdown = request.query.includeContent === "true";
+    const organizations = pagination ? store.listOrganizationsPage(request.params.workId, pagination, includeMarkdown) : store.listOrganizations(request.params.workId, includeMarkdown);
     const permissions = requestPermissions(request, request.params.workId);
     data(response, mapRecords(organizations, (organization) => redactOrganizationMembers(organization, permissions)));
   });
@@ -1588,6 +1593,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const authenticated = options.disableUserAuth === true || auth.authenticate(request) !== null;
       let html = readFileSync(join(publicPath, "index.html"), "utf8");
       if (!authenticated) html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="login-route">');
+      if (options.disableUserAuth === true) {
+        html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="dev-auth-bypass">');
+        html = html.replace('<body class="auth-pending">', '<body>');
+        html = html.replace('id="auth-view" class="auth-view"', 'id="auth-view" class="auth-view hidden"');
+      }
       response.setHeader("Cache-Control", "no-store");
       response.type("text/html").send(html);
     };

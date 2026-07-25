@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260724-relationship-density";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260725-galaxy-ripple";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260722-inline-code";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
@@ -291,6 +291,10 @@ function isMobileLayout() {
   return window.matchMedia("(max-width: 640px)").matches;
 }
 
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 850px)").matches;
+}
+
 function persistOnboardingCompletion() {
   if (!state.user || state.user.onboardingCompleted) return;
   state.user = { ...state.user, onboardingCompleted: true };
@@ -413,7 +417,7 @@ function renderOnboardingStep(step, focusTitle = false) {
 }
 
 function openOnboarding(force = false) {
-  if (isMobileLayout()) return;
+  if (isMobileViewport()) return;
   const dialog = $("#onboarding-dialog");
   if (!force && hasCompletedOnboarding()) return;
   onboardingSteps = currentOnboardingSteps();
@@ -432,8 +436,7 @@ function completeOnboarding() {
 }
 
 function scheduleFirstUseOnboarding() {
-  if (isMobileLayout()) return;
-  if (onboardingAutoScheduled || hasCompletedOnboarding()) return;
+  if (isMobileViewport() || onboardingAutoScheduled || hasCompletedOnboarding()) return;
   onboardingAutoScheduled = true;
   window.requestAnimationFrame(() => {
     onboardingAutoScheduled = false;
@@ -607,6 +610,11 @@ function loadPanelLayout() {
 }
 
 let panelLayout = loadPanelLayout();
+if (window.matchMedia("(max-width: 850px)").matches) {
+  // 手机上默认收起创作助手，避免遮挡正文；用户可通过底部把手随时展开。
+  panelLayout.aiCollapsed = true;
+  panelLayout.leftCollapsed = true;
+}
 
 function constrainPanelLayout() {
   const minimumMainWidth = 480;
@@ -627,9 +635,13 @@ function applyPanelLayout(persist = false) {
   app.style.setProperty("--ai-panel-width", `${panelLayout.aiWidth}px`);
   app.classList.toggle("left-panel-collapsed", panelLayout.leftCollapsed);
   app.classList.toggle("ai-panel-collapsed", panelLayout.aiCollapsed);
-  $("#left-panel-toggle").textContent = panelLayout.leftCollapsed ? "›" : "‹";
+  const mobileViewport = isMobileViewport();
+  $("#left-panel-toggle").textContent = mobileViewport ? "›" : (panelLayout.leftCollapsed ? "›" : "‹");
   $("#left-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
-  $("#left-panel-toggle").setAttribute("aria-label", panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏");
+  $("#left-panel-toggle").setAttribute("aria-label", mobileViewport
+    ? (panelLayout.leftCollapsed ? "打开作品模块" : "关闭作品模块")
+    : (panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏"));
+  $("#mobile-module-tab").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
   $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
   $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
@@ -726,11 +738,14 @@ let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
 let entityHistoryContext = null;
+let moduleContentInteractionsBound = false;
 
 function showEntityEditorPage(type, { readOnly = false } = {}) {
+  const module = type === "setting" ? "settings" : type === "character" ? "characters" : type === "race" ? "races" : "organizations";
+  const viewOnly = readOnly || !canEditModule(module);
   entityEditorType = type;
   entityEditorDirty = false;
-  entityEditorReadOnly = readOnly;
+  entityEditorReadOnly = viewOnly;
   characterSectionEditorDirty = false;
   knowledgeSectionEditorDirty = false;
   $("#entity-editor-view").classList.remove("hidden");
@@ -739,6 +754,7 @@ function showEntityEditorPage(type, { readOnly = false } = {}) {
   $("#knowledge-editor-form").classList.toggle("hidden", !["race", "organization"].includes(type));
   $("#character-section-editor-view").classList.add("hidden");
   $("#knowledge-section-editor-view").classList.add("hidden");
+  ["setting", "character", "knowledge"].forEach((editor) => $(`#${editor}-editor-readonly-badge`).classList.toggle("hidden", !(viewOnly && (editor === "knowledge" ? ["race", "organization"].includes(type) : editor === type))));
   $("#app").inert = true;
   document.body.classList.add("entity-editor-open");
   replacePageRoute(currentPageRoute());
@@ -1780,8 +1796,14 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
-    if (response.status === 401 && !path.startsWith("/api/auth/")) showAuth(false);
-    throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      state.user = null;
+      state.csrfToken = null;
+      showAuth(false);
+    }
+    const error = new Error(payload.error?.message ?? `请求失败：${response.status}`);
+    error.code = payload.error?.code;
+    throw error;
   }
   if (response.status === 204) return null;
   const payload = await response.json();
@@ -1861,6 +1883,7 @@ async function refreshAuthCaptcha(target = "login") {
 }
 
 function showAuth(setupRequired, registrationOpen = false) {
+  if (state.user) return;
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
   const canRegister = registrationOpen === true;
@@ -1889,6 +1912,7 @@ function applyAuthenticatedUser(session) {
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.documentElement.classList.remove("login-route");
+  if (!session.csrfToken) document.body.classList.remove("auth-pending");
   // 注意：auth-pending 由 initializePage 路由完成后才移除，
   // 避免会话确认后、目标视图渲染前露出无内容的编辑器外壳
 }
@@ -2256,15 +2280,13 @@ async function initializePage() {
 
     if (route.view === "editor") {
       if (route.chapterId && state.chapter?.id !== route.chapterId) await selectChapter(route.chapterId);
+      if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);
       return;
     }
     if (route.view === "module") return;
     if (route.view === "entity-editor") {
-      const records = route.entity === "setting" ? state.settings : route.entity === "character" ? state.characters : route.entity === "race" ? state.races : state.organizations;
       const item = route.entityId
-        ? route.entity === "character"
-          ? await api(`/api/characters/${encodeURIComponent(route.entityId)}`)
-          : records.find((record) => record.id === route.entityId)
+        ? await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)
         : null;
       if (route.entityId && !item) {
         toast(({ setting: "未找到要编辑的设定", character: "未找到要编辑的角色", race: "未找到要编辑的种族", organization: "未找到要编辑的组织" }[route.entity] ?? "未找到要编辑的档案"), "error");
@@ -2902,6 +2924,7 @@ async function showModule(module) {
   $("#module-create-button").textContent = meta[3];
   $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
+  bindModuleContentInteractions();
   try {
     if (module === "settings") await renderSettings();
     if (module === "characters") await renderCharacters(characterListPage);
@@ -3136,7 +3159,7 @@ function mountCharacterFilterToggle() {
 
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
-    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openReview;
+    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization ?? card.dataset.openReview;
     card.addEventListener("click", (event) => {
       if (!event.target.closest("button, a, summary")) void open(id);
     });
@@ -3146,6 +3169,36 @@ function bindRecordPreview(selector, open) {
       event.preventDefault();
       void open(id);
     });
+  });
+}
+
+function bindModuleContentInteractions() {
+  if (moduleContentInteractionsBound) return;
+  moduleContentInteractionsBound = true;
+  const host = $("#module-content");
+  const open = async (card) => {
+    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization;
+    if (!id) return;
+    if (card.dataset.openSetting) return openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly: true });
+    if (card.dataset.openCharacter) return openCharacterEditor(await api(`/api/characters/${encodeURIComponent(id)}`), { readOnly: true });
+    if (card.dataset.openRace) return openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly: true });
+    if (card.dataset.openOrganization) return openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly: true });
+  };
+  const findCard = (target) => target instanceof Element
+    ? target.closest("[data-open-setting], [data-open-character], [data-open-race], [data-open-organization]")
+    : null;
+  host.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("button, a, summary")) return;
+    const card = findCard(event.target);
+    if (card) void open(card);
+  });
+  host.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (event.target instanceof Element && event.target.closest("button, a, summary")) return;
+    const card = findCard(event.target);
+    if (!card) return;
+    event.preventDefault();
+    void open(card);
   });
 }
 
@@ -3193,13 +3246,13 @@ function settingRecordActions(item) {
 function renderSettingCards(records) {
   return `<div class="card-grid">${records.map((item) => `
     <article class="record-card preview-record-card" data-open-setting="${esc(item.id)}" role="button" tabindex="0" aria-label="查看设定 ${esc(item.title)}"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(settingStatusLabel(item.status))}</small>
-    <h3>${esc(item.title)}</h3><div class="record-markdown-preview message-body">${renderMarkdown(item.content) || '<p class="markdown-editor-empty">暂无正文</p>'}</div>
+    <h3>${esc(item.title)}</h3><div class="record-markdown-preview">${esc(item.contentPreview || "暂无正文预览")}</div>
     <div class="card-actions">${settingRecordActions(item)}</div></article>`).join("")}</div>`;
 }
 
 function renderSettingRows(records) {
   return `<div class="module-row-list">${records.map((item) => {
-    const preview = moduleRowPreview(item.content);
+    const preview = moduleRowPreview(item.contentPreview);
     return `
     <article class="record-card module-row preview-record-card" data-open-setting="${esc(item.id)}" role="button" tabindex="0" aria-label="查看设定 ${esc(item.title)}"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(settingStatusLabel(item.status))}</small>
     <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
@@ -3216,8 +3269,8 @@ async function renderSettings() {
     ? `${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
   bindModuleLayoutToggle(renderSettings);
-  bindRecordPreview("[data-open-setting]", (id) => openSettingEditor(records.find((item) => item.id === id), { readOnly: true }));
-  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingEditor(records.find((item) => item.id === button.dataset.editSetting))));
+  const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
+  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
   bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
 
@@ -3233,16 +3286,19 @@ async function renderCharacters(page = characterListPage) {
     : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
-  [state.characters, state.races, state.organizations] = [characterPage.items, races, organizations];
+  state.characters = characterPage.items;
   const layout = readModuleLayout();
   const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
+  const characterLockBadge = (item) => item.lockedFields.length
+    ? `<span class="character-lock-badge" aria-label="${item.lockedFields.length} 个锁定字段" title="锁定字段：${esc(item.lockedFields.join("、"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>${item.lockedFields.length}</span></span>`
+    : "";
   const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
-    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}${item.lockedFields.length ? `<small>锁定 ${item.lockedFields.length} 项</small>` : ""}
-    <h3>${esc(item.name)}</h3>
+    <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
+    <div class="character-card-heading"><h3>${esc(item.name)}</h3>${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
-    ${item.aliases.length ? `<div class="character-aliases">${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
+    ${item.aliases.length ? `<div class="character-aliases"><b>别名</b>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
     ${item.code ? `<div class="character-code"><b>编号</b><span class="pill">${esc(item.code)}</span></div>` : ""}
     ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
     ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
@@ -3261,9 +3317,8 @@ async function renderCharacters(page = characterListPage) {
     ].filter(Boolean).join(" · ");
     const line = meta ? `${meta} · ${preview}` : preview;
     return `
-    <article class="record-card module-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
-      ${item.lockedFields.length ? `<small>锁定 ${item.lockedFields.length} 项</small>` : ""}
-      <h3>${esc(item.name)}</h3>
+    <article class="record-card module-row character-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
+      <div class="character-card-heading"><h3>${esc(item.name)}</h3>${characterLockBadge(item)}</div>
       <p class="module-row-preview" title="${esc(line)}">${esc(line)}</p>
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;
@@ -3325,10 +3380,7 @@ async function renderCharacters(page = characterListPage) {
 }
 
 async function renderRaces() {
-  [state.races, state.characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/races`),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
   const layout = readModuleLayout();
   const canEditRaces = canEditModule("races");
   const raceActions = (item) => canEditRaces
@@ -3340,10 +3392,10 @@ async function renderRaces() {
   const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
     <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
     <div class="race-tree-branch">
-      <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settings.length} 条自身设定</small>
+    <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settingsCount ?? item.settings?.length ?? 0} 条自身设定</small>
         <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
         <p>${esc(item.description || "尚未填写种族简介")}</p>
-        <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<section class="knowledge-markdown-block${setting.inherited ? " inherited" : ""}"><div class="knowledge-markdown-block-heading"><h4>${esc(setting.title || "未命名章节")}</h4><small>${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}</small></div><div class="message-body">${renderMarkdown(setting.value) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></section>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
+        <div class="race-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条共同设定，打开查看详情</span>` : '<span class="pill">暂无共同设定</span>'}</div>
         <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
         ${raceCardActions(item)}
       </article>
@@ -3352,7 +3404,7 @@ async function renderRaces() {
   </details>`;
   const raceRows = () => `<div class="module-row-list">${state.races.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写种族简介");
-    const meta = `${item.memberIds.length} 位直接角色 · ${item.settings.length ? "已填写共同设定" : "暂无共同设定"}`;
+    const meta = `${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
     return `
     <article class="record-card module-row race-card preview-record-card" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}">
       <small>${esc(meta)}</small>
@@ -3366,16 +3418,13 @@ async function renderRaces() {
     ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   bindModuleLayoutToggle(renderRaces);
-  bindRecordPreview("[data-open-race]", (id) => openRaceDialog(state.races.find((item) => item.id === id), { readOnly: true }));
-  $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
+  const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
+  $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
   bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
 async function renderOrganizations() {
-  [state.organizations, state.characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/organizations`),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.organizations = await apiAllPages(`/api/works/${state.work.id}/organizations`);
   const layout = readModuleLayout();
   const canEditOrganizations = canEditModule("organizations");
   const organizationActions = (item) => canEditOrganizations
@@ -3385,9 +3434,9 @@ async function renderOrganizations() {
     ? organizationActions(item)
     : `<div class="card-actions">${organizationActions(item)}</div>`;
   const organizationCards = () => `<div class="card-grid organization-grid">${state.organizations.map((item) => `
-    <article class="record-card organization-card${canEditOrganizations ? " has-card-edit" : ""}"><small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
+    <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
-      <div class="organization-settings">${item.settingsSections?.length ? item.settingsSections.map((section) => `<article class="knowledge-markdown-block"><div class="knowledge-markdown-block-heading"><h4>${esc(section.title || "未命名章节")}</h4></div><div class="message-body">${renderMarkdown(section.contentMarkdown) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></article>`).join("") : '<span class="pill">暂无组织设定</span>'}</div>
+      <div class="organization-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条组织设定，打开查看详情</span>` : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
       ${organizationCardActions(item)}
     </article>`).join("")}</div>`;
@@ -3395,8 +3444,8 @@ async function renderOrganizations() {
     const preview = moduleRowPreview(item.description || "尚未填写组织简介");
     const members = item.members.length ? item.members.map((member) => member.name).join("、") : "暂无绑定角色";
     return `
-    <article class="record-card module-row organization-card">
-      <small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
+    <article class="record-card module-row organization-card" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}">
+      <small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3>
       <p class="module-row-preview" title="${esc(`${preview} · 成员：${members}`)}">${esc(preview)} · ${esc(members)}</p>
       <div class="card-actions">${organizationActions(item)}</div>
@@ -3407,7 +3456,8 @@ async function renderOrganizations() {
     ? `${layout === "rows" ? organizationRows() : organizationCards()}`
     : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   bindModuleLayoutToggle(renderOrganizations);
-  $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
+  const openOrganization = async (id, readOnly) => openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly });
+  $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => { void openOrganization(button.dataset.editOrganization, false); }));
   bindEntityHistoryButtons(async () => { await renderOrganizations(); await loadAiReferences(); });
 }
 
@@ -4096,7 +4146,7 @@ async function loadAiReferences() {
   const generation = workScopedUiGeneration;
   const [characters, settings] = await Promise.all([
     canReadModule("characters") ? apiAllPages(`/api/works/${workId}/characters`) : Promise.resolve([]),
-    canReadModule("settings") ? apiAllPages(`/api/works/${workId}/settings`) : Promise.resolve([])
+    canReadModule("settings") ? api(`/api/works/${workId}/settings/context`) : Promise.resolve([])
   ]);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.characters = characters;
@@ -4773,7 +4823,14 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     placeholder,
     preview: { transform: transformVditorPreview },
     cache: { enable: false },
-    toolbar: ["headings", "bold", "italic", "strike", "|", "line", "quote", "list", "ordered-list", "check", "|", "code", "inline-code", "link", "table", "upload", "|", "undo", "redo", "edit-mode", "fullscreen"],
+    toolbar: ["headings", "bold", "italic", "strike", "|", "line", "quote", "list", "ordered-list", "check", "|", "code", "inline-code", "link", "table", "upload", "|", "undo", "redo", {
+      name: "line-number",
+      tip: "显示/隐藏行号",
+      tipPosition: "s",
+      className: "vditor-line-number-button",
+      icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h3M4 9h3M4 13h3M4 17h3M10 5h10M10 9h10M10 13h10M10 17h10" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/></svg>',
+      click: () => toggleVditorLineNumbers(editor)
+    }, "edit-mode", "fullscreen"],
     upload: {
       accept: "image/*",
       max: 10 * 1024 * 1024,
@@ -4782,10 +4839,14 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     },
     input: (markdown) => {
       normalizeVditorAttachmentImages(editor);
+      updateVditorWordCount(editor, markdown);
+      updateVditorLineNumbers(editor, markdown);
       onInput(markdown);
     },
     after: () => {
       normalizeVditorAttachmentImages(editor);
+      updateVditorWordCount(editor, value);
+      updateVditorLineNumbers(editor, value);
       if (readOnly) editor?.disabled();
     }
   });
@@ -4794,6 +4855,51 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
   editor.__attachmentObserver = attachmentObserver;
   host.__vditor = editor;
   return editor;
+}
+
+function toggleVditorLineNumbers(editor) {
+  const host = editor?.vditor?.element;
+  if (!host) return;
+  const enabled = host.classList.toggle("show-line-numbers");
+  const button = host.querySelector(".vditor-line-number-button");
+  if (button) button.setAttribute("aria-pressed", String(enabled));
+}
+
+function updateVditorLineNumbers(editor, markdown) {
+  const content = editor?.vditor?.element?.querySelector(".vditor-content");
+  if (!content) return;
+  let gutter = content.querySelector(".vditor-line-numbers");
+  if (!gutter) {
+    gutter = document.createElement("div");
+    gutter.className = "vditor-line-numbers";
+    gutter.setAttribute("aria-hidden", "true");
+    content.prepend(gutter);
+  }
+  const lineCount = Math.max(1, String(markdown ?? "").split(/\r?\n/gu).length);
+  const fragment = document.createDocumentFragment();
+  for (let line = 1; line <= lineCount; line += 1) {
+    const number = document.createElement("span");
+    number.textContent = String(line);
+    fragment.append(number);
+  }
+  gutter.replaceChildren(fragment);
+}
+
+function updateVditorWordCount(editor, markdown) {
+  const toolbar = editor?.vditor?.toolbar?.element;
+  if (!toolbar) return;
+  let counter = toolbar.querySelector("[data-markdown-word-count]");
+  if (!counter) {
+    counter = document.createElement("span");
+    counter.className = "markdown-word-count";
+    counter.dataset.markdownWordCount = "true";
+    counter.setAttribute("role", "status");
+    counter.setAttribute("aria-live", "polite");
+    counter.title = "当前 Markdown 正文的字数，不计空白字符";
+    toolbar.append(counter);
+  }
+  const count = Array.from(String(markdown ?? "").replace(/\s/gu, "")).length;
+  counter.textContent = `${count.toLocaleString("zh-CN")} 字`;
 }
 
 function transformVditorPreview(html) {
@@ -4875,13 +4981,10 @@ function knowledgeSectionEditorHtml(section = null) {
   const label = knowledgeEditorKind === "race" ? "种族" : "组织";
   return `<div class="character-section-editor-shell knowledge-section-editor-shell">
     <header class="character-section-editor-header">
-      <div><span class="eyebrow">${label} Markdown 设定</span><h2 id="knowledge-section-editor-title">${section ? `编辑“${esc(section.title)}”` : "新建设定"}</h2></div>
+      <div><span class="eyebrow">${label} Markdown 设定</span><input id="knowledge-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建设定" aria-label="设定标题" required></div>
       <button class="entity-editor-back" type="button" data-knowledge-section-edit-close>返回设定列表</button>
     </header>
     <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}${label} Markdown 设定">
-      <div class="character-markdown-editor-meta">
-        <label>设定标题<input id="knowledge-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：组织章程、种族特征" required></label>
-      </div>
       <div id="knowledge-section-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
       <div class="character-markdown-editor-footer">
         <div class="character-markdown-editor-actions"><button type="button" data-knowledge-section-edit-cancel>取消</button><button type="button" class="primary-button" data-knowledge-section-edit-save>${section ? "保存设定" : "添加设定"}</button></div>
@@ -4953,13 +5056,12 @@ function characterSectionEditorHtml(section = null) {
   const options = Object.entries(characterSectionTypeLabels).map(([value, label]) => `<option value="${value}" ${section?.sectionType === value ? "selected" : ""}>${esc(label)}</option>`).join("");
   return `<div class="character-section-editor-shell">
     <header class="character-section-editor-header">
-      <div><span class="eyebrow">人物 Markdown 档案</span><h2 id="character-section-editor-title">${section ? `编辑“${esc(section.title)}”` : "新建档案章节"}</h2></div>
+      <div><span class="eyebrow">人物 Markdown 档案</span><input id="character-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建档案章节" aria-label="章节标题" required></div>
       <button class="entity-editor-back" type="button" data-character-section-edit-close>返回人物档案</button>
     </header>
     <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
     <div class="character-markdown-editor-meta">
       <label>章节类型<select id="character-section-type">${options}</select></label>
-      <label>章节标题<input id="character-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：背景故事" required></label>
       <label class="character-markdown-summary-field">章节摘要<textarea id="character-section-summary" maxlength="20000" placeholder="用于角色列表和 AI 快速定位，不会替代正文">${esc(section?.summary ?? "")}</textarea></label>
     </div>
     <div id="character-section-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
@@ -5630,16 +5732,28 @@ function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
   const defaultTaskType = ANALYSIS_TYPES[0].value;
   const taskTypeField = `<div class="form-field analysis-type-field"><label>分析类型<select name="taskType" aria-describedby="analysis-type-description">${ANALYSIS_TYPES.map(({ value, label }) => `<option value="${esc(value)}" ${value === defaultTaskType ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label><p id="analysis-type-description" class="analysis-type-description" aria-live="polite">${esc(analysisTypeDescription(defaultTaskType))}</p></div>`;
-  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
+  const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
+  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField, async (form) => {
     const scope = form.get("taskType") === "character-identity-audit" || form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
     await renderTasks();
   });
   const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
+  const scopeTypeSelect = $("#dialog-fields").querySelector('select[name="scopeType"]');
+  const chapterSelect = $("#dialog-fields").querySelector('select[name="chapterId"]');
+  const chapterFieldElement = chapterSelect.closest(".task-chapter-field");
   const description = $("#analysis-type-description");
+  const syncChapterField = () => {
+    const disabled = scopeTypeSelect.value === "book";
+    chapterSelect.disabled = disabled;
+    chapterFieldElement.classList.toggle("is-disabled", disabled);
+    chapterFieldElement.setAttribute("aria-disabled", String(disabled));
+  };
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
   });
+  scopeTypeSelect.addEventListener("change", syncChapterField);
+  syncChapterField();
 }
 
 function openProviderDialog(item) {
@@ -6188,7 +6302,9 @@ $("#profile-form").addEventListener("submit", async (event) => {
     state.user = updated;
     applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
     toast("显示名称已更新");
-  } catch (error) { toast(error.message, "error"); }
+  } catch (error) {
+    toast(error.code === "INVALID_CURRENT_PASSWORD" ? "当前密码错误，请重新输入" : error.message, "error");
+  }
 });
 $("#password-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -6500,6 +6616,14 @@ $("#left-panel-toggle").addEventListener("click", () => {
   applyPanelLayout(true);
   if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("left", false);
 });
+$("#mobile-module-tab").addEventListener("click", () => {
+  panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
+  applyPanelLayout(true);
+});
+$("#mobile-panel-backdrop").addEventListener("click", () => {
+  panelLayout.leftCollapsed = true;
+  applyPanelLayout(true);
+});
 $("#ai-panel-toggle").addEventListener("click", () => {
   panelLayout.aiCollapsed = !panelLayout.aiCollapsed;
   applyPanelLayout(true);
@@ -6516,7 +6640,11 @@ $("#mobile-ai-toggle").addEventListener("click", () => {
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
-window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLineNumbers(); });
+window.addEventListener("resize", () => {
+  if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
+  applyPanelLayout();
+  scheduleChapterLineNumbers();
+});
 $("#module-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button || button.id === "module-more-button") return;
@@ -6526,8 +6654,13 @@ $("#module-nav").addEventListener("click", (event) => {
     return;
   }
   if (button.dataset.module) {
-    showModule(button.dataset.module);
-    if (window.matchMedia("(max-width: 640px)").matches) setMobilePanel("left", false);
+    void showModule(button.dataset.module).finally(() => {
+      if (isMobileViewport()) {
+        panelLayout.leftCollapsed = true;
+        applyPanelLayout(true);
+      }
+      if (isMobileLayout()) setMobilePanel("left", false);
+    });
   }
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
@@ -6784,6 +6917,10 @@ window.addEventListener("beforeunload", (event) => { if (state.dirty || entityEd
 
 initializePage().catch((error) => {
   restoringPageRoute = false;
+  if (state.user) {
+    document.body.classList.remove("auth-pending");
+    $("#auth-view").classList.add("hidden");
+  }
   showShelf();
   toast(`系统初始化失败：${error.message}`, "error");
 });
