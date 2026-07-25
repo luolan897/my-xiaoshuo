@@ -287,6 +287,10 @@ function hasCompletedOnboarding() {
   return state.user?.onboardingCompleted === true;
 }
 
+function isMobileLayout() {
+  return window.matchMedia("(max-width: 640px)").matches;
+}
+
 function persistOnboardingCompletion() {
   if (!state.user || state.user.onboardingCompleted) return;
   state.user = { ...state.user, onboardingCompleted: true };
@@ -409,6 +413,7 @@ function renderOnboardingStep(step, focusTitle = false) {
 }
 
 function openOnboarding(force = false) {
+  if (isMobileLayout()) return;
   const dialog = $("#onboarding-dialog");
   if (!force && hasCompletedOnboarding()) return;
   onboardingSteps = currentOnboardingSteps();
@@ -427,6 +432,7 @@ function completeOnboarding() {
 }
 
 function scheduleFirstUseOnboarding() {
+  if (isMobileLayout()) return;
   if (onboardingAutoScheduled || hasCompletedOnboarding()) return;
   onboardingAutoScheduled = true;
   window.requestAnimationFrame(() => {

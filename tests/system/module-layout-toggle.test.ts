@@ -23,7 +23,7 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260725-ui-collaboration');
+    expect(page.text).toContain('/styles.css?v=20260725-mobile-shelf-v2');
     expect(page.text).toContain('/app.js?v=20260725-character-filter-toggle');
     expect(page.text).toContain('<script type="module" src="/app.js?v=20260725-character-filter-toggle"></script>');
 

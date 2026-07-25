@@ -281,7 +281,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260725-character-filter-toggle');
-    expect(page.text).toContain('/styles.css?v=20260725-ui-collaboration');
+    expect(page.text).toContain('/styles.css?v=20260725-mobile-shelf-v2');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
@@ -495,6 +495,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("font-size: 10px; }");
     expect(styles.text).toContain(".account-menu button:hover, .account-menu button:focus-visible");
     expect(styles.text).toContain(".book-info > span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }");
+    expect(styles.text).toContain(".book-shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 14px; }");
+    expect(styles.text).toContain(".book-info > span, .book-access-badge { display: none; }");
+    expect(styles.text).toContain("#onboarding-dialog, #onboarding-menu-button { display: none !important; }");
+    expect(application.text).toContain('function isMobileLayout()');
+    expect(application.text).toContain('if (isMobileLayout()) return;');
     expect(styles.text).not.toContain("-webkit-box-orient: vertical; min-height: 2.8em;");
     expect(styles.text).toContain(".config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }");
     expect(styles.text).toContain(".book-card-settings {");
