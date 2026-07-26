@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260727-background-center-v3">
+    <link rel="stylesheet" href="/styles.css?v=20260727-chapter-insight-toast">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -209,7 +209,7 @@
             <input id="chapter-title" class="chapter-title" aria-label="章节标题" placeholder="章节标题">
             <div class="editor-actions">
               <span id="chapter-stats" class="chapter-stats">0 字 · v0</span>
-              <button id="insight-button" class="ghost-button" type="button">章节概览</button>
+              <button id="insight-button" class="ghost-button" type="button" aria-controls="chapter-insight-toast" aria-expanded="false">章节概览</button>
               <button id="versions-button" class="ghost-button" type="button">版本</button>
               <button id="chapter-edit-button" class="primary-button hidden" type="button">编辑</button>
               <button id="tidy-blank-lines-button" class="ghost-button" type="button">整理空行</button>
@@ -217,7 +217,6 @@
             </div>
           </div>
           <div class="editor-body">
-            <div id="chapter-insight" class="chapter-insight hidden"></div>
             <div class="chapter-editor-frame">
               <aside id="chapter-line-numbers" class="chapter-line-numbers" aria-label="正文行号，可拖拽引用多行"><div id="chapter-line-numbers-inner"></div></aside>
               <textarea id="chapter-content" class="chapter-content" aria-label="章节正文" placeholder="在这里开始你的故事……"></textarea>
@@ -770,6 +769,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260727-background-center-v3"></script>
+    <script type="module" src="/app.js?v=20260727-chapter-insight-toast"></script>
   </body>
 </html>
