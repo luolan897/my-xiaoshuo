@@ -1634,6 +1634,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
+  app.get("/api/works/:workId/ai-settings/relationship-search-index", (request, response) => {
+    data(response, ai.getRelationshipSearchIndexStatus(request.params.workId));
+  });
+  app.post("/api/works/:workId/ai-settings/relationship-search-index/rebuild", (request, response) => {
+    const workId = request.params.workId;
+    const result = ai.rebuildRelationshipSearchIndex(workId);
+    store.audit(workId, "relationship.search-index.rebuild-queued", "work-ai-settings", workId, {
+      queuedSourceCount: result.queuedSourceCount
+    });
+    data(response, result, 202);
+  });
   app.patch("/api/works/:workId/ai-settings", (request, response) => {
     const workId = request.params.workId;
     const before = store.getWorkAiSettings(workId);

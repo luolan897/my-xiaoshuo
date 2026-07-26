@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import request from "supertest";
 import type { Runtime } from "../../src/app.js";
 import { ftsPhrase, relationshipCharacterTokens, relationshipPinyinTokens } from "../../src/relationship-search.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
@@ -64,6 +65,40 @@ describe("人物关系来源增量索引", () => {
       "SELECT id FROM relationship_source_search WHERE source_type = 'setting' AND source_id = ?",
       setting.id as string
     )).toBeUndefined();
+  });
+
+  it("可从作品 AI 设置主动重建存量拼音索引", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "摩斯拉从废墟中苏醒。");
+    const workId = String(seeded.work.id);
+    const ai = runtime.ai as unknown as { ensureRelationshipSearchIndex(workId: string): Promise<number> };
+    await ai.ensureRelationshipSearchIndex(workId);
+    runtime.database.run(
+      `DELETE FROM chapter_paragraph_pinyin_fts WHERE rowid IN (
+         SELECT id FROM chapter_paragraph_search WHERE work_id = ?
+       )`,
+      workId
+    );
+
+    const before = await request(runtime.app)
+      .get(`/api/works/${workId}/ai-settings/relationship-search-index`)
+      .expect(200);
+    expect(before.body.data.indexedParagraphCount).toBe(0);
+
+    const queued = await request(runtime.app)
+      .post(`/api/works/${workId}/ai-settings/relationship-search-index/rebuild`)
+      .send({})
+      .expect(202);
+    expect(queued.body.data.status).toBe("queued");
+    expect(queued.body.data.queuedSourceCount).toBeGreaterThan(0);
+    await ai.ensureRelationshipSearchIndex(workId);
+
+    const after = await request(runtime.app)
+      .get(`/api/works/${workId}/ai-settings/relationship-search-index`)
+      .expect(200);
+    expect(after.body.data).toMatchObject({ status: "ready", queuedSourceCount: 0, indexedParagraphCount: 1 });
+    expect(runtime.database.get("PRAGMA integrity_check")?.integrity_check).toBe("ok");
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
   it("父种族更新会重建后代种族和成员的人物关系索引", async () => {

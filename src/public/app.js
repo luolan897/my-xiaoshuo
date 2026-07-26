@@ -4542,15 +4542,18 @@ async function renderPlatformAiConfig() {
 }
 
 async function renderBookAiSettings() {
-  const [settings, providers, models, taskDefaults] = await Promise.all([
+  const [settings, providers, models, taskDefaults, relationshipIndex] = await Promise.all([
     api(`/api/works/${state.work.id}/ai-settings`),
     api("/api/platform/ai/providers"),
     api(`/api/works/${state.work.id}/models`),
-    api(`/api/works/${state.work.id}/task-defaults`)
+    api(`/api/works/${state.work.id}/task-defaults`),
+    api(`/api/works/${state.work.id}/ai-settings/relationship-search-index`)
   ]);
   const host = $("#module-content");
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  const relationshipIndexStatusLabels = { queued: "等待构建", building: "正在构建", ready: "已就绪", failed: "构建失败" };
+  const relationshipIndexStatusText = (status) => `${relationshipIndexStatusLabels[status.status] ?? "状态未知"} · 代次 ${status.generation} · 待处理 ${status.queuedSourceCount} 项 · 已索引 ${status.indexedParagraphCount} 个正文段落 / ${status.indexedSourceCount} 项设定来源`;
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>存量作品升级后会自动在后台构建；如历史数据未命中拼音近似匹配，可手动将本书正文和设定来源全部重新加入索引队列。</p></div></div><div class="config-inline-save"><output id="relationship-search-index-status" aria-live="polite">${esc(relationshipIndexStatusText(relationshipIndex))}</output><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">重建拼音索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
     `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
@@ -4570,6 +4573,19 @@ async function renderBookAiSettings() {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { systemPrompt: $("#work-system-prompt").value } });
       toast("本书系统提示词已保存");
       scheduleAiContextUsage();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#rebuild-relationship-search-index").addEventListener("click", async () => {
+    const button = $("#rebuild-relationship-search-index");
+    button.disabled = true;
+    try {
+      const status = await api(`/api/works/${state.work.id}/ai-settings/relationship-search-index/rebuild`, { method: "POST" });
+      $("#relationship-search-index-status").textContent = relationshipIndexStatusText(status);
+      toast(`拼音索引已加入后台队列，共 ${status.queuedSourceCount} 项`);
     } catch (error) {
       toast(error.message, "error");
     } finally {

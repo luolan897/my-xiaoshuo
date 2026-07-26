@@ -3895,6 +3895,98 @@ export class AiManager {
     await Promise.allSettled(workIds.map((workId) => this.ensureRelationshipSearchIndex(workId)));
   }
 
+  getRelationshipSearchIndexStatus(workId: string): Record<string, unknown> {
+    this.store.getWork(workId);
+    const row = this.store.db.get(
+      "SELECT status, generation, updated_at FROM relationship_source_index_state WHERE work_id = ?",
+      workId
+    );
+    const queuedSourceCount = Number(this.store.db.get(
+      "SELECT COUNT(*) AS count FROM relationship_source_index_queue WHERE work_id = ?",
+      workId
+    )?.count ?? 0);
+    const storedStatus = String(row?.status ?? "");
+    const status = storedStatus === "building"
+      ? "building"
+      : queuedSourceCount > 0
+        ? "queued"
+        : storedStatus || "ready";
+    return {
+      workId,
+      status,
+      generation: Number(row?.generation ?? 0),
+      queuedSourceCount,
+      indexedSourceCount: Number(this.store.db.get(
+        "SELECT COUNT(*) AS count FROM relationship_source_search WHERE work_id = ?",
+        workId
+      )?.count ?? 0),
+      indexedParagraphCount: Number(this.store.db.get(
+        `SELECT COUNT(*) AS count FROM chapter_paragraph_pinyin_fts pinyin
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = pinyin.rowid
+         WHERE paragraph.work_id = ?`,
+        workId
+      )?.count ?? 0),
+      updatedAt: String(row?.updated_at ?? "")
+    };
+  }
+
+  rebuildRelationshipSearchIndex(workId: string): Record<string, unknown> {
+    this.store.getWork(workId);
+    const timestamp = now();
+    const queueSources: Array<{ table: string; sourceType: string; idColumn: string }> = [
+      { table: "works", sourceType: "work", idColumn: "id" },
+      { table: "chapters", sourceType: "chapter", idColumn: "id" },
+      { table: "settings", sourceType: "setting", idColumn: "id" },
+      { table: "characters", sourceType: "character", idColumn: "id" },
+      { table: "races", sourceType: "race", idColumn: "id" },
+      { table: "organizations", sourceType: "organization", idColumn: "id" },
+      { table: "timeline_tracks", sourceType: "timeline-track", idColumn: "id" },
+      { table: "timeline_events", sourceType: "timeline-event", idColumn: "id" },
+      { table: "relationships", sourceType: "relationship", idColumn: "id" },
+      { table: "foreshadows", sourceType: "foreshadow", idColumn: "id" },
+      { table: "review_items", sourceType: "review", idColumn: "id" }
+    ];
+    this.store.db.transaction(() => {
+      this.store.db.run(
+        `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+         SELECT work_id, source_type, source_id, ? FROM relationship_source_search WHERE work_id = ?
+         ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+        timestamp,
+        workId
+      );
+      for (const source of queueSources) {
+        const workColumn = source.table === "works" ? "id" : "work_id";
+        this.store.db.run(
+          `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+           SELECT ${workColumn}, ?, ${source.idColumn}, ? FROM ${source.table} WHERE ${workColumn} = ?
+           ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+          source.sourceType,
+          timestamp,
+          workId
+        );
+      }
+      this.store.db.run(
+        `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+         SELECT chapter.work_id, 'chapter-outline', outline.chapter_id, ?
+         FROM chapter_outlines outline JOIN chapters chapter ON chapter.id = outline.chapter_id
+         WHERE chapter.work_id = ?
+         ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+        timestamp,
+        workId
+      );
+      this.store.db.run(
+        `INSERT INTO relationship_source_index_state(work_id, status, generation, error, updated_at)
+         VALUES (?, 'queued', 0, '', ?)
+         ON CONFLICT(work_id) DO UPDATE SET status = 'queued', error = '', updated_at = excluded.updated_at`,
+        workId,
+        timestamp
+      );
+    });
+    const status = this.getRelationshipSearchIndexStatus(workId);
+    void this.ensureRelationshipSearchIndex(workId).catch(() => undefined);
+    return status;
+  }
+
   private ensureRelationshipSearchIndex(workId: string): Promise<number> {
     const existing = this.relationshipIndexBuilds.get(workId);
     if (existing) return existing;
