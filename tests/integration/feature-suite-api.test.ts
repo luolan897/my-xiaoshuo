@@ -1483,6 +1483,50 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).not.toContain("人物名称变体确认器");
   });
 
+  it("拉丁字母别名只参与精确来源匹配", async () => {
+    runtime = createTestRuntime();
+    const { workId } = await seedWork(runtime);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "雅典娜",
+      aliases: ["Athena", "Mega"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "赫拉" }).expect(201);
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "人工智能记录",
+      category: "人物",
+      content: "Athena 负责管理空间站。"
+    }).expect(201);
+    const aiInternals = runtime.ai as unknown as {
+      relationshipFuzzyIndexMatches: (...args: unknown[]) => Set<string>;
+      ensureRelationshipSearchIndex: (targetWorkId: string) => Promise<number>;
+      localRelationshipSourceSelection: (
+        targetWorkId: string,
+        scope: Record<string, unknown>,
+        characters: Record<string, unknown>[],
+        selectedCharacterIds: Set<string>,
+        generation: number
+      ) => Promise<{ exactKeys: string[] }>;
+    };
+    const originalFuzzyIndexMatches = aiInternals.relationshipFuzzyIndexMatches.bind(aiInternals);
+    const fuzzyReferences: string[] = [];
+    aiInternals.relationshipFuzzyIndexMatches = (...args: unknown[]) => {
+      fuzzyReferences.push(String(args[1]));
+      return originalFuzzyIndexMatches(...args);
+    };
+
+    const generation = await aiInternals.ensureRelationshipSearchIndex(workId);
+    const selection = await aiInternals.localRelationshipSourceSelection(
+      workId,
+      { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      runtime.store.listCharacters(workId),
+      new Set([String(target.body.data.id)]),
+      generation
+    );
+
+    expect(fuzzyReferences).toEqual(["雅典娜"]);
+    expect(selection.exactKeys).toContain(`setting:${setting.body.data.id}`);
+  });
+
   it("来源候选超限时保存结构化诊断并可通过身份资料修复", async () => {
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{ message: { content: "[]" } }]
@@ -1514,9 +1558,11 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const detail = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/detail`).expect(200);
     expect(detail.body.data.failures).toEqual([expect.objectContaining({
       code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
-      message: "疑似人物名来源过多，请补充人物别名或身份资料后重试",
+      message: "“魔斯拉”的拼音疑似来源仍然过多；请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览",
       details: expect.objectContaining({
         characterId: target.body.data.id,
+        targetName: "魔斯拉",
+        reference: "魔斯拉",
         reason: "candidate-sources",
         candidateCount: 201,
         identityAnchorCount: 0

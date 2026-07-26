@@ -4,6 +4,7 @@ import {
   damerauLevenshteinDistance,
   findApproximateNameMatches,
   findApproximateNameMatchesChunked,
+  isRelationshipPhoneticReference,
   relationshipCharacterTokens,
   relationshipPinyinSyllables,
   relationshipPinyinTokens
@@ -14,6 +15,15 @@ describe("人物关系来源搜索", () => {
     expect(relationshipCharacterTokens("魔斯拉")).toEqual(["u9b54", "u65af", "u62c9"]);
     expect(relationshipPinyinSyllables("魔斯拉")).toEqual(["mo", "si", "la"]);
     expect(relationshipPinyinTokens("女娲")).toEqual(["pnv", "pwa"]);
+  });
+
+  it("仅允许中文姓名和中文别名参与拼音疑似匹配", () => {
+    expect(isRelationshipPhoneticReference("魔斯拉")).toBe(true);
+    expect(isRelationshipPhoneticReference("安德鲁·罗素")).toBe(true);
+    expect(isRelationshipPhoneticReference("Athena")).toBe(false);
+    expect(isRelationshipPhoneticReference("Mega")).toBe(false);
+    expect(isRelationshipPhoneticReference("AI 女王")).toBe(false);
+    expect(isRelationshipPhoneticReference("S")).toBe(false);
   });
 
   it("识别同音、单字错误、插入删除和换位", () => {
