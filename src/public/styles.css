@@ -1326,6 +1326,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   white-space: pre-wrap;
 }
 .task-result-readable { display: grid; gap: 10px; margin-top: 7px !important; }
+.relationship-change-preview { display: grid; gap: 10px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.relationship-change-preview > div:first-child { display: grid; gap: 3px; }
+.relationship-change-preview h4 { margin: 0; font-size: 14px; }
+.relationship-change-preview small { color: var(--muted); }
+.relationship-change-preview.is-pending { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.relationship-change-preview.is-applied { border-color: color-mix(in srgb, var(--green) 46%, var(--line)); }
+.relationship-change-preview.is-discarded { color: var(--muted); }
+.relationship-change-preview-warning { padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--ink); }
+.relationship-change-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .task-result-section { display: grid; gap: 7px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .task-result-section h4 { margin: 0 0 2px; color: var(--ink); font-size: 13px; }
 .task-result-section code { overflow-wrap: anywhere; }

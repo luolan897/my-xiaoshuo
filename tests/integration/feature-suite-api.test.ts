@@ -1658,6 +1658,78 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     await request(runtime.app).post(`/api/tasks/${failureTask.body.data.id}/run`).send({ modelId }).expect(502);
     const afterFailure = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(afterFailure.body.data).toEqual(replaced.body.data);
+
+    failAggregation = false;
+    const previewTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        characterIds: [linId],
+        replaceExistingRelationships: true,
+        previewRelationshipChanges: true
+      }
+    }).expect(201);
+    const previewResult = await request(runtime.app).post(`/api/tasks/${previewTask.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(previewResult.body.data.result).toMatchObject({
+      relationshipIds: [],
+      createdCount: 1,
+      updatedCount: 0,
+      deletedCount: 1,
+      relationshipChangePreview: {
+        status: "pending",
+        totalCount: 2,
+        createdCount: 1,
+        updatedCount: 0,
+        deletedCount: 1
+      }
+    });
+    expect(previewResult.body.data.result.relationshipResults.map((item: { action: string }) => item.action).sort())
+      .toEqual(["created", "deleted"]);
+    const beforeApply = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(beforeApply.body.data).toEqual(replaced.body.data);
+    const previewDetail = await request(runtime.app).get(`/api/tasks/${previewTask.body.data.id}/detail`).expect(200);
+    expect(previewDetail.body.data.resultSummary).toMatchObject({
+      relationshipChangePreview: { status: "pending", totalCount: 2, createdCount: 1, deletedCount: 1 }
+    });
+    expect(previewDetail.body.data.resultSummary.summary).toContain("尚未写入人物关系库");
+
+    const applied = await request(runtime.app).post(`/api/tasks/${previewTask.body.data.id}/relationship-changes/apply`).send({}).expect(200);
+    expect(applied.body.data.result.relationshipChangePreview.status).toBe("applied");
+    expect(applied.body.data.result.relationshipIds).toHaveLength(1);
+    const afterApply = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    const appliedTargetRelationships = afterApply.body.data.filter((relationship: { fromCharacterId: string; toCharacterId: string }) =>
+      relationship.fromCharacterId === linId || relationship.toCharacterId === linId
+    );
+    expect(appliedTargetRelationships).toHaveLength(1);
+    expect(appliedTargetRelationships[0]).toMatchObject({ subtype: "朋友", confirmationStatus: "pending" });
+    expect(appliedTargetRelationships[0].id).not.toBe(currentTargetRelationships[0].id);
+    const repeatedApply = await request(runtime.app).post(`/api/tasks/${previewTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
+    expect(repeatedApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_NOT_PENDING");
+
+    const staleTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        characterIds: [linId],
+        replaceExistingRelationships: true,
+        previewRelationshipChanges: true
+      }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/run`).send({ modelId }).expect(200);
+    const manuallyUpdated = await request(runtime.app).patch(`/api/relationships/${appliedTargetRelationships[0].id}`).send({
+      currentStatus: "作者刚刚修改"
+    }).expect(200);
+    const staleApply = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
+    expect(staleApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_STALE");
+    const afterStaleApply = await request(runtime.app).get(`/api/relationships/${appliedTargetRelationships[0].id}`).expect(200);
+    expect(afterStaleApply.body.data).toMatchObject({
+      currentStatus: "作者刚刚修改",
+      versionNo: manuallyUpdated.body.data.versionNo
+    });
+    const discarded = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/discard`).send({}).expect(200);
+    expect(discarded.body.data.result.relationshipChangePreview.status).toBe("discarded");
+    const applyDiscarded = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
+    expect(applyDiscarded.body.error.code).toBe("RELATIONSHIP_PREVIEW_NOT_PENDING");
   });
 
   it("拒绝不适用于当前任务或缺少角色前提的关系分析选项", async () => {
@@ -1690,6 +1762,10 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "timeline-analysis",
       scope: { type: "book", preFilterRelationshipSources: false }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", previewRelationshipChanges: true }
     }).expect(400);
   });
 

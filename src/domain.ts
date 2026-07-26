@@ -63,6 +63,7 @@ export type ContextScope = {
   includeAllSettings?: boolean;
   additionalPrompt?: string;
   preFilterRelationshipSources?: boolean;
+  previewRelationshipChanges?: boolean;
   replaceExistingRelationships?: boolean;
   excludeRelationshipConstraints?: boolean;
   suppressAutomaticContext?: boolean;

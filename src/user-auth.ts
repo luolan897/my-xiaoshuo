@@ -1021,6 +1021,9 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/tasks\/[^/]+\/trace(?:\/calls\/[^/]+)?$/u.test(pathname)) {
     return { read: ["ai-analysis", ...contentPermissionModules] };
   }
+  if (write && /^\/api\/tasks\/[^/]+\/relationship-changes\/apply$/u.test(pathname)) {
+    return { write: ["ai-analysis", "relationships"] };
+  }
   if (/^\/api\/(?:works\/[^/]+\/(?:tasks|ai-calls)|tasks\/[^/]+)(?:\/|$)/u.test(pathname)) {
     return write ? { write: ["ai-analysis"] } : { read: ["ai-analysis"] };
   }
