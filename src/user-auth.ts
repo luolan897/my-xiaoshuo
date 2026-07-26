@@ -39,6 +39,20 @@ export type UserAvatar = {
   updatedAt: string;
 };
 
+export function relationshipAnalysisReadModules(scope: unknown): WorkPermissionModule[] {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return [];
+  const value = scope as Record<string, unknown>;
+  if (!Array.isArray(value.characterIds) || value.characterIds.length === 0) return [];
+  const modules = new Set<WorkPermissionModule>(["characters"]);
+  if (value.type !== "settings") modules.add("prose");
+  if (value.type === "settings" || value.includeAllSettings === true) {
+    for (const module of ["settings", "races", "organizations", "timeline", "relationships", "outlines", "reviews"] as const) {
+      modules.add(module);
+    }
+  }
+  return [...modules];
+}
+
 export type AuthSession = {
   id: string;
   user: AuthUser;
@@ -915,6 +929,9 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/presence$/u.test(pathname)) return {};
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { anyRead: [...aiInteractionModules] };
+  if (!write && /^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u.test(pathname)) {
+    return { anyRead: [...aiInteractionModules] };
+  }
   if (/^\/api\/works\/[^/]+\/file-versions\/[^/]+\/restore$/u.test(pathname)) {
     return write ? { write: [...proseReplacementPermissionModules] } : { read: ["prose"] };
   }
@@ -992,12 +1009,10 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     return direct("reviews");
   }
   if (write && /^\/api\/works\/[^/]+\/tasks\/?$/u.test(pathname)) {
-    const scope = requestBodyRecord(request).scope;
-    const characterIds = scope && typeof scope === "object" && !Array.isArray(scope)
-      ? (scope as Record<string, unknown>).characterIds
-      : undefined;
-    if (Array.isArray(characterIds) && characterIds.length > 0) {
-      return { read: ["characters"], write: ["ai-analysis"] };
+    const body = requestBodyRecord(request);
+    const sourceModules = body.taskType === "relationship-analysis" ? relationshipAnalysisReadModules(body.scope) : [];
+    if (sourceModules.length > 0) {
+      return { read: sourceModules, write: ["ai-analysis"] };
     }
   }
   if (write && /^\/api\/suggestions\/[^/]+\/accept$/u.test(pathname)) {

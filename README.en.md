@@ -221,6 +221,14 @@ Scriverse is currently an MVP. APIs and data structures may still change. Back u
 
 Read the [contribution guide](docs/CONTRIBUTING.md) before submitting code or documentation. Start everyday changes from the latest `develop` branch and merge them through a Pull Request targeting `develop`.
 
+## License
+
+Copyright (C) 2026 musnows
+
+Except for third-party components identified separately, the project is licensed from this license change onward under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`). You may use, modify, distribute, or commercialize the software, but distributed derivative versions must continue to provide their corresponding source under AGPLv3. Modified versions that interact with users over a network must also offer those users the corresponding source of that version.
+
+Versions published before this license change remain under the license included with their respective releases.
+
 ## 🌟 Special Thanks
 
 Thanks to the open-source [Vditor](https://github.com/Vanessa219/vditor) project for providing the Markdown editor, instant rendering, and split preview capabilities used by Scriverse.

@@ -40,6 +40,7 @@ import {
   createCliApiScopeMiddleware,
   createUserSessionMiddleware,
   createWorkAuthorizationMiddleware,
+  relationshipAnalysisReadModules,
   setSessionCookie,
   UserAuthService,
   type AuthUser
@@ -429,8 +430,8 @@ const relationshipAnalysisScopeSchema = z.object({
   }
 });
 const analysisTaskSchema = z.union([
-  z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional() }).strict(),
-  z.object({ taskType: analysisTaskTypeSchema, scope: jsonObject.optional() }).strict().superRefine((input, context) => {
+  z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional(), modelId: identifier.optional() }).strict(),
+  z.object({ taskType: analysisTaskTypeSchema, scope: jsonObject.optional(), modelId: identifier.optional() }).strict().superRefine((input, context) => {
     if (input.scope?.includeAllSettings !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "includeAllSettings"], message: "包含所有设定仅支持人物关系分析" });
     }
@@ -669,7 +670,24 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store,
     new CredentialVault(options.masterSecret),
     options.fetchImpl ?? fetch,
-    options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined
+    options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
+    (task, actor) => {
+      if (task.taskType !== "relationship-analysis") return;
+      const requiredModules = relationshipAnalysisReadModules(task.scope);
+      if (requiredModules.length === 0) return;
+      const creator = actor ? null : database.get(
+        "SELECT created_by_user_id FROM analysis_tasks WHERE id = ?",
+        String(task.id)
+      );
+      const userId = actor?.userId ?? (typeof creator?.created_by_user_id === "string" ? creator.created_by_user_id : null);
+      if (!userId) return;
+      const user = auth.getUser(userId);
+      if (user.status !== "active") throw new AppError(403, "WORK_ACCESS_DENIED", "任务创建者已无法访问这部作品");
+      auth.assertWorkAccess(user, String(task.workId), {
+        read: requiredModules,
+        write: ["ai-analysis"]
+      }, false, actor?.allowAdminAccess ?? false);
+    }
   );
   const app = express();
   const upload = multer({
@@ -1528,11 +1546,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/tasks", (request, response) => {
     const input = parse(analysisTaskSchema, request.body);
     data(response, redactTaskCharacterNames(
-      store.createTask(request.params.workId, input),
+      ai.createTask(request.params.workId, input),
       requestPermissions(request, request.params.workId)
     ), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
+    const permissions = requestPermissions(request, request.params.workId);
+    for (const taskId of store.listOldestPendingTaskIds(request.params.workId, store.countPendingTasks(request.params.workId))) {
+      const task = store.getTask(taskId);
+      if (task.taskType !== "relationship-analysis") continue;
+      const deniedModules = relationshipAnalysisReadModules(task.scope).filter((module) => permissions[module] === "none");
+      if (deniedModules.length > 0) {
+        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取待运行定向人物关系分析所需资料模块的权限", {
+          taskId,
+          modules: deniedModules
+        });
+      }
+    }
     data(response, ai.startAutoRunBatch(request.params.workId));
   });
   app.get("/api/tasks/:taskId/detail", (request, response) => data(
@@ -1561,8 +1591,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, ai.getTaskTraceCall(request.params.taskId, request.params.callId)));
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
+    const task = store.getTask(request.params.taskId);
+    if (task.taskType === "relationship-analysis") {
+      const permissions = requestPermissions(request, String(task.workId));
+      const deniedModules = relationshipAnalysisReadModules(task.scope).filter((module) => permissions[module] === "none");
+      if (deniedModules.length > 0) {
+        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取本次定向人物关系分析所需资料模块的权限", {
+          modules: deniedModules
+        });
+      }
+    }
     data(response, redactTaskCharacterNames(
-      await ai.runTask(request.params.taskId, input.modelId),
+      await ai.runTask(request.params.taskId, input.modelId, request.authUser ? {
+        userId: request.authUser.userId,
+        allowAdminAccess: request.authMethod !== "api-key"
+      } : undefined),
       requestPermissions(request)
     ));
   });

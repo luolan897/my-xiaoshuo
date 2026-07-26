@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }, { version: 38 }, { version: 39 }, { version: 40 }, { version: 41 }, { version: 42 }, { version: 43 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }, { version: 38 }, { version: 39 }, { version: 40 }, { version: 41 }, { version: 42 }, { version: 43 }, { version: 44 }, { version: 45 }, { version: 46 }]);
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -102,6 +102,8 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(races)").some((column) => column.name === "settings_sections_json")).toBe(true);
     expect(first.all("PRAGMA table_info(organizations)").some((column) => column.name === "settings_sections_json")).toBe(true);
     expect(first.all("PRAGMA index_list(analysis_tasks)").some((index) => index.name === "idx_tasks_work_created")).toBe(true);
+    expect(first.all("PRAGMA table_info(analysis_tasks)").some((column) => column.name === "model_id")).toBe(true);
+    expect(first.all("PRAGMA index_list(analysis_tasks)").some((index) => index.name === "idx_tasks_model")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_calls)").some((column) => column.name === "task_id")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_call_traces)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["call_id", "task_id", "initial_messages_json", "rounds_json", "source_refs_json", "created_at", "updated_at"])
@@ -288,6 +290,86 @@ describe("数据库版本化迁移", () => {
     const sourceRefsColumn = migrated.all("PRAGMA table_info(ai_call_traces)")
       .find((column) => column.name === "source_refs_json");
     expect(sourceRefsColumn).toMatchObject({ notnull: 1, dflt_value: "'[]'" });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("为历史分析任务补充可选模型并保留原任务", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-task-model-"));
+    roots.push(root);
+    const filename = join(root, "task-model.db");
+    const current = new Database(filename);
+    const timestamp = "2025-01-01T00:00:00.000Z";
+    current.run(
+      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
+       VALUES ('work-task-model', '任务模型迁移', '', '', 'zh-CN', '[]', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO analysis_tasks (id, work_id, task_type, status, created_at, updated_at)
+       VALUES ('task-before-model', 'work-task-model', 'book-analysis', 'pending', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DROP INDEX idx_tasks_model;
+      ALTER TABLE analysis_tasks DROP COLUMN model_id;
+      DELETE FROM schema_migrations WHERE version = 44;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 44")?.count).toBe(1);
+    expect(migrated.get("SELECT id, model_id FROM analysis_tasks WHERE id = 'task-before-model'")).toEqual({
+      id: "task-before-model",
+      model_id: null
+    });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("建立可重建的关系来源拼音索引并只回填待构建队列", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-relationship-search-"));
+    roots.push(root);
+    const filename = join(root, "relationship-search.db");
+    const database = new Database(filename);
+
+    expect(database.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 45")?.count).toBe(1);
+    expect(database.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 46")?.count).toBe(1);
+    expect(database.all("PRAGMA table_info(review_items)").some((column) => column.name === "dedupe_key")).toBe(true);
+    expect(database.get("SELECT sql FROM sqlite_master WHERE name = 'chapter_paragraph_pinyin_fts'")?.sql)
+      .toContain("contentless_delete=1");
+    expect(database.get("SELECT sql FROM sqlite_master WHERE name = 'relationship_source_pinyin_fts'")?.sql)
+      .toContain("content=''");
+    expect(database.all("PRAGMA table_info(relationship_source_search)").map((column) => column.name))
+      .not.toContain("pinyin_content");
+    expect(database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(database.all("PRAGMA foreign_key_check")).toEqual([]);
+    database.close();
+
+    const schema45 = new Database(filename);
+    schema45.run("DELETE FROM schema_migrations WHERE version = 46");
+    schema45.raw.exec(`
+      DROP TRIGGER relationship_index_volume_dependencies_au;
+      CREATE TRIGGER relationship_index_volume_dependencies_au AFTER UPDATE ON volumes BEGIN
+        INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+        SELECT chapter.work_id, 'chapter-outline', chapter.id, datetime('now')
+        FROM chapters chapter JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+        WHERE chapter.volume_id = new.id
+        ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+      END;
+    `);
+    schema45.close();
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 46")?.count).toBe(1);
+    expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE name = 'relationship_index_volume_dependencies_au'")?.sql))
+      .toContain("foreshadow_occurrences");
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
