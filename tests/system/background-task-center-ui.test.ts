@@ -22,5 +22,6 @@ describe("全局后台任务中心界面", () => {
     expect(script).toContain('data-background-index-action="rebuild"');
     expect(styles).toContain(".background-task-row");
     expect(styles).toContain(".background-task-count");
+    expect(styles).toContain(".background-task-row > div { grid-column: 1; grid-row: 2; }");
   });
 });

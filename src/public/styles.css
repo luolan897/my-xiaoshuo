@@ -2185,7 +2185,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .background-index-actions button { flex: 1 1 130px; }
   .background-task-row { grid-template-columns: minmax(0, 1fr) auto; }
   .background-task-row .task-status-badge { grid-column: 1; width: fit-content; }
-  .background-task-row > div { grid-column: 1 / -1; grid-row: 2; }
+  .background-task-row > div { grid-column: 1; grid-row: 2; }
   .background-task-progress { grid-column: 2; grid-row: 1; }
   .background-task-row .ghost-button { grid-column: 2; grid-row: 2; }
   .background-task-section .relationship-index-metrics { grid-template-columns: 1fr; }
