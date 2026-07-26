@@ -5325,7 +5325,7 @@ export class Store {
     };
   }
 
-  createTask(workId: string, input: { taskType: string; scope?: Record<string, unknown> }): Record<string, unknown> {
+  createTask(workId: string, input: { taskType: string; scope?: Record<string, unknown>; modelId?: string }): Record<string, unknown> {
     this.getWork(workId);
     const taskId = id("task");
     const timestamp = now();
@@ -5359,10 +5359,11 @@ export class Store {
       Object.assign(sourceVersions, this.relationshipSettingsSourceVersions(workId));
     }
     this.db.run(
-      `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+      `INSERT INTO analysis_tasks (id, work_id, model_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
       taskId,
       workId,
+      input.modelId ?? null,
       input.taskType,
       JSON.stringify(scope),
       JSON.stringify(sourceVersions),
@@ -5370,7 +5371,11 @@ export class Store {
       timestamp,
       currentRequestActor()?.userId ?? null
     );
-    this.audit(workId, "task.created", "analysis-task", taskId, { taskType: input.taskType, scope });
+    this.audit(workId, "task.created", "analysis-task", taskId, {
+      taskType: input.taskType,
+      scope,
+      modelId: input.modelId ?? null
+    });
     this.notifyAnalysisTaskQueued(workId);
     return this.getTask(taskId);
   }
@@ -5390,8 +5395,11 @@ export class Store {
     const total = numberValue(statsRow, "total");
     const page = paginationSql(pagination);
     const rows = this.db.all(
-      `SELECT id, task_type, scope_json, status, progress, created_at, updated_at
-       FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC${page.sql}`,
+      `SELECT task.id, task.model_id, task.task_type, task.scope_json, task.status, task.progress, task.created_at, task.updated_at,
+        model.display_name AS model_display_name, model.model_id AS model_api_id
+       FROM analysis_tasks task
+       LEFT JOIN models model ON model.id = task.model_id
+       WHERE task.work_id = ? ORDER BY task.created_at DESC, task.id DESC${page.sql}`,
       workId,
       ...page.params
     );
@@ -6277,6 +6285,7 @@ export class Store {
     return {
       id: requiredString(row, "id"),
       workId,
+      model: this.analysisTaskModel(row),
       taskType,
       scope,
       scopeSummary: this.taskScopeSummary(workId, scope, characterNames),
@@ -6301,6 +6310,7 @@ export class Store {
     const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
     return {
       id: requiredString(row, "id"),
+      model: this.analysisTaskModel(row),
       taskType: requiredString(row, "task_type"),
       scopeSummary: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, characterNames),
       scopeSummaryWithoutCharacterNames: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, new Map(), false),
@@ -6308,6 +6318,20 @@ export class Store {
       progress: numberValue(row, "progress"),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private analysisTaskModel(row: Row): Record<string, unknown> | null {
+    const modelId = optionalString(row, "model_id");
+    if (!modelId) return null;
+    const model = row.model_display_name !== undefined
+      ? row
+      : this.db.get("SELECT display_name AS model_display_name, model_id AS model_api_id FROM models WHERE id = ?", modelId);
+    if (!model) return { id: modelId, displayName: "模型已删除", modelId: "", deleted: true };
+    return {
+      id: modelId,
+      displayName: requiredString(model, "model_display_name"),
+      modelId: requiredString(model, "model_api_id")
     };
   }
 

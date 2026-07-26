@@ -1372,19 +1372,32 @@ export class AiManager {
 
   listPlatformModels(): Record<string, unknown>[] {
     return this.store.db
-      .all("SELECT m.*, p.name AS provider_name FROM models m JOIN providers p ON p.id = m.provider_id WHERE p.work_id = ? ORDER BY p.created_at, m.created_at", PLATFORM_AI_WORK_ID)
-      .map((row) => ({ ...this.mapModel(row), providerName: stringValue(row, "provider_name") }));
+      .all(`SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
+        FROM models m JOIN providers p ON p.id = m.provider_id
+        WHERE p.work_id = ? ORDER BY p.created_at, m.created_at`, PLATFORM_AI_WORK_ID)
+      .map((row) => ({
+        ...this.mapModel(row),
+        providerName: stringValue(row, "provider_name"),
+        providerStatus: stringValue(row, "provider_status"),
+        providerConnectionStatus: stringValue(row, "provider_connection_status")
+      }));
   }
 
   listPlatformModelsPage(pagination: Pagination): PaginatedResult<Record<string, unknown>> {
     const page = paginationSql(pagination);
     const rows = this.store.db.all(
-      `SELECT m.*, p.name AS provider_name FROM models m JOIN providers p ON p.id = m.provider_id
+      `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
+       FROM models m JOIN providers p ON p.id = m.provider_id
        WHERE p.work_id = ? ORDER BY p.created_at, m.created_at${page.sql}`,
       PLATFORM_AI_WORK_ID,
       ...page.params
     );
-    return paginated(rows.map((row) => ({ ...this.mapModel(row), providerName: stringValue(row, "provider_name") })), pagination);
+    return paginated(rows.map((row) => ({
+      ...this.mapModel(row),
+      providerName: stringValue(row, "provider_name"),
+      providerStatus: stringValue(row, "provider_status"),
+      providerConnectionStatus: stringValue(row, "provider_connection_status")
+    })), pagination);
   }
 
   listWorkModels(workId: string): Record<string, unknown>[] {
@@ -1461,6 +1474,27 @@ export class AiManager {
       taskType: stringValue(row, "task_type"),
       model: this.getModel(stringValue(row, "model_id"))
     })), pagination);
+  }
+
+  createTask(workId: string, input: {
+    taskType: string;
+    scope?: Record<string, unknown>;
+    modelId?: string;
+  }): Record<string, unknown> {
+    this.store.getWork(workId);
+    const modelPurpose = this.analysisTaskModelPurpose(input.taskType);
+    const defaultRow = this.store.db.get(
+      "SELECT model_id FROM task_defaults WHERE work_id = ? AND task_type = ?",
+      workId,
+      modelPurpose
+    );
+    const modelId = input.modelId ?? (defaultRow ? stringValue(defaultRow, "model_id") : undefined);
+    if (modelId) this.resolveModel(workId, modelPurpose, modelId);
+    return this.store.createTask(workId, {
+      taskType: input.taskType,
+      ...(input.scope ? { scope: input.scope } : {}),
+      ...(modelId ? { modelId } : {})
+    });
   }
 
   async createSuggestion(input: GenerateInput): Promise<Record<string, unknown>> {
@@ -1797,9 +1831,13 @@ export class AiManager {
   async runTask(taskId: string, modelId?: string): Promise<Record<string, unknown>> {
     const task = this.store.getTask(taskId);
     const workId = String(task.workId);
+    const taskModel = task.model && typeof task.model === "object" && !Array.isArray(task.model)
+      ? task.model as Record<string, unknown>
+      : null;
+    const selectedModelId = modelId ?? (typeof taskModel?.id === "string" ? taskModel.id : undefined);
     const batch = this.getAutoRunBatch(workId);
     const startedAt = process.hrtime.bigint();
-    logger.info("ai.task.started", { taskId, workId, taskType: task.taskType, modelId: modelId ?? null });
+    logger.info("ai.task.started", { taskId, workId, taskType: task.taskType, modelId: selectedModelId ?? null });
     if (task.status !== "pending") throw new AppError(409, "TASK_NOT_PENDING", "只有待执行任务可以运行");
     if (!this.store.isTaskSourceCurrent(taskId)) {
       const expired = this.store.updateTask(taskId, { status: "expired" });
@@ -1821,21 +1859,21 @@ export class AiManager {
       const scope = task.scope as ContextScope;
       let result: Record<string, unknown>;
       if (taskType === "chapter-analysis") {
-        result = await this.runChapterAnalysis(workId, scope, modelId, taskId);
+        result = await this.runChapterAnalysis(workId, scope, selectedModelId, taskId);
       } else if (taskType === "character-extraction" || taskType === "character-summary") {
-        result = await this.runCharacterExtraction(workId, scope, modelId, taskId);
+        result = await this.runCharacterExtraction(workId, scope, selectedModelId, taskId);
       } else if (taskType === "character-identity-audit") {
-        result = await this.runCharacterIdentityAudit(workId, scope, modelId, taskId);
+        result = await this.runCharacterIdentityAudit(workId, scope, selectedModelId, taskId);
       } else if (taskType === "timeline-analysis") {
-        result = await this.runTimelineAnalysis(workId, scope, modelId, taskId);
+        result = await this.runTimelineAnalysis(workId, scope, selectedModelId, taskId);
       } else if (taskType === "relationship-analysis") {
-        result = await this.runRelationshipAnalysis(workId, scope, modelId, taskId);
+        result = await this.runRelationshipAnalysis(workId, scope, selectedModelId, taskId);
       } else if (taskType === "worldview-analysis") {
-        result = await this.runWorldviewAnalysis(workId, scope, modelId, taskId);
+        result = await this.runWorldviewAnalysis(workId, scope, selectedModelId, taskId);
       } else if (taskType === "setting-extraction") {
-        result = await this.runSettingExtraction(workId, scope, modelId, taskId);
+        result = await this.runSettingExtraction(workId, scope, selectedModelId, taskId);
       } else if (taskType === "consistency-check") {
-        result = await this.runConsistencyCheck(workId, scope, modelId, taskId);
+        result = await this.runConsistencyCheck(workId, scope, selectedModelId, taskId);
       } else {
         const generated = await this.generate({
           workId,
@@ -1844,7 +1882,7 @@ export class AiManager {
           instruction: "请基于上下文完成分析，给出有原文依据的中文结论。",
           scope,
           signal: taskController.signal,
-          ...(modelId ? { modelId } : {})
+          ...(selectedModelId ? { modelId: selectedModelId } : {})
         });
         result = { content: generated.content, callId: generated.callId };
       }
@@ -5009,6 +5047,14 @@ export class AiManager {
     if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
     this.assertAvailable(provider, model);
     return { model, provider };
+  }
+
+  private analysisTaskModelPurpose(taskType: string): TaskType {
+    if (taskType === "timeline-analysis") return "timeline-analysis";
+    if (taskType === "relationship-analysis") return "relationship-analysis";
+    if (taskType === "consistency-check") return "consistency-check";
+    if (taskType === "chapter-analysis") return "chapter-analysis";
+    return "book-analysis";
   }
 
   private configuredConcurrency(workId: string, taskType: TaskType, modelId?: string): number {

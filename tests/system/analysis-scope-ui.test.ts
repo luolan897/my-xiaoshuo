@@ -14,6 +14,12 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('allSettingsOption.textContent = "全书 + 设定集"');
     expect(application).toContain('settingsOnlyOption.textContent = "仅设定集"');
     expect(application).toContain('const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings"');
+    expect(application).toContain('function analysisTaskModelPurpose(taskType)');
+    expect(application).toContain('name="modelId" required aria-describedby="analysis-task-model-help"');
+    expect(application).toContain('默认值来自“本书 AI 设置”，只修改当前任务，不会改变全书默认模型。');
+    expect(application).toContain('const defaultId = defaultModelByTask.get(analysisTaskModelPurpose(taskTypeSelect.value)) ?? ""');
+    expect(application).toContain('body: { taskType, scope, modelId }');
+    expect(application).toContain('body: {}');
     expect(application).toContain('{ type: "settings"');
     expect(application).toContain('const enabled = taskTypeSelect.value === "relationship-analysis"');
     expect(application).toContain('const disabled = scopeTypeSelect.value !== "chapter"');

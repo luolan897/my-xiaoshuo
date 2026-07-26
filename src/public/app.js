@@ -147,6 +147,14 @@ function analysisTaskTypeLabel(taskType) {
   return analysisTaskTypeLabels.get(String(taskType)) ?? "其他分析";
 }
 
+function analysisTaskModelPurpose(taskType) {
+  if (taskType === "timeline-analysis") return "timeline-analysis";
+  if (taskType === "relationship-analysis") return "relationship-analysis";
+  if (taskType === "consistency-check") return "consistency-check";
+  if (taskType === "chapter-analysis") return "chapter-analysis";
+  return "book-analysis";
+}
+
 function analysisTaskStatusLabel(status) {
   return ({
     pending: "待执行",
@@ -2646,6 +2654,7 @@ async function openMembersDialog(targetWork = state.work) {
   if (!targetWork) return;
   memberDialogWork = targetWork;
   const canManage = ["admin", "owner"].includes(String(targetWork.accessRole));
+  $("#members-settings-return").classList.toggle("hidden", $("#settings-hub-view").classList.contains("hidden"));
   $("#members-dialog-eyebrow").textContent = `作品权限 · 《${targetWork.title}》`;
   $("#members-dialog-title").textContent = "成员模块权限";
   $("#members-list").innerHTML = '<p class="empty-state">正在读取成员……</p>';
@@ -2753,6 +2762,13 @@ async function showSettingsHub() {
   renderSettingsHub();
   replacePageRoute({ view: "settings", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
+}
+
+async function returnToSettingsHub(actionSelector, dialogSelector = null) {
+  const dialog = dialogSelector ? $(dialogSelector) : null;
+  if (dialog?.open) dialog.close();
+  if (!(await showSettingsHub())) return;
+  queueMicrotask(() => $(actionSelector)?.focus());
 }
 
 async function returnFromSettings() {
@@ -4031,9 +4047,10 @@ async function renderTasks(page = taskListPage) {
         </div>
       </div>
     </section>
-    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
+    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>任务模型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
       <td>${esc(analysisTaskTypeLabel(item.taskType))}</td>
+      <td>${esc(item.model?.displayName || "运行时使用默认模型")}</td>
       <td>${esc(item.scopeSummary || taskScopeLabel(item.scope?.type || "book"))}</td>
       <td class="task-status-cell">${renderAnalysisTaskStatus(item)}</td>
       <td class="task-progress-cell">${renderAnalysisTaskProgress(item)}</td>
@@ -4113,7 +4130,7 @@ async function renderTasks(page = taskListPage) {
       const cancel = button.parentElement.querySelector("[data-cancel-task]");
       if (cancel) cancel.textContent = "取消运行";
       scheduleTaskProgressRefresh(workId, 1);
-      const completed = await api(`/api/tasks/${button.dataset.runTask}/run`, { method: "POST", body: { modelId: $("#ai-model").value || undefined } });
+      const completed = await api(`/api/tasks/${button.dataset.runTask}/run`, { method: "POST", body: {} });
       toast(completed.status === "cancelled" ? "分析任务已取消" : completed.status === "expired" ? "正文已变化，本次分析已过期" : "分析已完成");
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
     } catch (error) {
@@ -4440,6 +4457,7 @@ function openTaskDetailDialog(task, trace) {
       <section class="task-detail-overview">
         <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code><br><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
         <p><strong>类型</strong> ${esc(analysisTaskTypeLabel(task.taskType))}</p>
+        <p><strong>任务模型</strong> ${esc(task.model?.displayName || "运行时使用默认模型")}${task.model?.modelId ? ` · <code>${esc(task.model.modelId)}</code>` : ""}</p>
         <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
         <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
@@ -6401,14 +6419,26 @@ function openReviewDialog() {
 async function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
   let relationshipCharacters = [];
+  let taskModels = [];
+  let taskDefaults = [];
   try {
-    relationshipCharacters = canReadModule("characters")
-      ? await apiAllPages(`/api/works/${state.work.id}/characters`)
-      : [];
+    [relationshipCharacters, taskModels, taskDefaults] = await Promise.all([
+      canReadModule("characters")
+        ? apiAllPages(`/api/works/${state.work.id}/characters`)
+        : Promise.resolve([]),
+      api(`/api/works/${state.work.id}/models`),
+      api(`/api/works/${state.work.id}/task-defaults`)
+    ]);
   } catch (error) {
-    toast(`角色列表加载失败：${error.message}`, "error");
+    toast(`分析任务配置加载失败：${error.message}`, "error");
     return;
   }
+  const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
+  const availableTaskModels = taskModels.filter((model) =>
+    model.enabled
+    && model.providerStatus === "enabled"
+    && model.providerConnectionStatus === "success"
+  );
   const characterOptions = relationshipCharacters.map((character) => [character.id, character.name]);
   const relationshipCharacterPicker = `<div class="form-field relationship-character-field">
     <span id="relationship-character-label">被分析角色（可多选）</span>
@@ -6429,6 +6459,11 @@ async function openTaskDialog() {
   </div>`;
   const defaultTaskType = ANALYSIS_TYPES[0].value;
   const taskTypeField = `<div class="form-field analysis-type-field"><label>分析类型<select name="taskType" aria-describedby="analysis-type-description">${ANALYSIS_TYPES.map(({ value, label }) => `<option value="${esc(value)}" ${value === defaultTaskType ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label><p id="analysis-type-description" class="analysis-type-description" aria-live="polite">${esc(analysisTypeDescription(defaultTaskType))}</p></div>`;
+  const defaultModelId = defaultModelByTask.get(analysisTaskModelPurpose(defaultTaskType)) ?? "";
+  const modelField = `<label>任务模型<select name="modelId" required aria-describedby="analysis-task-model-help">
+    <option value="" ${availableTaskModels.some((model) => model.id === defaultModelId) ? "" : "selected"} disabled>${availableTaskModels.length ? "请选择模型" : "没有可用模型"}</option>
+    ${availableTaskModels.map((model) => `<option value="${esc(model.id)}" ${model.id === defaultModelId ? "selected" : ""}>${esc(modelOptionLabel(model))}</option>`).join("")}
+  </select><small id="analysis-task-model-help">默认值来自“本书 AI 设置”，只修改当前任务，不会改变全书默认模型。</small></label>`;
   const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
@@ -6439,8 +6474,9 @@ async function openTaskDialog() {
     </div>
     <label>额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将同时追加到证据收集和全局关系归纳提示词，仅影响本次任务。</small></label>
   </div>`;
-  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
+  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
     const taskType = String(form.get("taskType"));
+    const modelId = String(form.get("modelId"));
     const scopeType = String(form.get("scopeType"));
     const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
     const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
@@ -6452,7 +6488,7 @@ async function openTaskDialog() {
       : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
-    await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
+    await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     taskListPage = 1;
     toast("分析任务已创建，已进入任务队列");
     void renderTasks(1).catch((error) => toast(`任务已创建，但列表刷新失败：${error.message}`, "error"));
@@ -6463,6 +6499,7 @@ async function openTaskDialog() {
     errorPrefix: "任务创建失败："
   });
   const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
+  const taskModelSelect = $("#dialog-fields").querySelector('select[name="modelId"]');
   const scopeTypeSelect = $("#dialog-fields").querySelector('select[name="scopeType"]');
   const chapterSelect = $("#dialog-fields").querySelector('select[name="chapterId"]');
   const chapterFieldElement = chapterSelect.closest(".task-chapter-field");
@@ -6544,8 +6581,13 @@ async function openTaskDialog() {
     filterRelationshipCharacters();
     syncChapterField();
   };
+  const syncTaskModelDefault = () => {
+    const defaultId = defaultModelByTask.get(analysisTaskModelPurpose(taskTypeSelect.value)) ?? "";
+    taskModelSelect.value = availableTaskModels.some((model) => model.id === defaultId) ? defaultId : "";
+  };
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
+    syncTaskModelDefault();
     syncRelationshipOptions();
   });
   relationshipCharacterTrigger.addEventListener("click", () => {
@@ -7549,6 +7591,7 @@ $("#register-form").addEventListener("submit", async (event) => {
 });
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
+$("#platform-ai-return").addEventListener("click", () => returnToSettingsHub("#platform-ai-button").catch((error) => toast(error.message, "error")));
 $("#user-management-button").addEventListener("click", openUsersDialog);
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
@@ -7558,7 +7601,9 @@ $("#presence-button").addEventListener("click", () => {
   $("#presence-button").setAttribute("aria-expanded", String(open));
 });
 $("#users-dialog-close").addEventListener("click", () => $("#users-dialog").close());
+$("#users-settings-return").addEventListener("click", () => returnToSettingsHub("#user-management-button", "#users-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#platform-ui-settings-return").addEventListener("click", () => returnToSettingsHub("#platform-ui-settings-button", "#platform-ui-settings-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -7588,6 +7633,7 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   }
 });
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
+$("#members-settings-return").addEventListener("click", () => returnToSettingsHub("#collaboration-button", "#members-dialog").catch((error) => toast(error.message, "error")));
 $("#members-dialog").addEventListener("close", () => {
   memberDialogWork = null;
   memberDialogMembers = [];
@@ -7657,6 +7703,7 @@ function cleanupExpandedRelationshipMap() {
 $("#relationship-map-close").addEventListener("click", () => $("#relationship-map-dialog").close());
 $("#relationship-map-dialog").addEventListener("close", cleanupExpandedRelationshipMap);
 $("#appearance-button").addEventListener("click", openAppearanceDialog);
+$("#appearance-settings-return").addEventListener("click", () => returnToSettingsHub("#appearance-button", "#appearance-dialog").catch((error) => toast(error.message, "error")));
 $("#toggle-whitespace-appearance").addEventListener("click", toggleChapterWhitespaceVisibility);
 $("#theme-toggle").addEventListener("click", () => {
   const theme = nextTheme(currentColorTheme());

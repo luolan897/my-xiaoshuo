@@ -915,6 +915,9 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/presence$/u.test(pathname)) return {};
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { anyRead: [...aiInteractionModules] };
+  if (!write && /^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u.test(pathname)) {
+    return { anyRead: [...aiInteractionModules] };
+  }
   if (/^\/api\/works\/[^/]+\/file-versions\/[^/]+\/restore$/u.test(pathname)) {
     return write ? { write: [...proseReplacementPermissionModules] } : { read: ["prose"] };
   }
