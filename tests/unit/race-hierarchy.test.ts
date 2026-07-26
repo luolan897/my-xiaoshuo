@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, raceDescendantIds, racePathLabel } from "../../src/public/race-hierarchy.js";
+import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, paginateRaceForest, raceDescendantIds, racePathLabel } from "../../src/public/race-hierarchy.js";
 
 const races = [
   { id: "human", name: "人类", parentRaceId: null, lineage: [{ id: "human", name: "人类" }] },
@@ -42,5 +42,26 @@ describe("种族层级前端逻辑", () => {
       "titan-child-b",
       "titan-grandchild"
     ]);
+  });
+
+  it("分页时保留完整根子树且按实际节点数统计", () => {
+    const pageOne = paginateRaceForest(races, 1, 3);
+    const pageTwo = paginateRaceForest(races, 2, 3);
+
+    expect(pageOne.items.map((race: { id: string }) => race.id)).toEqual(["human"]);
+    expect(pageOne.itemCount).toBe(1);
+    expect(pageOne.pageCount).toBe(2);
+    expect(pageTwo.items.map((race: { id: string }) => race.id)).toEqual(["titan"]);
+    expect(pageTwo.items[0].children[0].children[0].id).toBe("alpha");
+    expect(pageTwo.itemCount).toBe(3);
+    expect(pageTwo.total).toBe(4);
+  });
+
+  it("单棵大子树超过分页上限时仍保留在同一页", () => {
+    const result = paginateRaceForest(races.slice(1), 1, 2);
+
+    expect(result.pageCount).toBe(1);
+    expect(result.itemCount).toBe(3);
+    expect(result.items[0].children[0].children[0].id).toBe("alpha");
   });
 });

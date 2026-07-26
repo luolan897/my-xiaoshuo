@@ -37,7 +37,7 @@ import {
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
-import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260726-race-filter-order";
+import { eligibleRaceParents, orderRaceFilterOptions, paginateRaceForest, racePathLabel } from "/race-hierarchy.js?v=20260727-race-tree-pagination-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
@@ -2116,10 +2116,10 @@ function paginateModuleItems(items, page, sizeKey) {
 }
 
 function renderModulePagination(pageResult, pageKey, label) {
-  if (pageResult.total <= pageResult.limit) return "";
+  if (pageResult.pageCount <= 1) return "";
   return `<nav class="module-pagination" aria-label="${esc(label)}分页">
     <button type="button" data-module-page-key="${esc(pageKey)}" data-module-page="${pageResult.page - 1}" ${pageResult.page <= 1 ? "disabled" : ""}>上一页</button>
-    <span>第 ${pageResult.page}/${pageResult.pageCount} 页 · 本页 ${pageResult.items.length} 条 · 共 ${pageResult.total} 条</span>
+    <span>第 ${pageResult.page}/${pageResult.pageCount} 页 · 本页 ${pageResult.itemCount ?? pageResult.items.length} 条 · 共 ${pageResult.total} 条</span>
     <button type="button" data-module-page-key="${esc(pageKey)}" data-module-page="${pageResult.nextPage ?? pageResult.page + 1}" ${pageResult.hasMore ? "" : "disabled"}>下一页</button>
   </nav>`;
 }
@@ -3753,9 +3753,11 @@ async function renderCharacters(page = characterListPage) {
 async function renderRaces(page = moduleListPages.races) {
   state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
   mountModuleCount(state.races.length);
-  const pageResult = paginateModuleItems(state.races, page, "races");
-  moduleListPages.races = pageResult.page;
   const layout = readModuleLayout();
+  const pageResult = layout === "rows"
+    ? paginateModuleItems(state.races, page, "races")
+    : paginateRaceForest(state.races, page, pageSizeFor("races"));
+  moduleListPages.races = pageResult.page;
   const canEditRaces = canEditModule("races");
   const raceActions = (item) => canEditRaces
     ? recordCardEditButton("edit-race", item.id, `种族“${item.name}”`)
@@ -3790,7 +3792,7 @@ async function renderRaces(page = moduleListPages.races) {
   if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
   if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle();
   $("#module-content").innerHTML = state.races.length
-    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(pageResult.items).map(renderRaceNode).join("")}</section>`}${renderModulePagination(pageResult, "races", "种族列表")}`
+    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${pageResult.items.map(renderRaceNode).join("")}</section>`}${renderModulePagination(pageResult, "races", "种族列表")}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   bindModuleLayoutToggle(() => renderRaces(pageResult.page));
   bindModulePagination("races", renderRaces);
