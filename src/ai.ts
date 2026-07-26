@@ -4033,7 +4033,11 @@ export class AiManager {
     return this.store.db.all(
       `SELECT source.source_type, source.source_id FROM relationship_source_exact_fts
        JOIN relationship_source_search source ON source.id = relationship_source_exact_fts.rowid
-       WHERE source.work_id = ? AND relationship_source_exact_fts MATCH ?`,
+       WHERE source.work_id = ? AND relationship_source_exact_fts MATCH ?
+         AND NOT (source.source_type = 'review' AND EXISTS (
+           SELECT 1 FROM review_items review
+           WHERE review.id = source.source_id AND review.item_type = 'character-name-variant'
+         ))`,
       workId,
       phrase
     ).map((row) => this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
@@ -4059,7 +4063,11 @@ export class AiManager {
       for (const row of this.store.db.all(
         `SELECT source.source_type, source.source_id FROM relationship_source_pinyin_fts
          JOIN relationship_source_search source ON source.id = relationship_source_pinyin_fts.rowid
-         WHERE source.work_id = ? AND relationship_source_pinyin_fts MATCH ?`,
+         WHERE source.work_id = ? AND relationship_source_pinyin_fts MATCH ?
+           AND NOT (source.source_type = 'review' AND EXISTS (
+             SELECT 1 FROM review_items review
+             WHERE review.id = source.source_id AND review.item_type = 'character-name-variant'
+           ))`,
         workId,
         pinyinPhrase
       )) result.add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
@@ -4088,7 +4096,11 @@ export class AiManager {
         for (const row of this.store.db.all(
           `SELECT source.source_type, source.source_id FROM relationship_source_exact_fts
            JOIN relationship_source_search source ON source.id = relationship_source_exact_fts.rowid
-           WHERE source.work_id = ? AND relationship_source_exact_fts MATCH ?`,
+           WHERE source.work_id = ? AND relationship_source_exact_fts MATCH ?
+             AND NOT (source.source_type = 'review' AND EXISTS (
+               SELECT 1 FROM review_items review
+               WHERE review.id = source.source_id AND review.item_type = 'character-name-variant'
+             ))`,
           workId,
           token
         )) add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
@@ -4097,7 +4109,11 @@ export class AiManager {
         for (const row of this.store.db.all(
           `SELECT source.source_type, source.source_id FROM relationship_source_pinyin_fts
            JOIN relationship_source_search source ON source.id = relationship_source_pinyin_fts.rowid
-           WHERE source.work_id = ? AND relationship_source_pinyin_fts MATCH ?`,
+           WHERE source.work_id = ? AND relationship_source_pinyin_fts MATCH ?
+             AND NOT (source.source_type = 'review' AND EXISTS (
+               SELECT 1 FROM review_items review
+               WHERE review.id = source.source_id AND review.item_type = 'character-name-variant'
+             ))`,
           workId,
           token
         )) add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));

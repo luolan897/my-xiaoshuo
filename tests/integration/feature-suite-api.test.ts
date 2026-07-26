@@ -1296,6 +1296,11 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const fullSourcePrompts = userPrompts.filter((prompt) => prompt.includes("定向人物关系证据收集器"));
     expect(fullSourcePrompts.some((prompt) => prompt.includes("摩斯拉在旧港独自追踪拉顿留下的痕迹。"))).toBe(true);
     expect(userPrompts.every((prompt) => !prompt.includes("这段正文没有任何目标人物，不应作为全文发送。"))).toBe(true);
+
+    const promptCount = userPrompts.length;
+    await runTask();
+    const repeatedTaskPrompts = userPrompts.slice(promptCount);
+    expect(repeatedTaskPrompts.every((prompt) => !prompt.includes("审核项：疑似人物名错字"))).toBe(true);
   });
 
   it("两字人物疑似写法只召回同时命中身份锚点的来源", async () => {
