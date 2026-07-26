@@ -297,8 +297,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-search-result-details');
-    expect(page.text).toContain('/styles.css?v=20260726-task-submit-loading');
+    expect(page.text).toContain('/app.js?v=20260726-relationship-label-scale');
+    expect(page.text).toContain('/styles.css?v=20260726-relationship-label-scale');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -321,7 +321,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
     expect(application.text).toContain("if (readOnly) editor?.disabled();");
     expect(application.text).not.toContain("if (readOnly) editor.disabled();");
-    expect(application.text).toContain('/relationship-graph.js?v=20260726-network-theme-palette');
+    expect(application.text).toContain('/relationship-graph.js?v=20260726-network-label-scale');
     expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
     expect(application.text).not.toContain('${item.evidence.length} 条');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
@@ -669,6 +669,10 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("export function projectGalaxyPoint");
     expect(graph.text).toContain("export function getGalaxyNodeFocusCamera");
     expect(graph.text).toContain("focusCameraOnNode(node)");
+    expect(graph.text).toContain("export function getRelationshipNodeFocusView");
+    expect(graph.text).toContain("focusViewOnNode(node.id)");
+    expect(graph.text).toContain("export function shouldShowRelationshipNodeLabel");
+    expect(graph.text).toContain("export function getRelationshipNodeLabelFontSize");
     expect(graph.text).toContain("duration: 650");
     expect(graph.text).toContain('shell.dataset.sceneDimension = "3"');
     expect(graph.text).toContain("export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012");
