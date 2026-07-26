@@ -1511,7 +1511,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   white-space: nowrap;
   pointer-events: none;
   color: var(--relationship-node-label);
-  font-size: 9px;
+  font-size: var(--relationship-node-label-font-size, 9px);
   font-weight: 400;
   letter-spacing: .01em;
   text-shadow: var(--relationship-node-text-shadow);

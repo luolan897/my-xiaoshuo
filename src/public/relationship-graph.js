@@ -64,6 +64,13 @@ export function shouldShowRelationshipNodeLabel(nodeIndex, degree, nodeCount, vi
   return Boolean(expanded) || Number(nodeIndex) < defaultLabelLimit || Number(degree) >= 4 || Number(viewScale) > 1.35;
 }
 
+export function getRelationshipNodeLabelFontSize(viewScale, nodeCount) {
+  const scale = clamp(Number(viewScale) || 1, 0.45, 3.2);
+  const count = Math.max(0, Number(nodeCount) || 0);
+  const screenFontSize = count > 180 ? 8 : count > 120 ? 8.5 : 9;
+  return screenFontSize / scale;
+}
+
 const GALAXY_CELESTIAL_PALETTES = Object.freeze([
   Object.freeze({ key: "solar", hue: 42, saturation: 96, lightness: 68, color: "#ffc95f", core: "#fff8d4", rim: "#9f3c18", atmosphere: "rgba(255,184,72,.58)", ring: "rgba(255,222,151,.72)" }),
   Object.freeze({ key: "azure", hue: 211, saturation: 94, lightness: 68, color: "#61b8ff", core: "#effaff", rim: "#173b85", atmosphere: "rgba(79,156,255,.56)", ring: "rgba(164,214,255,.68)" }),
@@ -864,11 +871,14 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     });
   };
   const updateViewTransform = (animate = false) => {
+    const labelFontSize = getRelationshipNodeLabelFontSize(viewScale, graph.nodes.length);
     stage.classList.toggle("is-view-animating", animate);
     stage.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+    stage.style.setProperty("--relationship-node-label-font-size", `${labelFontSize.toFixed(3)}px`);
     viewport.dataset.graphScale = viewScale.toFixed(3);
     viewport.dataset.viewX = viewX.toFixed(1);
     viewport.dataset.viewY = viewY.toFixed(1);
+    viewport.dataset.nodeLabelScreenFontSize = (labelFontSize * viewScale).toFixed(3);
     updateNodeLabelVisibility();
     if (animate) window.setTimeout(() => stage.classList.remove("is-view-animating"), 360);
   };
