@@ -1628,6 +1628,36 @@ export class AiManager {
     });
   }
 
+  rerunTask(taskId: string): Record<string, unknown> {
+    const original = this.store.getTask(taskId);
+    const rerunnableStatuses = new Set(["review", "completed", "partial", "expired", "cancelled"]);
+    if (!rerunnableStatuses.has(String(original.status))) {
+      throw new AppError(409, "TASK_NOT_RERUNNABLE", "只有已结束的分析任务可以按原配置重跑");
+    }
+    const originalScope = original.scope && typeof original.scope === "object" && !Array.isArray(original.scope)
+      ? original.scope as Record<string, unknown>
+      : {};
+    const { targetCharacters: _targetCharacters, ...scope } = originalScope;
+    const originalModel = original.model && typeof original.model === "object" && !Array.isArray(original.model)
+      ? original.model as Record<string, unknown>
+      : null;
+    const modelId = typeof originalModel?.id === "string" ? originalModel.id : undefined;
+    if (modelId) this.resolveModel(String(original.workId), this.analysisTaskModelPurpose(String(original.taskType)), modelId);
+    const rerun = this.store.createTask(String(original.workId), {
+      taskType: String(original.taskType),
+      scope,
+      ...(modelId ? { modelId } : {}),
+      rerunOfTaskId: taskId
+    });
+    logger.info("ai.task.rerun_created", {
+      taskId: rerun.id,
+      originalTaskId: taskId,
+      workId: original.workId,
+      taskType: original.taskType
+    });
+    return { ...rerun, rerunOfTaskId: taskId };
+  }
+
   async createSuggestion(input: GenerateInput): Promise<Record<string, unknown>> {
     const action = input.taskType === "continue" ? "append" : input.taskType === "polish" ? "replace-selection" : "note";
     if (action === "replace-selection" && !input.scope.selection) {

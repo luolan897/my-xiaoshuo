@@ -169,6 +169,10 @@ function analysisTaskStatusLabel(status) {
   })[String(status)] ?? "未知状态";
 }
 
+function canRerunAnalysisTask(task) {
+  return ["review", "completed", "partial", "expired", "cancelled"].includes(String(task?.status ?? ""));
+}
+
 function normalizedAnalysisTaskStatus(status) {
   const value = String(status);
   return ["pending", "running", "review", "completed", "partial", "expired", "cancelled"].includes(value)
@@ -4061,6 +4065,7 @@ async function renderTasks(page = taskListPage) {
       <td class="task-row-actions">
         <button class="ghost-button" type="button" data-task-detail="${esc(item.id)}">详情</button>
         ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
+        ${canRerunAnalysisTask(item) ? `<button class="ghost-button" type="button" data-rerun-task="${esc(item.id)}">按原配置重跑</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
     </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
@@ -4142,6 +4147,9 @@ async function renderTasks(page = taskListPage) {
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
     }
   }));
+  $("#module-content").querySelectorAll("[data-rerun-task]").forEach((button) => button.addEventListener("click", async () => {
+    await rerunAnalysisTask(button.dataset.rerunTask, button);
+  }));
   $("#module-content").querySelectorAll("[data-cancel-task]").forEach((button) => button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -4154,6 +4162,23 @@ async function renderTasks(page = taskListPage) {
     }
   }));
   scheduleTaskProgressRefresh(state.work.id, runningCount);
+}
+
+async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {
+  const workId = state.work?.id;
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "正在创建";
+  try {
+    const rerun = await api(`/api/tasks/${encodeURIComponent(taskId)}/rerun`, { method: "POST", body: {} });
+    if (closeDetail) $("#form-dialog").close();
+    toast(`已按原配置创建新任务 ${rerun.id}`);
+    if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function stopTaskProgressRefresh() {
@@ -4467,6 +4492,7 @@ function openTaskDetailDialog(task, trace) {
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
         <div><strong>失败信息</strong>${failureHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
+        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重跑</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
@@ -4475,6 +4501,9 @@ function openTaskDetailDialog(task, trace) {
     { submitLabel: "关闭", wide: true, trace: true });
   bindTaskTraceCallActions($("#dialog-fields"));
   bindTaskResultActions($("#dialog-fields"));
+  $("#dialog-fields").querySelector("[data-rerun-task-detail]")?.addEventListener("click", async (event) => {
+    await rerunAnalysisTask(event.currentTarget.dataset.rerunTaskDetail, event.currentTarget, { closeDetail: true });
+  });
 }
 
 function renderProviderCards(providers, models) {

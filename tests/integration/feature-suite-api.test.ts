@@ -764,6 +764,68 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(cancel.body.error.code).toBe("TASK_NOT_CANCELLABLE");
   });
 
+  it("按原配置重跑终态任务并刷新人物快照与来源版本", async () => {
+    runtime = createTestRuntime();
+    const { workId, chapters } = await seedWork(runtime);
+    const modelId = await configureAi(runtime, workId);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "银月基多拉"
+    }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: {
+        type: "book",
+        characterIds: [character.body.data.id],
+        additionalPrompt: "只分析可靠证据",
+        preFilterRelationshipSources: false,
+        replaceExistingRelationships: true
+      }
+    }).expect(201);
+    const pendingRerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(409);
+    expect(pendingRerun.body.error.code).toBe("TASK_NOT_RERUNNABLE");
+
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "银月基多拉在北港上空现身。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/characters/${character.body.data.id}`).send({
+      name: "月影基多拉"
+    }).expect(200);
+    const expired = await request(runtime.app).get(`/api/tasks/${original.body.data.id}`).expect(200);
+    expect(expired.body.data.status).toBe("expired");
+
+    const rerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(201);
+    expect(rerun.body.data).toMatchObject({
+      taskType: "relationship-analysis",
+      status: "pending",
+      progress: 0,
+      rerunOfTaskId: original.body.data.id,
+      model: { id: modelId },
+      scope: {
+        type: "book",
+        characterIds: [character.body.data.id],
+        targetCharacters: [{ id: character.body.data.id, name: "月影基多拉" }],
+        additionalPrompt: "只分析可靠证据",
+        preFilterRelationshipSources: false,
+        replaceExistingRelationships: true
+      }
+    });
+    expect(rerun.body.data.id).not.toBe(original.body.data.id);
+    expect(rerun.body.data.sourceVersions[chapters[0].id]).toBe(2);
+    const originalAfter = await request(runtime.app).get(`/api/tasks/${original.body.data.id}`).expect(200);
+    expect(originalAfter.body.data.status).toBe("expired");
+    const audit = runtime.database.get(
+      "SELECT detail_json FROM audit_logs WHERE entity_id = ? AND action = 'task.created'",
+      rerun.body.data.id
+    );
+    expect(JSON.parse(String(audit?.detail_json))).toMatchObject({ rerunOfTaskId: original.body.data.id });
+
+    const invalidBody = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({
+      modelId: "model_override"
+    }).expect(400);
+    expect(invalidBody.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
   it("续写前自动装载相关人物、大纲和伏笔，续写后返回冲突卡并绑定文本哈希", async () => {
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens: number };
