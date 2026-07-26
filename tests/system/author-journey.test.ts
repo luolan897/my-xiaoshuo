@@ -298,7 +298,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260726-settings-parent-navigation-v1');
-    expect(page.text).toContain('/styles.css?v=20260726-settings-parent-navigation-v1');
+    expect(page.text).toContain('/styles.css?v=20260726-settings-select-spacing-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -321,6 +321,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('async function returnToSettingsHub(actionSelector, dialogSelector = null)');
     expect(application.text).toContain('$("#members-settings-return").classList.toggle("hidden", $("#settings-hub-view").classList.contains("hidden"));');
     expect(styles.text).toContain('.settings-detail-actions, .settings-dialog-header-actions { display: flex; align-items: center; gap: 10px; }');
+    expect(styles.text).toContain(':is(#users-dialog, #platform-ui-settings-dialog, #members-dialog, #appearance-dialog) select:not([multiple]) {');
+    expect(styles.text).toContain('background-position: right 21px center, right 16px center;');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
     expect(page.text).not.toContain('class="setting-markdown-heading"');

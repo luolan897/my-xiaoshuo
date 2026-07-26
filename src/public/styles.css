@@ -623,6 +623,17 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .member-permission-row select { min-height: 34px; padding-block: 6px; font-size: 11px; }
 .member-permission-form .primary-button { justify-self: end; min-height: 38px; white-space: nowrap; }
 .permission-hidden { display: none !important; }
+:is(#users-dialog, #platform-ui-settings-dialog, #members-dialog, #appearance-dialog) select:not([multiple]) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-inline-end: 40px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: right 21px center, right 16px center;
+  background-repeat: no-repeat;
+  background-size: 5px 5px, 5px 5px;
+}
 .app-shell.ai-hidden-mode:not(.shelf-mode) { grid-template-columns: var(--left-panel-width) minmax(480px, 1fr); }
 .app-shell.prose-hidden-mode:not(.shelf-mode) .left-actions,
 .app-shell.prose-hidden-mode:not(.shelf-mode) .panel-heading,
