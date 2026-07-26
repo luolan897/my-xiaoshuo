@@ -233,6 +233,7 @@ type AiCallTraceRound = {
 
 type RelationshipSettingSource = {
   id: string;
+  sourceId: string;
   title: string;
   sourceType: string;
   content: string;
@@ -244,6 +245,14 @@ type RelationshipAnalysisChunk = {
   text: string;
   chapterIds?: string[];
   settingIds?: string[];
+};
+
+type RelationshipChangeOperation = {
+  action: "created" | "updated" | "deleted";
+  relationshipId: string;
+  expectedVersionNo?: number;
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
 };
 
 type RelationshipIndexedSource = {
@@ -279,6 +288,7 @@ type RelationshipSourceSelection = {
   generation: number;
   chapters: Record<string, unknown>[];
   settings: RelationshipSettingSource[];
+  matchKinds: Record<string, "exact" | "fuzzy">;
   variantDecisions: RelationshipVariantDecision[];
   verificationCallIds: string[];
   summary: {
@@ -1156,6 +1166,7 @@ export class AiManager {
   private readonly relationshipIndexBuilds = new Map<string, Promise<number>>();
   private readonly relationshipSelectionCache = new Map<string, RelationshipLocalSourceSelection>();
   private readonly relationshipSelectionBuilds = new Map<string, Promise<RelationshipLocalSourceSelection>>();
+  private readonly relationshipIndexSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private relationshipIndexSerial: Promise<void> = Promise.resolve();
   private relationshipIndexTimer: ReturnType<typeof setTimeout> | null = null;
   private relationshipIndexDisposed = false;
@@ -1183,6 +1194,7 @@ export class AiManager {
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
+    this.store.setRelationshipIndexQueuedHandler((workId) => this.scheduleRelationshipIndexSync(workId));
     this.relationshipIndexTimer = setTimeout(() => {
       this.relationshipIndexTimer = null;
       void this.schedulePendingRelationshipIndexes();
@@ -1239,9 +1251,12 @@ export class AiManager {
     this.autoRunTimers.clear();
     this.autoRunBatches.clear();
     this.relationshipIndexDisposed = true;
+    for (const timer of this.relationshipIndexSyncTimers.values()) clearTimeout(timer);
+    this.relationshipIndexSyncTimers.clear();
     if (this.relationshipIndexTimer) clearTimeout(this.relationshipIndexTimer);
     this.relationshipIndexTimer = null;
     this.store.setAnalysisTaskQueuedHandler(null);
+    this.store.setRelationshipIndexQueuedHandler(null);
     logger.info("ai.manager.disposed");
   }
 
@@ -1621,11 +1636,242 @@ export class AiManager {
     );
     const modelId = input.modelId ?? (defaultRow ? stringValue(defaultRow, "model_id") : undefined);
     if (modelId) this.resolveModel(workId, modelPurpose, modelId);
+    const relationshipScope = input.taskType === "relationship-analysis" && input.scope
+      ? input.scope as ContextScope
+      : null;
+    if (relationshipScope && Array.isArray(relationshipScope.relationshipSourceRefs)) {
+      this.relationshipSourcesFromRefs(
+        workId,
+        relationshipScope,
+        this.store.listCharacters(workId),
+        relationshipScope.relationshipSourceRefs
+      );
+    }
     return this.store.createTask(workId, {
       taskType: input.taskType,
       ...(input.scope ? { scope: input.scope } : {}),
       ...(modelId ? { modelId } : {})
     });
+  }
+
+  applyRelationshipChangePreview(taskId: string): Record<string, unknown> {
+    const task = this.store.getTask(taskId);
+    if (task.taskType !== "relationship-analysis") {
+      throw new AppError(409, "RELATIONSHIP_PREVIEW_REQUIRED", "只有人物关系分析任务可以应用关系变更");
+    }
+    const result = this.store.getTaskStoredResult(taskId);
+    const preview = result.relationshipChangePreview && typeof result.relationshipChangePreview === "object"
+      && !Array.isArray(result.relationshipChangePreview)
+      ? result.relationshipChangePreview as Record<string, unknown>
+      : null;
+    if (!preview) throw new AppError(409, "RELATIONSHIP_PREVIEW_REQUIRED", "该任务没有待确认的关系变更");
+    if (preview.status !== "pending") {
+      throw new AppError(409, "RELATIONSHIP_PREVIEW_NOT_PENDING", preview.status === "applied"
+        ? "本次关系变更已经应用"
+        : "本次关系变更已经放弃");
+    }
+    if (!this.store.isTaskSourceCurrent(taskId)) {
+      throw new AppError(409, "RELATIONSHIP_PREVIEW_SOURCE_CHANGED", "分析来源已发生变化，请重新运行分析后再应用");
+    }
+    const operations = Array.isArray(preview.operations)
+      ? preview.operations.filter((item): item is RelationshipChangeOperation =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item)
+        && ["created", "updated", "deleted"].includes(String((item as Record<string, unknown>).action)))
+      : [];
+    if (operations.length !== Number(preview.totalCount ?? operations.length) || operations.length > 5_000) {
+      throw new AppError(409, "RELATIONSHIP_PREVIEW_INVALID", "关系变更预览数据不完整，请重新运行分析");
+    }
+    const workId = String(task.workId);
+    const relationshipInput = (snapshot: Record<string, unknown>) => ({
+      fromCharacterId: String(snapshot.fromCharacterId),
+      toCharacterId: String(snapshot.toCharacterId),
+      category: String(snapshot.category),
+      subtype: String(snapshot.subtype ?? ""),
+      keywords: Array.isArray(snapshot.keywords) ? snapshot.keywords.map(String) : [],
+      directed: snapshot.directed === true,
+      currentStatus: String(snapshot.currentStatus ?? "active"),
+      timeRange: snapshot.timeRange && typeof snapshot.timeRange === "object" && !Array.isArray(snapshot.timeRange)
+        ? snapshot.timeRange as Record<string, unknown>
+        : {},
+      confidence: Number(snapshot.confidence ?? 0.5),
+      evidence: Array.isArray(snapshot.evidence) ? snapshot.evidence : [],
+      confirmationStatus: String(snapshot.confirmationStatus ?? "pending"),
+      locked: snapshot.locked === true
+    });
+    return this.store.db.transaction(() => {
+      const currentResult = this.store.getTaskStoredResult(taskId);
+      const currentPreview = currentResult.relationshipChangePreview && typeof currentResult.relationshipChangePreview === "object"
+        && !Array.isArray(currentResult.relationshipChangePreview)
+        ? currentResult.relationshipChangePreview as Record<string, unknown>
+        : null;
+      if (currentPreview?.status !== "pending") {
+        throw new AppError(409, "RELATIONSHIP_PREVIEW_NOT_PENDING", currentPreview?.status === "applied"
+          ? "本次关系变更已经应用"
+          : "本次关系变更已经放弃");
+      }
+      for (const operation of operations) {
+        if (operation.action === "created") continue;
+        const before = operation.before;
+        const expectedVersionNo = Number(operation.expectedVersionNo ?? before?.versionNo);
+        let current: Record<string, unknown>;
+        try {
+          current = this.store.getRelationship(operation.relationshipId);
+        } catch {
+          throw new AppError(409, "RELATIONSHIP_PREVIEW_STALE", "待处理的人物关系已经不存在，请重新运行分析", {
+            relationshipId: operation.relationshipId
+          });
+        }
+        if (String(current.workId) !== workId || !Number.isInteger(expectedVersionNo) || Number(current.versionNo) !== expectedVersionNo) {
+          throw new AppError(409, "RELATIONSHIP_PREVIEW_STALE", "人物关系已在预览后发生变化，请重新运行分析", {
+            relationshipId: operation.relationshipId,
+            expectedVersionNo,
+            actualVersionNo: Number(current.versionNo)
+          });
+        }
+      }
+      const appliedResults: Record<string, unknown>[] = [];
+      const appliedRelationshipIds: string[] = [];
+      for (const operation of operations.filter((item) => item.action === "deleted")) {
+        const before = operation.before as Record<string, unknown>;
+        this.store.deleteRelationship(operation.relationshipId, Number(operation.expectedVersionNo ?? before.versionNo));
+        appliedResults.push(this.relationshipResultSnapshot(workId, "deleted", before));
+      }
+      for (const operation of operations.filter((item) => item.action === "updated")) {
+        const after = operation.after as Record<string, unknown>;
+        const updated = this.store.updateRelationship(
+          operation.relationshipId,
+          relationshipInput(after),
+          "analysis",
+          taskId,
+          "应用 AI 人物关系变更预览",
+          Number(operation.expectedVersionNo ?? operation.before?.versionNo)
+        );
+        appliedRelationshipIds.push(String(updated.id));
+        appliedResults.push(this.relationshipResultSnapshot(workId, "updated", updated));
+      }
+      for (const operation of operations.filter((item) => item.action === "created")) {
+        const created = this.store.createRelationship(
+          workId,
+          relationshipInput(operation.after as Record<string, unknown>),
+          "analysis",
+          taskId
+        );
+        appliedRelationshipIds.push(String(created.id));
+        appliedResults.push(this.relationshipResultSnapshot(workId, "created", created));
+      }
+      const unchangedResults = Array.isArray(currentResult.relationshipResults)
+        ? currentResult.relationshipResults.filter((item) =>
+          Boolean(item) && typeof item === "object" && !Array.isArray(item)
+          && (item as Record<string, unknown>).action === "unchanged")
+        : [];
+      const appliedAt = now();
+      const nextResult = {
+        ...currentResult,
+        relationshipIds: appliedRelationshipIds,
+        candidateCount: appliedRelationshipIds.length,
+        createdCount: operations.filter((item) => item.action === "created").length,
+        updatedCount: operations.filter((item) => item.action === "updated").length,
+        deletedCount: operations.filter((item) => item.action === "deleted").length,
+        relationshipResults: [...appliedResults, ...unchangedResults],
+        relationshipChangePreview: {
+          ...currentPreview,
+          status: "applied",
+          appliedAt,
+          appliedRelationshipIds
+        }
+      };
+      const updatedTask = this.store.updateTask(taskId, { status: String(task.status), result: nextResult });
+      this.store.audit(workId, "relationship.analysis.changes-applied", "analysis-task", taskId, {
+        createdCount: nextResult.createdCount,
+        updatedCount: nextResult.updatedCount,
+        deletedCount: nextResult.deletedCount
+      });
+      logger.info("ai.relationship_changes.applied", {
+        taskId,
+        workId,
+        createdCount: nextResult.createdCount,
+        updatedCount: nextResult.updatedCount,
+        deletedCount: nextResult.deletedCount
+      });
+      return updatedTask;
+    });
+  }
+
+  discardRelationshipChangePreview(taskId: string): Record<string, unknown> {
+    const task = this.store.getTask(taskId);
+    if (task.taskType !== "relationship-analysis") {
+      throw new AppError(409, "RELATIONSHIP_PREVIEW_REQUIRED", "只有人物关系分析任务可以放弃关系变更");
+    }
+    const result = this.store.getTaskStoredResult(taskId);
+    const preview = result.relationshipChangePreview && typeof result.relationshipChangePreview === "object"
+      && !Array.isArray(result.relationshipChangePreview)
+      ? result.relationshipChangePreview as Record<string, unknown>
+      : null;
+    if (!preview) throw new AppError(409, "RELATIONSHIP_PREVIEW_REQUIRED", "该任务没有待确认的关系变更");
+    if (preview.status !== "pending") {
+      throw new AppError(409, "RELATIONSHIP_PREVIEW_NOT_PENDING", preview.status === "applied"
+        ? "本次关系变更已经应用"
+        : "本次关系变更已经放弃");
+    }
+    return this.store.db.transaction(() => {
+      const currentResult = this.store.getTaskStoredResult(taskId);
+      const currentPreview = currentResult.relationshipChangePreview && typeof currentResult.relationshipChangePreview === "object"
+        && !Array.isArray(currentResult.relationshipChangePreview)
+        ? currentResult.relationshipChangePreview as Record<string, unknown>
+        : null;
+      if (currentPreview?.status !== "pending") {
+        throw new AppError(409, "RELATIONSHIP_PREVIEW_NOT_PENDING", currentPreview?.status === "applied"
+          ? "本次关系变更已经应用"
+          : "本次关系变更已经放弃");
+      }
+      const discardedAt = now();
+      const updatedTask = this.store.updateTask(taskId, {
+        status: String(task.status),
+        result: {
+          ...currentResult,
+          relationshipChangePreview: { ...currentPreview, status: "discarded", discardedAt }
+        }
+      });
+      this.store.audit(String(task.workId), "relationship.analysis.changes-discarded", "analysis-task", taskId, {
+        changeCount: Number(currentPreview.totalCount ?? 0)
+      });
+      logger.info("ai.relationship_changes.discarded", {
+        taskId,
+        workId: task.workId,
+        changeCount: Number(currentPreview.totalCount ?? 0)
+      });
+      return updatedTask;
+    });
+  }
+
+  rerunTask(taskId: string): Record<string, unknown> {
+    const original = this.store.getTask(taskId);
+    const rerunnableStatuses = new Set(["review", "completed", "partial", "expired", "cancelled"]);
+    if (!rerunnableStatuses.has(String(original.status))) {
+      throw new AppError(409, "TASK_NOT_RERUNNABLE", "只有已结束的分析任务可以按原配置重跑");
+    }
+    const originalScope = original.scope && typeof original.scope === "object" && !Array.isArray(original.scope)
+      ? original.scope as Record<string, unknown>
+      : {};
+    const { targetCharacters: _targetCharacters, ...scope } = originalScope;
+    const originalModel = original.model && typeof original.model === "object" && !Array.isArray(original.model)
+      ? original.model as Record<string, unknown>
+      : null;
+    const modelId = typeof originalModel?.id === "string" ? originalModel.id : undefined;
+    if (modelId) this.resolveModel(String(original.workId), this.analysisTaskModelPurpose(String(original.taskType)), modelId);
+    const rerun = this.store.createTask(String(original.workId), {
+      taskType: String(original.taskType),
+      scope,
+      ...(modelId ? { modelId } : {}),
+      rerunOfTaskId: taskId
+    });
+    logger.info("ai.task.rerun_created", {
+      taskId: rerun.id,
+      originalTaskId: taskId,
+      workId: original.workId,
+      taskType: original.taskType
+    });
+    return { ...rerun, rerunOfTaskId: taskId };
   }
 
   async createSuggestion(input: GenerateInput): Promise<Record<string, unknown>> {
@@ -2028,7 +2274,10 @@ export class AiManager {
     } catch (error) {
       if (this.store.getTask(taskId).status !== "running") return this.store.getTask(taskId);
       const message = error instanceof Error ? error.message : "分析失败";
-      this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [{ message }] });
+      const failure = error instanceof AppError
+        ? { message, code: error.code, ...(error.details === undefined ? {} : { details: error.details }) }
+        : { message };
+      this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [failure] });
       logger.error("ai.task.failed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000, error: aiErrorForLog(error) });
       throw error;
     } finally {
@@ -3895,6 +4144,25 @@ export class AiManager {
     await Promise.allSettled(workIds.map((workId) => this.ensureRelationshipSearchIndex(workId)));
   }
 
+  private scheduleRelationshipIndexSync(workId: string): void {
+    if (this.relationshipIndexDisposed) return;
+    const existing = this.relationshipIndexSyncTimers.get(workId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.relationshipIndexSyncTimers.delete(workId);
+      try {
+        const status = this.getRelationshipSearchIndexStatus(workId);
+        if (Number(status.queuedSourceCount ?? 0) > 0) {
+          void this.ensureRelationshipSearchIndex(workId).catch(() => undefined);
+        }
+      } catch {
+        // 作品可能已在等待期间被删除
+      }
+    }, 2_000);
+    this.relationshipIndexSyncTimers.set(workId, timer);
+    logger.debug("relationship.search_index.auto_sync_scheduled", { workId });
+  }
+
   getRelationshipSearchIndexStatus(workId: string): Record<string, unknown> {
     this.store.getWork(workId);
     const row = this.store.db.get(
@@ -4377,6 +4645,7 @@ export class AiManager {
       String(character.code ?? ""),
       String(character.species ?? ""),
       String((character.race as Record<string, unknown> | null)?.name ?? ""),
+      String((character.attributes as Record<string, unknown> | null)?.identity ?? ""),
       ...(Array.isArray(character.organizations) ? character.organizations.map((item) => String((item as Record<string, unknown>).name ?? "")) : []),
       ...[...relatedIds].flatMap((relatedId) => {
         try {
@@ -4430,16 +4699,18 @@ export class AiManager {
     for (const character of targetCharacters) {
       const targetCharacterId = String(character.id);
       const exactReferences = [...new Set([String(character.name), ...(character.aliases as string[])].map((item) => item.trim()).filter(Boolean))];
+      const anchors = this.relationshipIdentityAnchors(workId, character);
       const fuzzyReferenceCount = exactReferences.filter((reference) => [...normalizeRelationshipSearchText(reference).trim()].length >= 2).length;
       if (fuzzyReferenceCount > RELATIONSHIP_MAX_FUZZY_REFERENCES) {
         throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "人物名称和别名过多，无法在安全预算内完成疑似写法匹配", {
           characterId: targetCharacterId,
+          reason: "registered-references",
           fuzzyReferenceCount,
-          maximumFuzzyReferences: RELATIONSHIP_MAX_FUZZY_REFERENCES
+          maximumFuzzyReferences: RELATIONSHIP_MAX_FUZZY_REFERENCES,
+          identityAnchorCount: anchors.length
         });
       }
       const normalizedExactReferences = new Set(exactReferences.map((item) => normalizeRelationshipSearchText(item).trim()));
-      const anchors = this.relationshipIdentityAnchors(workId, character);
       const anchorKeys = new Set<string>();
       for (const anchor of anchors) {
         for (const chapterId of this.relationshipChapterExactMatches(workId, anchor)) {
@@ -4458,19 +4729,25 @@ export class AiManager {
         if (includeSettings) for (const key of this.relationshipSettingExactMatches(workId, reference)) exactKeys.add(key);
         const referenceLength = [...normalizeRelationshipSearchText(reference).trim()].length;
         if (referenceLength < 2) continue;
-        const fuzzyIndexKeys = referenceLength === 2
+        const rawFuzzyIndexKeys = referenceLength === 2
           ? anchorKeys
           : this.relationshipFuzzyIndexMatches(workId, reference, includeSettings, scope);
+        const fuzzyIndexKeys = rawFuzzyIndexKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES && anchorKeys.size > 0
+          ? new Set([...rawFuzzyIndexKeys].filter((key) => anchorKeys.has(key)))
+          : rawFuzzyIndexKeys;
         for (const key of fuzzyIndexKeys) {
           const ref = this.relationshipIndexedSourceRef(key);
           if (ref.sourceType === "chapter" && !allowedChapterIds.has(ref.sourceId)) continue;
           if (ref.sourceType !== "chapter" && !includeSettings) continue;
+          if (exactKeys.has(key)) continue;
           targetIndexCandidateKeys.add(key);
           if (targetIndexCandidateKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) {
             throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名来源过多，请补充人物别名或身份资料后重试", {
               characterId: targetCharacterId,
+              reason: "candidate-sources",
               candidateCount: targetIndexCandidateKeys.size,
-              maximum: RELATIONSHIP_MAX_FUZZY_SOURCES
+              maximum: RELATIONSHIP_MAX_FUZZY_SOURCES,
+              identityAnchorCount: anchors.length
             });
           }
           let indexed = loadedSources.get(key);
@@ -4487,8 +4764,10 @@ export class AiManager {
           if (fuzzyScanCharacters > RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS) {
             throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名待核对文本过多，请缩小分析范围或补充人物别名", {
               characterId: targetCharacterId,
+              reason: "scan-characters",
               scannedCharacters: fuzzyScanCharacters,
-              maximumScannedCharacters: RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS
+              maximumScannedCharacters: RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS,
+              identityAnchorCount: anchors.length
             });
           }
           const referenceCharacters = [...normalizeRelationshipSearchText(reference).trim()];
@@ -4505,9 +4784,11 @@ export class AiManager {
             if (!(error instanceof RelationshipApproximateMatchLimitError)) throw error;
             throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "单个来源中的疑似人物名写法过多，请缩小分析范围或补充人物别名", {
               characterId: targetCharacterId,
+              reason: "source-matches",
               sourceType: indexed.sourceType,
               sourceId: indexed.sourceId,
-              maximumSourceMatches: error.maximumCandidates
+              maximumSourceMatches: error.maximumCandidates,
+              identityAnchorCount: anchors.length
             });
           }
           for (const match of approximateMatches) {
@@ -4525,8 +4806,10 @@ export class AiManager {
             if (fuzzyMatchCount > RELATIONSHIP_MAX_FUZZY_MATCHES) {
               throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名写法过多，请缩小分析范围或补充人物别名", {
                 characterId: targetCharacterId,
+                reason: "fuzzy-matches",
                 fuzzyMatchCount,
-                maximumFuzzyMatches: RELATIONSHIP_MAX_FUZZY_MATCHES
+                maximumFuzzyMatches: RELATIONSHIP_MAX_FUZZY_MATCHES,
+                identityAnchorCount: anchors.length
               });
             }
             targetFuzzySourceKeys.add(key);
@@ -4552,8 +4835,10 @@ export class AiManager {
       if (targetFuzzySourceKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) {
         throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名来源过多，请补充人物别名或身份资料后重试", {
           characterId: targetCharacterId,
+          reason: "candidate-sources",
           candidateCount: targetFuzzySourceKeys.size,
-          maximum: RELATIONSHIP_MAX_FUZZY_SOURCES
+          maximum: RELATIONSHIP_MAX_FUZZY_SOURCES,
+          identityAnchorCount: anchors.length
         });
       }
     }
@@ -4713,10 +4998,13 @@ export class AiManager {
     ).map((row, index) => [String(row.id), index]));
     chapters.sort((left, right) => (chapterOrder.get(String(left.id)) ?? Number.MAX_SAFE_INTEGER) - (chapterOrder.get(String(right.id)) ?? Number.MAX_SAFE_INTEGER));
     settings.sort((left, right) => `${left.sourceType}:${left.id}`.localeCompare(`${right.sourceType}:${right.id}`, "zh-CN"));
+    const matchKinds: Record<string, "exact" | "fuzzy"> = {};
+    for (const key of selectedKeys) matchKinds[key] = local.exactKeys.includes(key) ? "exact" : "fuzzy";
     return {
       generation,
       chapters,
       settings,
+      matchKinds,
       variantDecisions: verified.decisions,
       verificationCallIds: verified.callIds,
       summary: {
@@ -4742,6 +5030,7 @@ export class AiManager {
     const serialize = (value: Record<string, unknown>): string => JSON.stringify(cleanStrings(value), null, 2);
     const source = (title: string, value: Record<string, unknown>, version: unknown): RelationshipSettingSource => ({
       id: sourceType === "setting" ? sourceId : `${sourceType}:${sourceId}`,
+      sourceId,
       title,
       sourceType,
       content: serialize(value),
@@ -4899,10 +5188,192 @@ export class AiManager {
     });
   }
 
+  private relationshipChangeOperations(
+    before: Record<string, unknown>[],
+    after: Record<string, unknown>[]
+  ): RelationshipChangeOperation[] {
+    const beforeById = new Map(before.map((relationship) => [String(relationship.id), relationship]));
+    const afterById = new Map(after.map((relationship) => [String(relationship.id), relationship]));
+    return [
+      ...before.flatMap((relationship): RelationshipChangeOperation[] => {
+        const relationshipId = String(relationship.id);
+        const next = afterById.get(relationshipId);
+        if (!next) {
+          return [{
+            action: "deleted",
+            relationshipId,
+            expectedVersionNo: Number(relationship.versionNo),
+            before: relationship
+          }];
+        }
+        if (Number(next.versionNo) !== Number(relationship.versionNo)) {
+          return [{
+            action: "updated",
+            relationshipId,
+            expectedVersionNo: Number(relationship.versionNo),
+            before: relationship,
+            after: next
+          }];
+        }
+        return [];
+      }),
+      ...after.flatMap((relationship): RelationshipChangeOperation[] => {
+        const relationshipId = String(relationship.id);
+        return beforeById.has(relationshipId)
+          ? []
+          : [{ action: "created", relationshipId, after: relationship }];
+      })
+    ];
+  }
+
+  private relationshipResultSnapshot(
+    workId: string,
+    action: "created" | "updated" | "deleted" | "unchanged",
+    relationship: Record<string, unknown>
+  ): Record<string, unknown> {
+    const evidence = Array.isArray(relationship.evidence)
+      ? relationship.evidence.filter((item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      : [];
+    const characterName = (characterId: unknown): string => {
+      try {
+        const character = this.store.getCharacter(String(characterId));
+        return character.workId === workId ? String(character.name) : String(characterId);
+      } catch {
+        return String(characterId);
+      }
+    };
+    return {
+      relationshipId: String(relationship.id),
+      action,
+      fromCharacterId: String(relationship.fromCharacterId),
+      fromCharacterName: characterName(relationship.fromCharacterId),
+      toCharacterId: String(relationship.toCharacterId),
+      toCharacterName: characterName(relationship.toCharacterId),
+      category: String(relationship.category),
+      subtype: String(relationship.subtype),
+      keywords: Array.isArray(relationship.keywords) ? relationship.keywords.map(String) : [],
+      directed: Boolean(relationship.directed),
+      currentStatus: String(relationship.currentStatus ?? ""),
+      timeRange: relationship.timeRange && typeof relationship.timeRange === "object" && !Array.isArray(relationship.timeRange)
+        ? relationship.timeRange
+        : {},
+      confidence: Number(relationship.confidence ?? 0),
+      confirmationStatus: String(relationship.confirmationStatus ?? "pending"),
+      evidenceCount: evidence.length,
+      evidence: evidence.slice(0, 3).map((item) => ({
+        chapterId: String(item.chapterId ?? ""),
+        chapterTitle: String(item.chapterTitle ?? item.settingTitle ?? ""),
+        quote: String(item.quote ?? ""),
+        supports: String(item.supports ?? "")
+      })),
+      evidenceTruncated: evidence.length > 3
+    };
+  }
+
+  private relationshipSourcesFromRefs(
+    workId: string,
+    scope: ContextScope,
+    characters: Record<string, unknown>[],
+    refs: Array<{ sourceType: string; sourceId: string; sourceVersion: string }>
+  ): { chapters: Record<string, unknown>[]; settings: RelationshipSettingSource[] } {
+    const requestedRefs = new Map(refs.map((ref) => [
+      this.relationshipIndexedSourceKey(ref.sourceType, ref.sourceId),
+      ref
+    ]));
+    const availableChapters = scope.type === "settings" ? [] : this.getScopeChapters(workId, scope);
+    const includeSettings = scope.type === "settings" || scope.includeAllSettings === true;
+    const availableSettings = includeSettings ? this.relationshipSettingSources(workId, characters) : [];
+    const availableVersions = new Map<string, string>([
+      ...availableChapters.map((chapter) => [
+        this.relationshipIndexedSourceKey("chapter", String(chapter.id)),
+        String(chapter.versionNo ?? "")
+      ] as [string, string]),
+      ...availableSettings.map((source) => [
+        this.relationshipIndexedSourceKey(source.sourceType, source.sourceId),
+        source.version
+      ] as [string, string])
+    ]);
+    for (const [sourceKey, ref] of requestedRefs) {
+      const currentVersion = availableVersions.get(sourceKey);
+      if (currentVersion === undefined || currentVersion !== ref.sourceVersion) {
+        throw new AppError(409, "RELATIONSHIP_SOURCE_PREVIEW_STALE", "来源已在预检后发生变化，请重新预览", {
+          sourceType: ref.sourceType,
+          sourceId: ref.sourceId
+        });
+      }
+    }
+    const chapters = availableChapters.filter((chapter) =>
+      requestedRefs.has(this.relationshipIndexedSourceKey("chapter", String(chapter.id)))
+    );
+    const settings = availableSettings.filter((source) =>
+      requestedRefs.has(this.relationshipIndexedSourceKey(source.sourceType, source.sourceId))
+    );
+    return { chapters, settings };
+  }
+
+  async previewRelationshipSources(workId: string, scope: ContextScope, modelId?: string): Promise<Record<string, unknown>> {
+    const characters = this.store.listCharacters(workId);
+    if (characters.length < 2) throw new AppError(409, "CHARACTERS_REQUIRED", "人物关系分析至少需要两个角色档案");
+    const selectedCharacterIds = new Set(scope.characterIds ?? []);
+    if (selectedCharacterIds.size === 0) {
+      throw new AppError(400, "RELATIONSHIP_PREVIEW_CHARACTERS_REQUIRED", "请先选择需要定向分析的角色");
+    }
+    for (const characterId of selectedCharacterIds) {
+      if (!characters.some((character) => String(character.id) === characterId)) {
+        throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
+      }
+    }
+    const preFilterRelationshipSources = scope.preFilterRelationshipSources !== false;
+    const sourceSelection = preFilterRelationshipSources
+      ? await this.selectRelationshipSources(workId, scope, characters, selectedCharacterIds, modelId)
+      : null;
+    const chapters = sourceSelection?.chapters
+      ?? (scope.type === "settings" ? [] : this.getScopeChapters(workId, scope));
+    const settings = sourceSelection?.settings
+      ?? (scope.type === "settings" || scope.includeAllSettings === true
+        ? this.relationshipSettingSources(workId, characters)
+        : []);
+    const sources = [
+      ...chapters.map((chapter) => ({
+        sourceType: "chapter",
+        sourceId: String(chapter.id),
+        title: String(chapter.title),
+        version: String(chapter.versionNo ?? ""),
+        characterCount: String(chapter.content ?? "").length,
+        matchType: sourceSelection?.matchKinds[this.relationshipIndexedSourceKey("chapter", String(chapter.id))] ?? "scope"
+      })),
+      ...settings.map((setting) => ({
+        sourceType: setting.sourceType,
+        sourceId: setting.sourceId,
+        title: setting.title,
+        version: setting.version,
+        characterCount: setting.content.length,
+        matchType: sourceSelection?.matchKinds[this.relationshipIndexedSourceKey(setting.sourceType, setting.sourceId)] ?? "scope"
+      }))
+    ];
+    if (sources.length > 5_000) {
+      throw new AppError(409, "RELATIONSHIP_SOURCE_PREVIEW_TOO_LARGE", "预检来源超过 5000 条，请缩小分析范围");
+    }
+    return {
+      preFilterRelationshipSources,
+      chapterCount: chapters.length,
+      settingCount: settings.length,
+      sourceCount: sources.length,
+      totalCharacters: sources.reduce((total, source) => total + source.characterCount, 0),
+      estimatedBatchCount: this.buildChapterChunks(chapters, 12_000).length + this.buildSettingChunks(settings, 12_000).length,
+      sources,
+      indexGeneration: sourceSelection?.generation ?? null,
+      selectionSummary: sourceSelection?.summary ?? null,
+      verificationCallCount: sourceSelection?.verificationCallIds.length ?? 0
+    };
+  }
+
   private async runRelationshipAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const characters = this.store.listCharacters(workId);
     if (characters.length < 2) throw new AppError(409, "CHARACTERS_REQUIRED", "人物关系分析至少需要两个角色档案");
     const settingsOnly = scope.type === "settings";
+    const includesSettings = settingsOnly || scope.includeAllSettings === true;
     const selectedCharacterIds = new Set(scope.characterIds ?? []);
     for (const characterId of selectedCharacterIds) {
       const character = characters.find((item) => item.id === characterId);
@@ -4910,19 +5381,23 @@ export class AiManager {
     }
     const targeted = selectedCharacterIds.size > 0;
     const preFilterRelationshipSources = targeted && scope.preFilterRelationshipSources !== false;
+    const previewRelationshipChanges = scope.previewRelationshipChanges === true;
     const targetedRoster = characters
       .filter((character) => selectedCharacterIds.has(String(character.id)))
       .map((character) => `${String(character.id)} | ${String(character.name)}`)
       .join("\n");
-    const sourceSelection = preFilterRelationshipSources
+    const previewedSources = Array.isArray(scope.relationshipSourceRefs)
+      ? this.relationshipSourcesFromRefs(workId, scope, characters, scope.relationshipSourceRefs)
+      : null;
+    const sourceSelection = !previewedSources && preFilterRelationshipSources
       ? await this.selectRelationshipSources(workId, scope, characters, selectedCharacterIds, modelId, taskId)
       : null;
     const scopedChapters = preFilterRelationshipSources || settingsOnly ? [] : this.getScopeChapters(workId, scope);
-    const chapters = sourceSelection?.chapters ?? scopedChapters;
+    const chapters = previewedSources?.chapters ?? sourceSelection?.chapters ?? scopedChapters;
     const availableSettings = !preFilterRelationshipSources && (settingsOnly || scope.includeAllSettings === true)
       ? this.relationshipSettingSources(workId, characters)
       : [];
-    const settings = sourceSelection?.settings ?? availableSettings;
+    const settings = previewedSources?.settings ?? sourceSelection?.settings ?? availableSettings;
     if (!targeted && settingsOnly && availableSettings.length === 0) throw new AppError(409, "SETTINGS_REQUIRED", "人物关系分析范围内没有设定数据");
     if (!targeted && !settingsOnly && scopedChapters.length === 0 && availableSettings.length === 0) {
       throw new AppError(409, "RELATIONSHIP_SOURCES_REQUIRED", "人物关系分析范围内没有章节或设定数据");
@@ -4949,6 +5424,18 @@ export class AiManager {
         aggregationBatchCount: 0,
         replacedRelationshipCount: 0,
         preFilterRelationshipSources,
+        ...(previewRelationshipChanges ? {
+          relationshipChangePreview: {
+            status: "pending",
+            totalCount: 0,
+            createdCount: 0,
+            updatedCount: 0,
+            deletedCount: 0,
+            generatedAt: now(),
+            operations: []
+          }
+        } : {}),
+        sourcePreviewApplied: Boolean(previewedSources),
         sourceSelection: sourceSelection?.summary,
         callIds: sourceSelection?.verificationCallIds ?? []
       };
@@ -5334,23 +5821,25 @@ export class AiManager {
 
     const relationshipIds: string[] = [];
     const relationshipOutcomes = new Map<string, {
-      action: "created" | "updated" | "unchanged";
+      action: "created" | "updated" | "deleted" | "unchanged";
       relationship: Record<string, unknown>;
     }>();
     const recordRelationshipOutcome = (
-      action: "created" | "updated" | "unchanged",
+      action: "created" | "updated" | "deleted" | "unchanged",
       relationship: Record<string, unknown>
     ): void => {
       const relationshipId = String(relationship.id);
       const previous = relationshipOutcomes.get(relationshipId);
       relationshipOutcomes.set(relationshipId, {
-        action: previous?.action === "created" ? "created" : action,
+        action: action === "deleted" ? "deleted" : previous?.action === "created" ? "created" : action,
         relationship
       });
     };
     let replacedRelationshipCount = 0;
+    let relationshipChangeOperations: RelationshipChangeOperation[] = [];
+    const relationshipsBeforePreview = previewRelationshipChanges ? this.store.listRelationships(workId) : [];
     if (!this.taskCanCommit(taskId)) return { interrupted: true, callIds };
-    this.store.db.transaction(() => {
+    const processRelationshipChanges = (): void => {
       if (targeted && scope.replaceExistingRelationships === true) {
         const relationshipsToReplace = this.store.listRelationships(workId).filter((relationship) =>
           selectedCharacterIds.has(String(relationship.fromCharacterId)) || selectedCharacterIds.has(String(relationship.toCharacterId))
@@ -5546,8 +6035,33 @@ export class AiManager {
         recordRelationshipOutcome("created", relationship);
         existing.push(relationship);
       }
-      if (taskId && settingsOnly) this.store.refreshTaskSourceVersions(taskId);
-    });
+        if (taskId && includesSettings) this.store.refreshTaskSourceVersions(taskId);
+        if (previewRelationshipChanges) {
+          relationshipChangeOperations = this.relationshipChangeOperations(
+            relationshipsBeforePreview,
+            this.store.listRelationships(workId)
+          );
+        }
+    };
+    if (previewRelationshipChanges) this.store.db.rollbackTransaction(processRelationshipChanges);
+    else this.store.db.transaction(processRelationshipChanges);
+    if (previewRelationshipChanges) {
+      const unchangedOutcomes = [...relationshipOutcomes.values()].filter((outcome) => outcome.action === "unchanged");
+      relationshipOutcomes.clear();
+      for (const operation of relationshipChangeOperations) {
+        recordRelationshipOutcome(
+          operation.action,
+          (operation.action === "deleted" ? operation.before : operation.after) as Record<string, unknown>
+        );
+      }
+      for (const outcome of unchangedOutcomes) {
+        if (!relationshipOutcomes.has(String(outcome.relationship.id))) {
+          recordRelationshipOutcome("unchanged", outcome.relationship);
+        }
+      }
+      relationshipIds.length = 0;
+      if (taskId && includesSettings) this.store.refreshTaskSourceVersions(taskId);
+    }
     if (sourceSelection) {
       const acceptedVariants = sourceSelection.variantDecisions.filter((decision) => decision.verdict === "same" && decision.confidence >= 0.8);
       const reviewIds = new Set<string>();
@@ -5594,49 +6108,21 @@ export class AiManager {
       });
       sourceSelection.summary.reviewIds = [...reviewIds];
     }
-    const characterNameById = new Map(characters.map((character) => [String(character.id), String(character.name)]));
-    const relationshipResults = [...relationshipOutcomes.values()].map(({ action, relationship }) => {
-      const evidence = Array.isArray(relationship.evidence)
-        ? relationship.evidence.filter((item): item is Record<string, unknown> =>
-          Boolean(item) && typeof item === "object" && !Array.isArray(item))
-        : [];
-      return {
-        relationshipId: String(relationship.id),
-        action,
-        fromCharacterId: String(relationship.fromCharacterId),
-        fromCharacterName: characterNameById.get(String(relationship.fromCharacterId)) ?? String(relationship.fromCharacterId),
-        toCharacterId: String(relationship.toCharacterId),
-        toCharacterName: characterNameById.get(String(relationship.toCharacterId)) ?? String(relationship.toCharacterId),
-        category: String(relationship.category),
-        subtype: String(relationship.subtype),
-        keywords: Array.isArray(relationship.keywords) ? relationship.keywords.map(String) : [],
-        directed: Boolean(relationship.directed),
-        currentStatus: String(relationship.currentStatus ?? ""),
-        timeRange: relationship.timeRange && typeof relationship.timeRange === "object" && !Array.isArray(relationship.timeRange)
-          ? relationship.timeRange
-          : {},
-        confidence: Number(relationship.confidence ?? 0),
-        confirmationStatus: String(relationship.confirmationStatus ?? "pending"),
-        evidenceCount: evidence.length,
-        evidence: evidence.slice(0, 3).map((item) => ({
-          chapterId: String(item.chapterId ?? ""),
-          chapterTitle: String(item.chapterTitle ?? chapterById.get(String(item.chapterId))?.title ?? ""),
-          quote: String(item.quote ?? ""),
-          supports: String(item.supports ?? "")
-        })),
-        evidenceTruncated: evidence.length > 3
-      };
-    });
+    if (previewRelationshipChanges && taskId && includesSettings) this.store.refreshTaskSourceVersions(taskId);
+    const relationshipResults = [...relationshipOutcomes.values()].map(({ action, relationship }) =>
+      this.relationshipResultSnapshot(workId, action, relationship));
     const createdCount = relationshipResults.filter((item) => item.action === "created").length;
     const updatedCount = relationshipResults.filter((item) => item.action === "updated").length;
+    const deletedCount = relationshipResults.filter((item) => item.action === "deleted").length;
     const unchangedCount = relationshipResults.filter((item) => item.action === "unchanged").length;
-    this.store.audit(workId, "relationship.analysis.completed", "work", workId, {
+    this.store.audit(workId, previewRelationshipChanges ? "relationship.analysis.previewed" : "relationship.analysis.completed", "work", workId, {
       batchCount: chunks.length,
       coveredChapterCount: chapters.length,
       coveredSettingCount: settings.length,
       rawCandidateCount: rawCandidates.length,
       savedCount: relationshipIds.length,
       updatedCount,
+      deletedCount,
       unchangedCount,
       skippedCount: skipped.length,
       fallbackSegmentCount,
@@ -5650,11 +6136,23 @@ export class AiManager {
     });
     return {
       relationshipIds,
-      candidateCount: relationshipIds.length,
+      candidateCount: previewRelationshipChanges ? createdCount + updatedCount : relationshipIds.length,
       createdCount,
       updatedCount,
+      deletedCount,
       unchangedCount,
       relationshipResults,
+      ...(previewRelationshipChanges ? {
+        relationshipChangePreview: {
+          status: "pending",
+          totalCount: relationshipChangeOperations.length,
+          createdCount,
+          updatedCount,
+          deletedCount,
+          generatedAt: now(),
+          operations: relationshipChangeOperations
+        }
+      } : {}),
       analysisTarget: {
         mode: targeted ? "targeted-characters" : "all-relationships",
         scopeType: scope.type,
@@ -5678,6 +6176,7 @@ export class AiManager {
       aggregationBatchCount,
       replacedRelationshipCount,
       preFilterRelationshipSources,
+      sourcePreviewApplied: Boolean(previewedSources),
       ...(sourceSelection ? { sourceSelection: sourceSelection.summary } : {}),
       callIds
     };

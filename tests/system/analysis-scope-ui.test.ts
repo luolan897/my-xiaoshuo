@@ -26,7 +26,7 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain("chapterSelect.disabled = disabled");
     expect(application).toContain('chapterFieldElement.classList.toggle("is-disabled", disabled)');
     expect(application).toContain('chapterFieldElement.setAttribute("aria-disabled", String(disabled))');
-    expect(application).toContain('scopeTypeSelect.addEventListener("change", syncChapterField)');
+    expect(application).toContain('scopeTypeSelect.addEventListener("change", () =>');
     expect(application).toContain('name="additionalPrompt" maxlength="10000"');
     expect(application).toContain('class="relationship-character-trigger"');
     expect(application).toContain('data-relationship-character-search');
@@ -37,6 +37,12 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain("无差别发送所选范围内的全部章节和设定来源");
     expect(application).toContain('form.get("preFilterRelationshipSources") === "on"');
     expect(application).toContain("preFilterRelationships.disabled = !hasSelectedCharacters");
+    expect(application).toContain("发送来源预检");
+    expect(application).toContain("/tasks/relationship-source-preview");
+    expect(application).toContain("scope.relationshipSourceRefs");
+    expect(application).toContain("data-relationship-source-selected");
+    expect(application).toContain("renderRelationshipSourcePreview");
+    expect(application).toContain("invalidateRelationshipSourcePreview");
     expect(application).toContain("默认仅追加不存在的关系，不修改或删除已有关系");
     expect(application).toContain("不勾选则只追加新关系");
     expect(application).toContain('class="relationship-overwrite-card relationship-existing-overwrite-card hidden"');
@@ -65,6 +71,8 @@ describe("AI 分析范围交互", () => {
     expect(styles).toContain(".relationship-character-options {");
     expect(styles).toContain(".relationship-analysis-helper {");
     expect(styles).toContain(".relationship-overwrite-card {");
+    expect(styles).toContain(".relationship-source-preview-card {");
+    expect(styles).toContain(".relationship-source-preview-row {");
     expect(styles).toContain(".dialog-submit-status {");
     expect(styles).toContain("@keyframes dialog-submit-progress");
   });

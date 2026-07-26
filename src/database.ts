@@ -67,6 +67,28 @@ export class Database {
     }
   }
 
+  rollbackTransaction<T>(operation: () => T): T {
+    if (this.raw.isTransaction) throw new Error("Rollback-only transaction cannot be nested");
+    const startedAt = process.hrtime.bigint();
+    logger.debug("database.rollback_transaction.started");
+    this.raw.exec("BEGIN IMMEDIATE");
+    try {
+      const result = operation();
+      this.raw.exec("ROLLBACK");
+      logger.debug("database.rollback_transaction.completed", {
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
+      });
+      return result;
+    } catch (error) {
+      this.raw.exec("ROLLBACK");
+      logger.warn("database.rollback_transaction.failed", {
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        error: sanitizeError(error)
+      });
+      throw error;
+    }
+  }
+
   private migrate(): void {
     this.raw.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (

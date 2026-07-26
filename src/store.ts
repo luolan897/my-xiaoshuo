@@ -867,6 +867,13 @@ export class Store {
       entityId: entityType === "user" && entityId ? accountReference(entityId) : entityId,
       detailKeys
     });
+    if (workId) {
+      try {
+        this.relationshipIndexQueuedHandler?.(workId);
+      } catch {
+        // 索引调度失败不影响主写入路径
+      }
+    }
   }
 
   createWork(input: WorkInput): Record<string, unknown> {
@@ -994,9 +1001,14 @@ export class Store {
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
+  private relationshipIndexQueuedHandler: ((workId: string) => void) | null = null;
 
   setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
     this.analysisTaskQueuedHandler = handler;
+  }
+
+  setRelationshipIndexQueuedHandler(handler: ((workId: string) => void) | null): void {
+    this.relationshipIndexQueuedHandler = handler;
   }
 
   private notifyAnalysisTaskQueued(workId: string): void {
@@ -5321,6 +5333,29 @@ export class Store {
     return versions;
   }
 
+  private analysisTaskSourceVersions(workId: string, scope: Record<string, unknown>): Record<string, number | string> {
+    const sourceVersions: Record<string, number | string> = {};
+    if (typeof scope.chapterId === "string") {
+      const chapter = this.getChapter(scope.chapterId);
+      if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+      sourceVersions[scope.chapterId] = Number(chapter.versionNo);
+    } else if (scope.type === "book" || scope.type === "volume") {
+      const tree = this.getWorkTree(workId);
+      const volumes = tree.volumes as Record<string, unknown>[];
+      const selectedVolumes = scope.type === "volume"
+        ? volumes.filter((volume) => volume.id === scope.volumeId)
+        : volumes;
+      if (scope.type === "volume" && selectedVolumes.length === 0) throw notFound("卷");
+      for (const chapter of selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])) {
+        sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
+      }
+    }
+    if (scope.type === "settings" || (scope.includeAllSettings === true && scope.previewRelationshipChanges === true)) {
+      Object.assign(sourceVersions, this.relationshipSettingsSourceVersions(workId));
+    }
+    return sourceVersions;
+  }
+
   private mapContinuationGuard(row: Row): Record<string, unknown> {
     return {
       id: requiredString(row, "id"),
@@ -5336,12 +5371,16 @@ export class Store {
     };
   }
 
-  createTask(workId: string, input: { taskType: string; scope?: Record<string, unknown>; modelId?: string }): Record<string, unknown> {
+  createTask(workId: string, input: {
+    taskType: string;
+    scope?: Record<string, unknown>;
+    modelId?: string;
+    rerunOfTaskId?: string;
+  }): Record<string, unknown> {
     this.getWork(workId);
     const taskId = id("task");
     const timestamp = now();
     const scope = { ...(input.scope ?? { type: "book" }) };
-    const sourceVersions: Record<string, number | string> = {};
     const targetCharacters: Array<{ id: string; name: string }> = [];
     if (Array.isArray(scope.characterIds)) {
       for (const characterId of scope.characterIds) {
@@ -5352,23 +5391,7 @@ export class Store {
       }
       if (targetCharacters.length > 0) scope.targetCharacters = targetCharacters;
     }
-    if (typeof scope.chapterId === "string") {
-      const chapter = this.getChapter(scope.chapterId);
-      if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
-      sourceVersions[scope.chapterId] = Number(chapter.versionNo);
-    } else if (scope.type === "book" || scope.type === "volume") {
-      const tree = this.getWorkTree(workId);
-      const volumes = tree.volumes as Record<string, unknown>[];
-      const selectedVolumes = scope.type === "volume"
-        ? volumes.filter((volume) => volume.id === scope.volumeId)
-        : volumes;
-      if (scope.type === "volume" && selectedVolumes.length === 0) throw notFound("卷");
-      for (const chapter of selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])) {
-        sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
-      }
-    } else if (scope.type === "settings") {
-      Object.assign(sourceVersions, this.relationshipSettingsSourceVersions(workId));
-    }
+    const sourceVersions = this.analysisTaskSourceVersions(workId, scope);
     this.db.run(
       `INSERT INTO analysis_tasks (id, work_id, model_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
@@ -5385,7 +5408,8 @@ export class Store {
     this.audit(workId, "task.created", "analysis-task", taskId, {
       taskType: input.taskType,
       scope,
-      modelId: input.modelId ?? null
+      modelId: input.modelId ?? null,
+      ...(input.rerunOfTaskId ? { rerunOfTaskId: input.rerunOfTaskId } : {})
     });
     this.notifyAnalysisTaskQueued(workId);
     return this.getTask(taskId);
@@ -5481,30 +5505,12 @@ export class Store {
     const task = this.getTask(taskId);
     const scope = task.scope as Record<string, unknown>;
     const expected = task.sourceVersions as Record<string, number | string>;
-    if (scope.type === "settings") {
-      const current = this.relationshipSettingsSourceVersions(String(task.workId));
-      const expectedIds = Object.keys(expected).sort();
-      const currentIds = Object.keys(current).sort();
-      return expectedIds.length === currentIds.length
-        && expectedIds.every((settingId, index) => settingId === currentIds[index] && expected[settingId] === current[settingId]);
+    let current: Record<string, number | string>;
+    try {
+      current = this.analysisTaskSourceVersions(String(task.workId), scope);
+    } catch {
+      return false;
     }
-    let chapters: Record<string, unknown>[] = [];
-    if (typeof scope.chapterId === "string") {
-      const row = this.db.get("SELECT id, work_id, version_no FROM chapters WHERE id = ?", scope.chapterId);
-      if (!row || requiredString(row, "work_id") !== task.workId) return false;
-      chapters = [{ id: requiredString(row, "id"), versionNo: numberValue(row, "version_no") }];
-    } else if (scope.type === "book" || scope.type === "volume") {
-      const tree = this.getWorkTree(String(task.workId));
-      const volumes = tree.volumes as Record<string, unknown>[];
-      const selectedVolumes = scope.type === "volume"
-        ? volumes.filter((volume) => volume.id === scope.volumeId)
-        : volumes;
-      if (scope.type === "volume" && selectedVolumes.length === 0) return false;
-      chapters = selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[]);
-    } else {
-      return true;
-    }
-    const current = Object.fromEntries(chapters.map((chapter) => [String(chapter.id), Number(chapter.versionNo)]));
     const expectedIds = Object.keys(expected).sort();
     const currentIds = Object.keys(current).sort();
     return expectedIds.length === currentIds.length
@@ -5514,10 +5520,10 @@ export class Store {
   refreshTaskSourceVersions(taskId: string): void {
     const task = this.getTask(taskId);
     const scope = task.scope as Record<string, unknown>;
-    if (scope.type !== "settings") return;
+    if (scope.type !== "settings" && !(scope.includeAllSettings === true && scope.previewRelationshipChanges === true)) return;
     this.db.run(
       "UPDATE analysis_tasks SET source_versions_json = ?, updated_at = ? WHERE id = ?",
-      JSON.stringify(this.relationshipSettingsSourceVersions(String(task.workId))),
+      JSON.stringify(this.analysisTaskSourceVersions(String(task.workId), scope)),
       now(),
       taskId
     );
@@ -5886,6 +5892,7 @@ export class Store {
     let summary = "分析已完成。";
     let metrics: Record<string, unknown>[] = [];
     let sections: Record<string, unknown>[] = [];
+    let relationshipChangePreviewSummary: Record<string, unknown> | null = null;
 
     if (taskType === "chapter-analysis") {
       let chapterTitle = String(result.chapterId ?? "指定章节");
@@ -6129,8 +6136,29 @@ export class Store {
     } else if (taskType === "relationship-analysis") {
       const relationshipIds = idList(result.relationshipIds);
       const missingRelationshipIds = idList(result.missingRelationshipIds);
+      const changePreview = result.relationshipChangePreview && typeof result.relationshipChangePreview === "object"
+        && !Array.isArray(result.relationshipChangePreview)
+        ? result.relationshipChangePreview as Record<string, unknown>
+        : null;
+      const previewStatus = String(changePreview?.status ?? "");
+      if (changePreview) {
+        relationshipChangePreviewSummary = {
+          status: previewStatus,
+          totalCount: Number(changePreview.totalCount ?? 0),
+          createdCount: Number(changePreview.createdCount ?? 0),
+          updatedCount: Number(changePreview.updatedCount ?? 0),
+          deletedCount: Number(changePreview.deletedCount ?? 0),
+          ...(typeof changePreview.generatedAt === "string" ? { generatedAt: changePreview.generatedAt } : {}),
+          ...(typeof changePreview.appliedAt === "string" ? { appliedAt: changePreview.appliedAt } : {}),
+          ...(typeof changePreview.discardedAt === "string" ? { discardedAt: changePreview.discardedAt } : {})
+        };
+      }
       const relationships = this.taskResultObjects(result.relationshipResults).map((relationship) => {
-        const actionLabels: Record<string, string> = { created: "已新建", updated: "已更新", unchanged: "已保留原记录" };
+        const actionLabels: Record<string, string> = previewStatus === "pending"
+          ? { created: "将新建", updated: "将更新", deleted: "将删除", unchanged: "将保留原记录" }
+          : previewStatus === "discarded"
+          ? { created: "已放弃新建", updated: "已放弃更新", deleted: "已放弃删除", unchanged: "已保留原记录" }
+          : { created: "已新建", updated: "已更新", deleted: "已删除", unchanged: "已保留原记录" };
         const categoryLabels: Record<string, string> = { family: "亲属", social: "社交", emotional: "情感", conflict: "冲突", uncertain: "未确定" };
         const statusLabels: Record<string, string> = { active: "持续中", ongoing: "持续中", ended: "已结束", historical: "历史关系" };
         const confirmationLabels: Record<string, string> = { pending: "待确认", confirmed: "已确认", rejected: "已否决" };
@@ -6160,7 +6188,11 @@ export class Store {
       const sourceSelection = result.sourceSelection && typeof result.sourceSelection === "object" && !Array.isArray(result.sourceSelection)
         ? result.sourceSelection as Record<string, unknown>
         : null;
-      summary = missingRelationshipIds.length > 0
+      summary = previewStatus === "pending"
+        ? `${targetSummary}，生成 ${Number(changePreview?.totalCount ?? 0)} 项待确认变更，尚未写入人物关系库。`
+        : previewStatus === "discarded"
+        ? `${targetSummary}，本次 ${Number(changePreview?.totalCount ?? 0)} 项关系变更已放弃，人物关系库未被修改。`
+        : missingRelationshipIds.length > 0
         ? `${targetSummary}。任务结果记录 ${relationshipIds.length} 条关系，当前作品中保留 ${relationships.length} 条可展示关系，另有 ${missingRelationshipIds.length} 条已删除或合并。`
         : `${targetSummary}，共形成 ${relationships.length} 条可展示结果。`;
       if (sourceSelection) {
@@ -6169,12 +6201,13 @@ export class Store {
       const actionMetrics = [
         ["新建", result.createdCount],
         ["更新", result.updatedCount],
+        ["删除", result.deletedCount],
         ["保留", result.unchangedCount]
       ].flatMap(([label, value]) => typeof value === "number" ? [metric(String(label), value)] : []);
       metrics = [
         ...actionMetrics,
         metric("任务记录", relationshipIds.length || relationships.length),
-        metric("当前可展示", relationships.length),
+        metric(previewStatus === "pending" ? "待确认变更" : "当前可展示", relationships.length),
         metric("已删除或合并", missingRelationshipIds.length),
         metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0),
         ...(sourceSelection ? [
@@ -6189,8 +6222,12 @@ export class Store {
         label: "人物关系",
         entity: "人物关系库",
         key: "relationships",
-        count: relationshipIds.length || relationships.length,
-        note: `任务记录 ${relationshipIds.length || relationships.length} 条关系，当前可读取 ${relationships.length} 条；关系候选需由作者确认。`
+        count: previewStatus === "pending" ? 0 : relationshipIds.length || relationships.length,
+        note: previewStatus === "pending"
+          ? `有 ${Number(changePreview?.totalCount ?? 0)} 项待确认变更，点击确认应用前不会写入或删除人物关系。`
+          : previewStatus === "discarded"
+          ? "本次待确认变更已放弃，人物关系库未被修改。"
+          : `任务记录 ${relationshipIds.length || relationships.length} 条关系，当前可读取 ${relationships.length} 条；关系候选需由作者确认。`
       });
       const variantReviewIds = sourceSelection && Array.isArray(sourceSelection.reviewIds) ? sourceSelection.reviewIds.map(String) : [];
       if (variantReviewIds.length > 0) storageTargets.unshift({
@@ -6201,7 +6238,12 @@ export class Store {
         note: "仅生成待处理审核项，不会修改正文或人物别名。"
       });
       sections = [
-        { title: "分析出的关系", totalCount: relationships.length, items: relationships.slice(0, 100), emptyMessage: "没有形成可展示的人物关系。" },
+        {
+          title: previewStatus === "pending" ? "待确认的关系变更" : previewStatus === "discarded" ? "已放弃的关系变更" : "分析出的关系",
+          totalCount: relationships.length,
+          items: relationships.slice(0, 100),
+          emptyMessage: previewStatus === "pending" ? "本次没有需要应用的关系变更。" : "没有形成可展示的人物关系。"
+        },
         section("未写入候选", result.skipped, "没有候选被跳过。")
       ];
     } else {
@@ -6216,7 +6258,8 @@ export class Store {
       summary,
       metrics,
       storageTargets: productStorageTargets(storageTargets),
-      sections
+      sections,
+      ...(relationshipChangePreviewSummary ? { relationshipChangePreview: relationshipChangePreviewSummary } : {})
     };
   }
 
@@ -6460,10 +6503,13 @@ export class Store {
     if (characterIds.length === 0) return "";
     const overwriteSuffix = scope.replaceExistingRelationships === true ? " · 覆盖已有关系" : "";
     const preFilterSuffix = scope.preFilterRelationshipSources === false ? " · 未前置过滤" : "";
-    if (!includeCharacterNames) return ` · 定向 ${characterIds.length} 人${preFilterSuffix}${overwriteSuffix}`;
+    const sourcePreviewSuffix = Array.isArray(scope.relationshipSourceRefs)
+      ? ` · 已预检 ${scope.relationshipSourceRefs.length} 条来源`
+      : "";
+    if (!includeCharacterNames) return ` · 定向 ${characterIds.length} 人${preFilterSuffix}${sourcePreviewSuffix}${overwriteSuffix}`;
     const snapshotNames = this.taskCharacterSnapshotNames(scope);
     const names = characterIds.map((characterId) => snapshotNames.get(characterId) ?? characterNames.get(characterId) ?? "已删除角色");
-    return ` · 定向 ${characterIds.length} 人：${names.join("、")}${preFilterSuffix}${overwriteSuffix}`;
+    return ` · 定向 ${characterIds.length} 人：${names.join("、")}${preFilterSuffix}${sourcePreviewSuffix}${overwriteSuffix}`;
   }
 
   private taskCharacterSnapshotNames(scope: Record<string, unknown>): Map<string, string> {

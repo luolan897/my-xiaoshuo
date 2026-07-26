@@ -1008,9 +1008,11 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/(?:works\/[^/]+\/reviews|reviews\/[^/]+)(?:\/|$)/u.test(pathname)) {
     return direct("reviews");
   }
-  if (write && /^\/api\/works\/[^/]+\/tasks\/?$/u.test(pathname)) {
+  if (write && /^\/api\/works\/[^/]+\/tasks(?:\/relationship-source-preview)?\/?$/u.test(pathname)) {
     const body = requestBodyRecord(request);
-    const sourceModules = body.taskType === "relationship-analysis" ? relationshipAnalysisReadModules(body.scope) : [];
+    const sourceModules = pathname.includes("/relationship-source-preview")
+      ? relationshipAnalysisReadModules(body.scope)
+      : body.taskType === "relationship-analysis" ? relationshipAnalysisReadModules(body.scope) : [];
     if (sourceModules.length > 0) {
       return { read: sourceModules, write: ["ai-analysis"] };
     }
@@ -1020,6 +1022,9 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   }
   if (/^\/api\/tasks\/[^/]+\/trace(?:\/calls\/[^/]+)?$/u.test(pathname)) {
     return { read: ["ai-analysis", ...contentPermissionModules] };
+  }
+  if (write && /^\/api\/tasks\/[^/]+\/relationship-changes\/apply$/u.test(pathname)) {
+    return { write: ["ai-analysis", "relationships"] };
   }
   if (/^\/api\/(?:works\/[^/]+\/(?:tasks|ai-calls)|tasks\/[^/]+)(?:\/|$)/u.test(pathname)) {
     return write ? { write: ["ai-analysis"] } : { read: ["ai-analysis"] };
