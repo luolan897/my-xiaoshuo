@@ -67,11 +67,13 @@ describe("作者完整创作流程", () => {
     await once(mockServer, "close");
   });
 
-  it("正文编辑区在章节概览隐藏时仍占满剩余高度", async () => {
+  it("章节概览使用 Toast 且正文编辑区始终占满剩余高度", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
+    expect(page.text).not.toContain('id="chapter-insight"');
+    expect(page.text).toContain('id="insight-button" class="ghost-button" type="button" aria-controls="chapter-insight-toast" aria-expanded="false"');
     expect(page.text).toContain('id="chapter-line-numbers"');
     expect(page.text).not.toContain('id="toggle-whitespace-button"');
     expect(page.text).toContain('id="chapter-whitespace-overlay"');
@@ -94,6 +96,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderChapterLineNumbers()");
     expect(application.text).toContain("syncChapterLineNumberScroll");
     expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
+    expect(application.text).toContain('element.className = "toast chapter-insight-toast"');
+    expect(application.text).toContain('element.id = "chapter-insight-toast"');
+    expect(application.text).toContain("function dismissChapterInsightToast()");
+    expect(styles.text).toContain(".chapter-insight-toast {");
     expect(application.text).toContain('data-toggle-whitespace');
     expect(application.text).toContain('document.querySelectorAll("[data-toggle-whitespace]")');
     expect(page.text).toContain('id="toggle-whitespace-appearance"');
@@ -297,8 +303,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-task-refresh-v1');
-    expect(page.text).toContain('/styles.css?v=20260727-background-center-v3');
+    expect(page.text).toContain('/app.js?v=20260727-chapter-insight-toast-v2');
+    expect(page.text).toContain('/styles.css?v=20260727-chapter-insight-toast');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
