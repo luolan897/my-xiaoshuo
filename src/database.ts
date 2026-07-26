@@ -1728,6 +1728,192 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(45)) {
+      this.transaction(() => {
+        const reviewColumns = new Set(this.all("PRAGMA table_info(review_items)").map((row) => String(row.name)));
+        if (!reviewColumns.has("dedupe_key")) {
+          this.run("ALTER TABLE review_items ADD COLUMN dedupe_key TEXT NOT NULL DEFAULT ''");
+        }
+        this.raw.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_review_items_dedupe
+            ON review_items(work_id, item_type, dedupe_key) WHERE dedupe_key <> '';
+
+          CREATE VIRTUAL TABLE IF NOT EXISTS chapter_paragraph_pinyin_fts USING fts5(
+            pinyin_tokens,
+            content='',
+            contentless_delete=1,
+            tokenize='unicode61'
+          );
+          CREATE TRIGGER IF NOT EXISTS chapter_paragraph_pinyin_ad AFTER DELETE ON chapter_paragraph_search BEGIN
+            DELETE FROM chapter_paragraph_pinyin_fts WHERE rowid = old.id;
+          END;
+
+          CREATE TABLE IF NOT EXISTS relationship_source_search (
+            id INTEGER PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_version TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            UNIQUE(work_id, source_type, source_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_relationship_source_search_work
+            ON relationship_source_search(work_id, source_type, source_id);
+          CREATE VIRTUAL TABLE IF NOT EXISTS relationship_source_exact_fts USING fts5(
+            character_tokens,
+            content='',
+            contentless_delete=1,
+            tokenize='unicode61'
+          );
+          CREATE VIRTUAL TABLE IF NOT EXISTS relationship_source_pinyin_fts USING fts5(
+            pinyin_tokens,
+            content='',
+            contentless_delete=1,
+            tokenize='unicode61'
+          );
+          CREATE TRIGGER IF NOT EXISTS relationship_source_search_ad AFTER DELETE ON relationship_source_search BEGIN
+            DELETE FROM relationship_source_exact_fts WHERE rowid = old.id;
+            DELETE FROM relationship_source_pinyin_fts WHERE rowid = old.id;
+          END;
+
+          CREATE TABLE IF NOT EXISTS relationship_source_index_queue (
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            queued_at TEXT NOT NULL,
+            PRIMARY KEY(work_id, source_type, source_id)
+          ) WITHOUT ROWID;
+          CREATE TABLE IF NOT EXISTS relationship_source_index_state (
+            work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'building', 'ready', 'failed')),
+            generation INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+          ) WITHOUT ROWID;
+        `);
+
+        const queueSources: Array<{ table: string; sourceType: string; idColumn: string }> = [
+          { table: "works", sourceType: "work", idColumn: "id" },
+          { table: "chapters", sourceType: "chapter", idColumn: "id" },
+          { table: "settings", sourceType: "setting", idColumn: "id" },
+          { table: "characters", sourceType: "character", idColumn: "id" },
+          { table: "races", sourceType: "race", idColumn: "id" },
+          { table: "organizations", sourceType: "organization", idColumn: "id" },
+          { table: "timeline_tracks", sourceType: "timeline-track", idColumn: "id" },
+          { table: "timeline_events", sourceType: "timeline-event", idColumn: "id" },
+          { table: "relationships", sourceType: "relationship", idColumn: "id" },
+          { table: "foreshadows", sourceType: "foreshadow", idColumn: "id" },
+          { table: "review_items", sourceType: "review", idColumn: "id" }
+        ];
+        for (const source of queueSources) {
+          const workExpression = source.table === "works" ? "new.id" : "new.work_id";
+          const oldWorkExpression = source.table === "works" ? "old.id" : "old.work_id";
+          this.raw.exec(`
+            CREATE TRIGGER IF NOT EXISTS relationship_index_${source.table}_ai AFTER INSERT ON ${source.table} BEGIN
+              INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+              VALUES (${workExpression}, '${source.sourceType}', new.${source.idColumn}, datetime('now'))
+              ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            END;
+            CREATE TRIGGER IF NOT EXISTS relationship_index_${source.table}_au AFTER UPDATE ON ${source.table} BEGIN
+              INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+              VALUES (${workExpression}, '${source.sourceType}', new.${source.idColumn}, datetime('now'))
+              ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            END;
+            CREATE TRIGGER IF NOT EXISTS relationship_index_${source.table}_bd BEFORE DELETE ON ${source.table} BEGIN
+              INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+              VALUES (${oldWorkExpression}, '${source.sourceType}', old.${source.idColumn}, datetime('now'))
+              ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            END;
+          `);
+        }
+        this.raw.exec(`
+          CREATE TRIGGER IF NOT EXISTS relationship_index_outlines_ai AFTER INSERT ON chapter_outlines BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'chapter-outline', new.chapter_id, datetime('now') FROM chapters WHERE id = new.chapter_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_outlines_au AFTER UPDATE ON chapter_outlines BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'chapter-outline', new.chapter_id, datetime('now') FROM chapters WHERE id = new.chapter_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_outlines_bd BEFORE DELETE ON chapter_outlines BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'chapter-outline', old.chapter_id, datetime('now') FROM chapters WHERE id = old.chapter_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_sections_ai AFTER INSERT ON character_profile_sections BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            VALUES (new.work_id, 'character', new.character_id, datetime('now'))
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_sections_au AFTER UPDATE ON character_profile_sections BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            VALUES (new.work_id, 'character', new.character_id, datetime('now'))
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_sections_bd BEFORE DELETE ON character_profile_sections BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            VALUES (old.work_id, 'character', old.character_id, datetime('now'))
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_occurrences_ai AFTER INSERT ON foreshadow_occurrences BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT foreshadow.work_id, 'foreshadow', new.foreshadow_id, datetime('now')
+            FROM foreshadows foreshadow WHERE foreshadow.id = new.foreshadow_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_occurrences_au AFTER UPDATE ON foreshadow_occurrences BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT foreshadow.work_id, 'foreshadow', new.foreshadow_id, datetime('now')
+            FROM foreshadows foreshadow WHERE foreshadow.id = new.foreshadow_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_occurrences_bd BEFORE DELETE ON foreshadow_occurrences BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT foreshadow.work_id, 'foreshadow', old.foreshadow_id, datetime('now')
+            FROM foreshadows foreshadow WHERE foreshadow.id = old.foreshadow_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+        `);
+
+        const timestamp = new Date().toISOString();
+        for (const source of queueSources) {
+          const workColumn = source.table === "works" ? "id" : "work_id";
+          this.run(
+            `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+             SELECT ${workColumn}, ?, ${source.idColumn}, ? FROM ${source.table}
+             WHERE 1
+             ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+            source.sourceType,
+            timestamp
+          );
+        }
+        this.run(
+          `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+           SELECT chapter.work_id, 'chapter-outline', outline.chapter_id, ?
+           FROM chapter_outlines outline JOIN chapters chapter ON chapter.id = outline.chapter_id
+           WHERE 1
+           ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+          timestamp
+        );
+        this.run(
+          `INSERT INTO relationship_source_index_state(work_id, status, generation, error, updated_at)
+           SELECT id, 'queued', 0, '', ? FROM works
+           WHERE 1
+           ON CONFLICT(work_id) DO UPDATE SET status = 'queued', error = '', updated_at = excluded.updated_at`,
+          timestamp
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (45, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {

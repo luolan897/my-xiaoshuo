@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }, { version: 38 }, { version: 39 }, { version: 40 }, { version: 41 }, { version: 42 }, { version: 43 }, { version: 44 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }, { version: 38 }, { version: 39 }, { version: 40 }, { version: 41 }, { version: 42 }, { version: 43 }, { version: 44 }, { version: 45 }]);
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -332,5 +332,24 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
+  });
+
+  it("建立可重建的关系来源拼音索引并只回填待构建队列", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-relationship-search-"));
+    roots.push(root);
+    const filename = join(root, "relationship-search.db");
+    const database = new Database(filename);
+
+    expect(database.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 45")?.count).toBe(1);
+    expect(database.all("PRAGMA table_info(review_items)").some((column) => column.name === "dedupe_key")).toBe(true);
+    expect(database.get("SELECT sql FROM sqlite_master WHERE name = 'chapter_paragraph_pinyin_fts'")?.sql)
+      .toContain("contentless_delete=1");
+    expect(database.get("SELECT sql FROM sqlite_master WHERE name = 'relationship_source_pinyin_fts'")?.sql)
+      .toContain("content=''");
+    expect(database.all("PRAGMA table_info(relationship_source_search)").map((column) => column.name))
+      .not.toContain("pinyin_content");
+    expect(database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(database.all("PRAGMA foreign_key_check")).toEqual([]);
+    database.close();
   });
 });
