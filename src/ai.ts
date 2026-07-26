@@ -107,6 +107,11 @@ type GenerateResult = {
   processSteps: AiProcessStep[];
 };
 
+export type TaskRunActor = {
+  userId: string;
+  allowAdminAccess: boolean;
+};
+
 type CharacterExtractionEvidence = {
   chapterId: string;
   chapterTitle: string;
@@ -1148,7 +1153,8 @@ export class AiManager {
     private readonly store: Store,
     private readonly vault: CredentialVault,
     private readonly fetchImpl: typeof fetch = fetch,
-    private readonly validateOutboundUrl?: (url: string) => Promise<readonly { address: string; family: 4 | 6 }[] | void>
+    private readonly validateOutboundUrl?: (url: string) => Promise<readonly { address: string; family: 4 | 6 }[] | void>,
+    private readonly authorizeTaskRun?: (task: Record<string, unknown>, actor?: TaskRunActor) => void
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
@@ -1911,8 +1917,9 @@ export class AiManager {
     };
   }
 
-  async runTask(taskId: string, modelId?: string): Promise<Record<string, unknown>> {
+  async runTask(taskId: string, modelId?: string, actor?: TaskRunActor): Promise<Record<string, unknown>> {
     const task = this.store.getTask(taskId);
+    this.authorizeTaskRun?.(task, actor);
     const workId = String(task.workId);
     const taskModel = task.model && typeof task.model === "object" && !Array.isArray(task.model)
       ? task.model as Record<string, unknown>

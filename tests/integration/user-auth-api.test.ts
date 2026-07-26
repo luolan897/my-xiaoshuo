@@ -1021,7 +1021,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       })
       .expect(201);
     expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER");
-    await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
+    const collaboratorTargetedTask = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({
         taskType: "relationship-analysis",
@@ -1126,6 +1126,15 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({})
       .expect(403);
     expect(protectedTaskRun.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const protectedAutoRun = await analysisOnly.agent.post(`/api/works/${workId}/tasks/auto-run`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({})
+      .expect(403);
+    expect(protectedAutoRun.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    await expect(runtime.ai.runTask(String(collaboratorTargetedTask.body.data.id))).rejects.toMatchObject({
+      code: "WORK_MODULE_READ_DENIED"
+    });
+    expect(runtime.store.getTask(String(collaboratorTargetedTask.body.data.id)).status).toBe("pending");
     const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
