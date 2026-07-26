@@ -243,10 +243,10 @@
   --row-active: #332d27;
   --surface-hover: #3a342d;
   --app-glow: rgba(98,82,66,.18);
-  --toast-bg: #ece6dc;
-  --toast-fg: #171714;
-  --toast-error-bg: #e08a72;
-  --toast-error-fg: #171714;
+  --toast-bg: #25231f;
+  --toast-fg: #fffefa;
+  --toast-error-bg: #6e2e21;
+  --toast-error-fg: #fffefa;
   --relationship-card-border: #1c1c24;
   --relationship-card-surface: #12121a;
   --relationship-toolbar-surface: #12121a;
