@@ -26,7 +26,7 @@ describe("全书概要上下文引用", () => {
     expect(page.text).toContain('<option value="chapter-summary">当前章节 + 全书概要</option>');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260727-ai-usage-v4');
+    expect(page.text).toContain('/app.js?v=20260727-all-module-pagination-v2');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');
@@ -37,6 +37,9 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('id="refresh-relationship-search-index"');
     expect(application.text).toContain('id="rebuild-relationship-search-index"');
     expect(application.text).toContain('增量任务队列');
+    expect(application.text).toContain('ready: "已索引"');
+    expect(application.text).toContain('<dt>已索引正文段落</dt>');
+    expect(application.text).toContain('<dt>已索引设定来源</dt>');
     expect(application.text).toContain('class="ai-agent-tools"');
     expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
     expect(application.text).toContain('const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";');
@@ -47,6 +50,7 @@ describe("全书概要上下文引用", () => {
     expect(styles.text).not.toContain(".ai-book-summary-reference");
     expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px;");
     expect(styles.text).toContain(".config-inline-save { display: flex; align-items: flex-end; gap: 10px;");
+    expect(styles.text).toContain('.config-inline-save .context-compact-threshold-field { display: grid; gap: 6px; width: 64px;');
     expect(styles.text).toContain(".relationship-index-summary { display: grid;");
     expect(styles.text).toContain(".config-section .config-save-button { min-height: 32px; padding: 5px 11px; font-size: 11px; }");
     expect(styles.text).toContain(".ai-agent-tools { display: grid; gap: 8px; }");

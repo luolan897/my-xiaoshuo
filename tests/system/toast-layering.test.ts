@@ -42,4 +42,18 @@ describe("系统 Toast 图层", () => {
     expect(styles).toContain(".toast-input");
     expect(styles).toContain("white-space: pre-line");
   });
+
+  it("明暗主题下均使用统一的深色 Toast 配色", async () => {
+    const styles = await readFile(join(process.cwd(), "src", "public", "styles.css"), "utf8");
+    const darkTheme = styles.match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/u)?.[1] ?? "";
+
+    expect(styles).toContain("--toast-bg: #25231f;");
+    expect(styles).toContain("--toast-fg: #fffefa;");
+    expect(styles).toContain("--toast-error-bg: #6e2e21;");
+    expect(styles).toContain("--toast-error-fg: #fffefa;");
+    expect(darkTheme).toContain("--toast-bg: #25231f;");
+    expect(darkTheme).toContain("--toast-fg: #fffefa;");
+    expect(darkTheme).toContain("--toast-error-bg: #6e2e21;");
+    expect(darkTheme).toContain("--toast-error-fg: #fffefa;");
+  });
 });

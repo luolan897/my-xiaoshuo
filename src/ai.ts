@@ -24,6 +24,7 @@ import {
   RelationshipApproximateMatchLimitError,
   findApproximateNameMatchesChunked,
   ftsPhrase,
+  isRelationshipPhoneticReference,
   normalizeRelationshipSearchText,
   relationshipCharacterTokenText,
   relationshipCharacterTokens,
@@ -183,6 +184,11 @@ const RELATIONSHIP_MAX_FUZZY_SOURCES = 200;
 const RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS = 4_000_000;
 const RELATIONSHIP_MAX_FUZZY_MATCHES = 600;
 const RELATIONSHIP_MAX_SOURCE_MATCHES = 256;
+const RELATIONSHIP_PREFILTER_DISABLE_HINT = "请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览";
+
+function relationshipCandidateLimitMessage(message: string): string {
+  return `${message}；${RELATIONSHIP_PREFILTER_DISABLE_HINT}`;
+}
 
 function isGeminiProviderOrModel(provider: Row, model: Row): boolean {
   const endpoint = stringValue(provider, "base_url").toLowerCase();
@@ -4764,7 +4770,6 @@ export class AiManager {
 
   private relationshipFuzzyIndexMatches(workId: string, reference: string, includeSettings: boolean, scope: ContextScope): Set<string> {
     const result = new Set<string>();
-    const characterTokens = [...new Set(relationshipCharacterTokens(reference))];
     const pinyinTokens = [...new Set(relationshipPinyinTokens(reference))];
     const score = new Map<string, number>();
     const add = (key: string): void => {
@@ -4815,8 +4820,13 @@ export class AiManager {
       )) result.add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
     }
     const normalizedCharacters = [...normalizeRelationshipSearchText(reference).trim()];
-    if (includeChapters) {
-      for (const character of [...new Set(normalizedCharacters)]) {
+    const addSelectiveSignal = (keys: Set<string>): void => {
+      if (keys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) return;
+      for (const key of keys) add(key);
+    };
+    for (const character of [...new Set(normalizedCharacters)]) {
+      const keys = new Set<string>();
+      if (includeChapters) {
         for (const row of this.store.db.all(
           `SELECT DISTINCT paragraph.chapter_id FROM chapter_paragraph_short_terms term
            JOIN chapter_paragraph_search paragraph ON paragraph.id = term.paragraph_id
@@ -4825,9 +4835,28 @@ export class AiManager {
           workId,
           character,
           ...chapterScope.params
-        )) add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
+        )) keys.add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
       }
-      for (const token of pinyinTokens) {
+      if (includeSettings) {
+        const token = relationshipCharacterTokens(character)[0];
+        if (token) for (const row of this.store.db.all(
+          `SELECT source.source_type, source.source_id FROM relationship_source_exact_fts
+           JOIN relationship_source_search source ON source.id = relationship_source_exact_fts.rowid
+           WHERE source.work_id = ? AND relationship_source_exact_fts MATCH ?
+             AND NOT (source.source_type = 'review' AND EXISTS (
+               SELECT 1 FROM review_items review
+               WHERE review.id = source.source_id AND review.item_type = 'character-name-variant'
+             ))
+           LIMIT 201`,
+          workId,
+          token
+        )) keys.add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
+      }
+      addSelectiveSignal(keys);
+    }
+    for (const token of pinyinTokens) {
+      const keys = new Set<string>();
+      if (includeChapters) {
         for (const row of this.store.db.all(
           `SELECT DISTINCT paragraph.chapter_id FROM chapter_paragraph_pinyin_fts
            JOIN chapter_paragraph_search paragraph ON paragraph.id = chapter_paragraph_pinyin_fts.rowid
@@ -4836,38 +4865,23 @@ export class AiManager {
           workId,
           token,
           ...chapterScope.params
-        )) add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
+        )) keys.add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
       }
-    }
-    if (includeSettings) {
-      for (const token of characterTokens) {
-        for (const row of this.store.db.all(
-          `SELECT source.source_type, source.source_id FROM relationship_source_exact_fts
-           JOIN relationship_source_search source ON source.id = relationship_source_exact_fts.rowid
-           WHERE source.work_id = ? AND relationship_source_exact_fts MATCH ?
-           AND NOT (source.source_type = 'review' AND EXISTS (
-               SELECT 1 FROM review_items review
-               WHERE review.id = source.source_id AND review.item_type = 'character-name-variant'
-             ))
-           LIMIT 201`,
-          workId,
-          token
-        )) add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
-      }
-      for (const token of pinyinTokens) {
+      if (includeSettings) {
         for (const row of this.store.db.all(
           `SELECT source.source_type, source.source_id FROM relationship_source_pinyin_fts
            JOIN relationship_source_search source ON source.id = relationship_source_pinyin_fts.rowid
            WHERE source.work_id = ? AND relationship_source_pinyin_fts MATCH ?
-           AND NOT (source.source_type = 'review' AND EXISTS (
+             AND NOT (source.source_type = 'review' AND EXISTS (
                SELECT 1 FROM review_items review
                WHERE review.id = source.source_id AND review.item_type = 'character-name-variant'
              ))
            LIMIT 201`,
           workId,
           token
-        )) add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
+        )) keys.add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
       }
+      addSelectiveSignal(keys);
     }
     const threshold = Math.max(1, [...normalizeRelationshipSearchText(reference).trim()].length - 1);
     for (const [key, count] of score) if (count >= threshold) result.add(key);
@@ -4940,10 +4954,11 @@ export class AiManager {
       const targetCharacterId = String(character.id);
       const exactReferences = [...new Set([String(character.name), ...(character.aliases as string[])].map((item) => item.trim()).filter(Boolean))];
       const anchors = this.relationshipIdentityAnchors(workId, character);
-      const fuzzyReferenceCount = exactReferences.filter((reference) => [...normalizeRelationshipSearchText(reference).trim()].length >= 2).length;
+      const fuzzyReferenceCount = exactReferences.filter(isRelationshipPhoneticReference).length;
       if (fuzzyReferenceCount > RELATIONSHIP_MAX_FUZZY_REFERENCES) {
-        throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "人物名称和别名过多，无法在安全预算内完成疑似写法匹配", {
+        throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", relationshipCandidateLimitMessage("人物名称和别名过多，无法在安全预算内完成疑似写法匹配"), {
           characterId: targetCharacterId,
+          targetName: String(character.name),
           reason: "registered-references",
           fuzzyReferenceCount,
           maximumFuzzyReferences: RELATIONSHIP_MAX_FUZZY_REFERENCES,
@@ -4967,6 +4982,7 @@ export class AiManager {
           if (allowedChapterIds.has(chapterId)) exactKeys.add(this.relationshipIndexedSourceKey("chapter", chapterId));
         }
         if (includeSettings) for (const key of this.relationshipSettingExactMatches(workId, reference)) exactKeys.add(key);
+        if (!isRelationshipPhoneticReference(reference)) continue;
         const referenceLength = [...normalizeRelationshipSearchText(reference).trim()].length;
         if (referenceLength < 2) continue;
         const rawFuzzyIndexKeys = referenceLength === 2
@@ -4982,8 +4998,10 @@ export class AiManager {
           if (exactKeys.has(key)) continue;
           targetIndexCandidateKeys.add(key);
           if (targetIndexCandidateKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) {
-            throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名来源过多，请补充人物别名或身份资料后重试", {
+            throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", relationshipCandidateLimitMessage(`“${String(character.name)}”的拼音疑似来源仍然过多`), {
               characterId: targetCharacterId,
+              targetName: String(character.name),
+              reference,
               reason: "candidate-sources",
               candidateCount: targetIndexCandidateKeys.size,
               maximum: RELATIONSHIP_MAX_FUZZY_SOURCES,
@@ -5002,8 +5020,10 @@ export class AiManager {
           const normalizedSearchable = normalizeRelationshipSearchText(searchable);
           fuzzyScanCharacters += normalizedSearchable.length;
           if (fuzzyScanCharacters > RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS) {
-            throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名待核对文本过多，请缩小分析范围或补充人物别名", {
+            throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", relationshipCandidateLimitMessage(`“${String(character.name)}”的拼音疑似来源待核对文本过多`), {
               characterId: targetCharacterId,
+              targetName: String(character.name),
+              reference,
               reason: "scan-characters",
               scannedCharacters: fuzzyScanCharacters,
               maximumScannedCharacters: RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS,
@@ -5022,8 +5042,10 @@ export class AiManager {
             );
           } catch (error) {
             if (!(error instanceof RelationshipApproximateMatchLimitError)) throw error;
-            throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "单个来源中的疑似人物名写法过多，请缩小分析范围或补充人物别名", {
+            throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", relationshipCandidateLimitMessage(`单个来源中“${String(character.name)}”的拼音疑似写法过多`), {
               characterId: targetCharacterId,
+              targetName: String(character.name),
+              reference,
               reason: "source-matches",
               sourceType: indexed.sourceType,
               sourceId: indexed.sourceId,
@@ -5044,8 +5066,10 @@ export class AiManager {
             candidateOccurrences.set(occurrenceKey, occurrenceCount + 1);
             fuzzyMatchCount += 1;
             if (fuzzyMatchCount > RELATIONSHIP_MAX_FUZZY_MATCHES) {
-              throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名写法过多，请缩小分析范围或补充人物别名", {
+              throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", relationshipCandidateLimitMessage(`“${String(character.name)}”的拼音疑似写法仍然过多`), {
                 characterId: targetCharacterId,
+                targetName: String(character.name),
+                reference,
                 reason: "fuzzy-matches",
                 fuzzyMatchCount,
                 maximumFuzzyMatches: RELATIONSHIP_MAX_FUZZY_MATCHES,
@@ -5073,8 +5097,9 @@ export class AiManager {
         }
       }
       if (targetFuzzySourceKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) {
-        throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名来源过多，请补充人物别名或身份资料后重试", {
+        throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", relationshipCandidateLimitMessage(`“${String(character.name)}”的拼音疑似来源仍然过多`), {
           characterId: targetCharacterId,
+          targetName: String(character.name),
           reason: "candidate-sources",
           candidateCount: targetFuzzySourceKeys.size,
           maximum: RELATIONSHIP_MAX_FUZZY_SOURCES,

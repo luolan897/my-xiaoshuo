@@ -191,6 +191,26 @@ describe("人物关系来源增量索引", () => {
     )).toContainEqual({ source_id: setting.id });
   });
 
+  it("忽略命中过多来源的高频拼音音节", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "无关正文。");
+    const workId = String(seeded.work.id);
+    for (let index = 0; index < 201; index += 1) {
+      runtime.store.createSetting(workId, {
+        title: `日常记录 ${index + 1}`,
+        category: "背景",
+        content: `压点是日常描述 ${index + 1}。`
+      });
+    }
+    const ai = runtime.ai as unknown as {
+      ensureRelationshipSearchIndex(workId: string): Promise<number>;
+      relationshipFuzzyIndexMatches(workId: string, reference: string, includeSettings: boolean, scope: Record<string, unknown>): Set<string>;
+    };
+    await ai.ensureRelationshipSearchIndex(workId);
+
+    expect(ai.relationshipFuzzyIndexMatches(workId, "雅典娜", true, { type: "book", includeAllSettings: true })).toEqual(new Set());
+  });
+
   it("父种族更新会重建后代种族和成员的人物关系索引", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "无关正文。");
