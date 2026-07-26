@@ -341,6 +341,10 @@ const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional()
 });
 
+const aiUsageQuerySchema = z.object({
+  timezoneOffset: z.coerce.number().int().min(-840).max(840).default(0)
+}).strict();
+
 const platformPageSizesSchema = z.object({
   characters: z.number().int().min(10).max(100).optional(),
   analysisTasks: z.number().int().min(10).max(100).optional(),
@@ -1718,6 +1722,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/platform/ai/settings", (_request, response) => data(response, store.getPlatformAiSettings()));
   app.patch("/api/platform/ai/settings", (request, response) => data(response, store.updatePlatformAiSettings(parse(aiPromptSchema, request.body))));
+  app.get("/api/platform/ai/usage", (request, response) => {
+    const query = parse(aiUsageQuerySchema, request.query);
+    data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
+  });
   app.get("/api/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
   app.get("/api/platform/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
   app.patch("/api/platform/ui-settings", (request, response) => {
@@ -1725,6 +1733,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
+  app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
+    const query = parse(aiUsageQuerySchema, request.query);
+    data(response, ai.getWorkTokenUsage(request.params.workId, query.timezoneOffset));
+  });
   app.get("/api/works/:workId/ai-settings/relationship-search-index", (request, response) => {
     data(response, ai.getRelationshipSearchIndexStatus(request.params.workId));
   });

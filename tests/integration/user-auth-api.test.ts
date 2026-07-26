@@ -226,6 +226,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     await writer.agent.delete(`/api/works/${adminWorkId}`).set("X-CSRF-Token", writer.csrfToken).expect(403);
     await writer.agent.get("/api/platform/ai/providers").expect(403);
+    await writer.agent.get("/api/platform/ai/usage").expect(403);
+    await writer.agent.get(`/api/works/${adminWorkId}/ai-settings/usage`).expect(200);
     await writer.agent.patch(`/api/chapters/${chapter.body.data.id}`).send({ content: "缺少 CSRF。" }).expect(403);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });

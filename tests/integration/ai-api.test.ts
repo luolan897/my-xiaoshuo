@@ -686,6 +686,16 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(suggestions.body.data[0]).toMatchObject({ taskType: "chat", action: "note", content: "飞船离港" });
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
     expect(calls.body.data[0]).toMatchObject({ taskType: "chat", status: "completed", outputChars: 4 });
+    const usage = await request(runtime.app).get(`/api/works/${workId}/ai-settings/usage`).expect(200);
+    expect(usage.body.data.summary).toMatchObject({
+      totalTokens: 104,
+      inputTokens: 100,
+      outputTokens: 4,
+      cachedInputTokens: 75,
+      cacheEligibleInputTokens: 100,
+      cacheHitRate: 75,
+      estimatedRequestCount: 0
+    });
   });
 
   it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {

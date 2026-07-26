@@ -7,6 +7,7 @@ import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineN
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
+import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
@@ -33,7 +34,7 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260726-anthropic-messages-v2";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260726-race-filter-order";
@@ -551,11 +552,11 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work || route.view === "shelf" || route.view === "platform-ai") return null;
+  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
   if (route.view === "module") return { kind: "module", module: route.module };
-  if (route.view === "settings" || route.view === "platform-ai") return { kind: "settings" };
+  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage") return { kind: "settings" };
   return { kind: "welcome" };
 }
 
@@ -733,6 +734,7 @@ function currentPageRoute() {
   }
   if (!$("#settings-hub-view").classList.contains("hidden")) return { view: "settings", workId, ...settingsRouteContext() };
   if (!$("#platform-ai-view").classList.contains("hidden")) return { view: "platform-ai", workId, ...settingsRouteContext() };
+  if (!$("#platform-usage-view").classList.contains("hidden")) return { view: "platform-usage", workId, ...settingsRouteContext() };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
   if (!workId) return { view: "shelf" };
   if (!$("#editor-view").classList.contains("hidden")) return { view: "editor", workId, chapterId: state.chapter?.id ?? null };
@@ -2480,6 +2482,11 @@ async function initializePage() {
     if (route.view === "platform-ai") {
       await showPlatformAi();
       settingsReturnContext = restoredSettingsReturnContext(route);
+      return;
+    }
+    if (route.view === "platform-usage") {
+      await showPlatformUsage();
+      settingsReturnContext = restoredSettingsReturnContext(route);
     }
   } finally {
     document.body.classList.remove("auth-pending");
@@ -2497,6 +2504,7 @@ function showShelf() {
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.remove("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -2523,6 +2531,7 @@ function renderSettingsHub() {
   const canReadAggregate = hasWork && canReadAggregateContent();
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
@@ -2741,7 +2750,9 @@ async function openSearchResult(result) {
   const target = resolveGlobalSearchTarget(result);
   if (!target) throw new Error("无法打开该搜索结果");
   $("#search-dialog").close();
-  const inSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
+  const inSettings = !$("#settings-hub-view").classList.contains("hidden")
+    || !$("#platform-ai-view").classList.contains("hidden")
+    || !$("#platform-usage-view").classList.contains("hidden");
   if (inSettings) await returnFromSettings();
   if (target.kind === "chapter") {
     await selectChapter(target.id);
@@ -2757,7 +2768,9 @@ async function openSearchResult(result) {
 }
 
 async function showSettingsHub() {
-  const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
+  const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
+    || !$("#platform-ai-view").classList.contains("hidden")
+    || !$("#platform-usage-view").classList.contains("hidden");
   if (!alreadyInSettings) {
     if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？"))) return false;
     settingsReturnContext = captureSettingsReturnContext();
@@ -2767,6 +2780,7 @@ async function showSettingsHub() {
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -2792,6 +2806,7 @@ async function returnFromSettings() {
   $("#settings-button").removeAttribute("aria-current");
   $("#settings-hub-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -2809,6 +2824,7 @@ async function showPlatformAi() {
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.remove("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -2818,6 +2834,26 @@ async function showPlatformAi() {
   setSaveState("平台 AI");
   await renderPlatformAiConfig();
   replacePageRoute({ view: "platform-ai", workId: state.work?.id ?? null, ...settingsRouteContext() });
+  return true;
+}
+
+async function showPlatformUsage() {
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 Token 用量面板将放弃本地修改。是否继续？"))) return false;
+  state.dirty = false;
+  updateDocumentTitle();
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.remove("hidden");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-meta").textContent = "Token 用量";
+  $("#settings-button").setAttribute("aria-current", "page");
+  setSaveState("Token 用量");
+  await renderPlatformTokenUsage();
+  replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
 }
 
@@ -2892,6 +2928,7 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#settings-button").removeAttribute("aria-current");
   settingsReturnContext = null;
@@ -4994,22 +5031,116 @@ async function renderPlatformAiConfig() {
   bindPlatformProviderActions(host, providers, models);
 }
 
+function tokenUsageDateLabel(date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    weekday: "short"
+  }).format(new Date(`${date}T00:00:00`));
+}
+
+function tokenUsageCalendarMarkup(daily) {
+  const calendar = buildUsageCalendar(daily);
+  const cells = calendar.cells.map((cell) => {
+    const label = `${tokenUsageDateLabel(cell.date)}：${Number(cell.totalTokens).toLocaleString("zh-CN")} Token`;
+    return `<span class="usage-calendar-cell${cell.future ? " is-future" : ""}" data-level="${cell.level}" role="gridcell" aria-label="${esc(label)}" title="${esc(label)}" ${cell.future ? 'aria-disabled="true"' : 'tabindex="0"'}></span>`;
+  }).join("");
+  const months = calendar.months.map((month) => `<span style="grid-column:${month.week + 1}">${esc(month.label)}</span>`).join("");
+  return `<div class="usage-calendar-scroll" tabindex="0" aria-label="每日 Token 用量日历，可横向滚动">
+    <div class="usage-calendar-frame" style="--usage-week-count:${calendar.weekCount}">
+      <div class="usage-calendar-months" aria-hidden="true">${months}</div>
+      <div class="usage-calendar-body">
+        <div class="usage-calendar-weekdays" aria-hidden="true"><span>一</span><span>三</span><span>五</span></div>
+        <div class="usage-calendar-grid" role="grid" aria-label="过去 53 周每日 Token 用量">${cells}</div>
+      </div>
+    </div>
+  </div>
+  <div class="usage-calendar-legend"><span>少</span>${[0, 1, 2, 3, 4].map((level) => `<i data-level="${level}" aria-hidden="true"></i>`).join("")}<span>多</span></div>`;
+}
+
+function scrollUsageCalendarsToLatest(root) {
+  window.requestAnimationFrame(() => {
+    root.querySelectorAll(".usage-calendar-scroll").forEach((calendar) => {
+      calendar.scrollLeft = calendar.scrollWidth;
+    });
+  });
+}
+
+function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false } = {}) {
+  const summary = usage?.summary ?? {};
+  const totalTokens = Number(summary.totalTokens) || 0;
+  const exactTotal = totalTokens.toLocaleString("zh-CN");
+  const estimatedRequests = Number(summary.estimatedRequestCount) || 0;
+  const requestCount = Number(summary.requestCount) || 0;
+  const cachedInputTokens = Number(summary.cachedInputTokens) || 0;
+  const cacheEligibleInputTokens = Number(summary.cacheEligibleInputTokens) || 0;
+  const cacheDescription = summary.cacheHitRate === null || summary.cacheHitRate === undefined
+    ? "供应商尚未返回可计算的缓存明细"
+    : `${cachedInputTokens.toLocaleString("zh-CN")} / ${cacheEligibleInputTokens.toLocaleString("zh-CN")} 个可统计输入 Token 命中缓存`;
+  const estimateNote = estimatedRequests > 0
+    ? `其中 ${estimatedRequests.toLocaleString("zh-CN")} 次调用包含历史或供应商缺失用量时的估算。`
+    : "全部用量均来自供应商返回的 Token 统计。";
+  const works = Array.isArray(usage?.works) ? usage.works : [];
+  const workRows = works.map((work) => `<tr>
+    <th scope="row">${esc(work.workTitle)}</th>
+    <td title="${esc(Number(work.totalTokens || 0).toLocaleString("zh-CN"))} Token">${esc(formatTokenCount(work.totalTokens))}</td>
+    <td>${esc(formatTokenCount(work.inputTokens))}</td>
+    <td>${esc(formatTokenCount(work.outputTokens))}</td>
+    <td>${esc(formatCacheHitRate(work.cacheHitRate))}</td>
+    <td>${Number(work.requestCount || 0).toLocaleString("zh-CN")}</td>
+  </tr>`).join("");
+  return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
+    <div class="config-section-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div></div>
+    <div class="usage-stat-grid">
+      <article class="usage-stat is-primary"><span>总消耗</span><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
+      <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small>${Number(summary.inputTokens || 0).toLocaleString("zh-CN")}</small></article>
+      <article class="usage-stat"><span>输出 Token</span><strong>${esc(formatTokenCount(summary.outputTokens))}</strong><small>${Number(summary.outputTokens || 0).toLocaleString("zh-CN")}</small></article>
+      <article class="usage-stat"><span>缓存命中率</span><strong>${esc(formatCacheHitRate(summary.cacheHitRate))}</strong><small>${esc(cacheDescription)}</small></article>
+    </div>
+    <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)}</p>
+    <section class="usage-calendar-section" aria-labelledby="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">
+      <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格展示过去 53 周；颜色越深，当天消耗越高。</p></div></header>
+      ${tokenUsageCalendarMarkup(usage?.daily)}
+    </section>
+    ${showWorks ? `<section class="usage-work-section" aria-labelledby="usage-work-title"><header><div><h3 id="usage-work-title">各作品用量</h3><p>按 Token 总消耗从高到低排列，包含尚未使用 AI 的作品。</p></div></header><div class="usage-work-table-scroll"><table class="usage-work-table"><thead><tr><th>作品</th><th>总消耗</th><th>输入</th><th>输出</th><th>缓存命中率</th><th>调用</th></tr></thead><tbody>${workRows || '<tr><td colspan="6">还没有作品用量记录。</td></tr>'}</tbody></table></div></section>` : ""}
+  </section>`;
+}
+
+async function renderPlatformTokenUsage() {
+  const host = $("#platform-usage-content");
+  host.innerHTML = '<div class="empty-state">正在汇总 Token 用量……</div>';
+  const timezoneOffset = -new Date().getTimezoneOffset();
+  const usage = await api(`/api/platform/ai/usage?timezoneOffset=${timezoneOffset}`);
+  host.innerHTML = tokenUsageOverviewMarkup(usage, {
+    title: "项目累计用量",
+    description: "汇总所有作品迄今产生的输入与输出 Token；缓存命中率仅基于供应商返回了缓存明细的调用。",
+    showWorks: true
+  });
+  scrollUsageCalendarsToLatest(host);
+}
+
 async function renderBookAiSettings() {
   if (relationshipSearchIndexRefreshTimer) {
     clearTimeout(relationshipSearchIndexRefreshTimer);
     relationshipSearchIndexRefreshTimer = null;
   }
-  const [settings, providers, models, taskDefaults, relationshipIndex] = await Promise.all([
+  const [settings, providers, models, taskDefaults, relationshipIndex, usage] = await Promise.all([
     api(`/api/works/${state.work.id}/ai-settings`),
     api("/api/platform/ai/providers"),
     api(`/api/works/${state.work.id}/models`),
     api(`/api/works/${state.work.id}/task-defaults`),
-    api(`/api/works/${state.work.id}/ai-settings/relationship-search-index`)
+    api(`/api/works/${state.work.id}/ai-settings/relationship-search-index`),
+    api(`/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`)
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
+    title: "本书 Token 用量",
+    description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
     `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
@@ -8257,6 +8388,20 @@ $("#register-form").addEventListener("submit", async (event) => {
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
 $("#platform-ai-return").addEventListener("click", () => returnToSettingsHub("#platform-ai-button").catch((error) => toast(error.message, "error")));
+$("#platform-usage-button").addEventListener("click", () => showPlatformUsage().catch((error) => toast(error.message, "error")));
+$("#platform-usage-return").addEventListener("click", () => returnToSettingsHub("#platform-usage-button").catch((error) => toast(error.message, "error")));
+$("#platform-usage-refresh").addEventListener("click", async () => {
+  const button = $("#platform-usage-refresh");
+  button.disabled = true;
+  try {
+    await renderPlatformTokenUsage();
+    toast("Token 用量已刷新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 $("#user-management-button").addEventListener("click", openUsersDialog);
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());

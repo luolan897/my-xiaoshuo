@@ -1,0 +1,88 @@
+import request from "supertest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Runtime } from "../../src/app.js";
+import { createTestRuntime, createWork } from "../helpers.js";
+
+describe("AI Token 用量统计 API", () => {
+  let runtime: Runtime;
+
+  beforeEach(() => {
+    runtime = createTestRuntime();
+  });
+
+  afterEach(() => {
+    runtime.close();
+  });
+
+  it("按项目、作品和本地日期聚合 token 与缓存命中率", async () => {
+    const firstWork = await createWork(runtime, "第一部作品");
+    const secondWork = await createWork(runtime, "第二部作品");
+    const insertCall = (
+      id: string,
+      workId: string,
+      inputTokens: number,
+      outputTokens: number,
+      cachedInputTokens: number,
+      cacheEligibleInputTokens: number,
+      source: "reported" | "estimated",
+      createdAt: string
+    ) => runtime.database.run(
+      `INSERT INTO ai_calls (
+         id, work_id, task_type, provider_id, model_id, context_scope_json, status,
+         input_tokens, output_tokens, cached_input_tokens, cache_eligible_input_tokens,
+         cache_usage_available, token_usage_source, created_at, completed_at
+       ) VALUES (?, ?, 'chat', 'provider', 'model', '{}', 'completed', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      workId,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens,
+      cacheEligibleInputTokens,
+      cacheEligibleInputTokens > 0 ? 1 : 0,
+      source,
+      createdAt,
+      createdAt
+    );
+    insertCall("call-1", String(firstWork.id), 100, 20, 40, 100, "reported", "2026-07-26T16:30:00.000Z");
+    insertCall("call-2", String(firstWork.id), 30, 10, 0, 0, "estimated", "2026-07-27T05:00:00.000Z");
+    insertCall("call-3", String(secondWork.id), 200, 50, 100, 200, "reported", "2026-07-27T08:00:00.000Z");
+
+    const platform = await request(runtime.app)
+      .get("/api/platform/ai/usage?timezoneOffset=480")
+      .expect(200);
+    expect(platform.body.data.summary).toMatchObject({
+      totalTokens: 410,
+      inputTokens: 330,
+      outputTokens: 80,
+      cachedInputTokens: 140,
+      cacheEligibleInputTokens: 300,
+      cacheHitRate: 46.7,
+      requestCount: 3,
+      estimatedRequestCount: 1
+    });
+    expect(platform.body.data.daily).toEqual([
+      expect.objectContaining({ date: "2026-07-27", totalTokens: 410, requestCount: 3 })
+    ]);
+    expect(platform.body.data.works).toEqual([
+      expect.objectContaining({ workId: secondWork.id, workTitle: "第二部作品", totalTokens: 250, cacheHitRate: 50 }),
+      expect.objectContaining({ workId: firstWork.id, workTitle: "第一部作品", totalTokens: 160, cacheHitRate: 40 })
+    ]);
+
+    const work = await request(runtime.app)
+      .get(`/api/works/${firstWork.id}/ai-settings/usage?timezoneOffset=480`)
+      .expect(200);
+    expect(work.body.data.summary).toMatchObject({
+      totalTokens: 160,
+      inputTokens: 130,
+      outputTokens: 30,
+      cacheHitRate: 40,
+      requestCount: 2,
+      estimatedRequestCount: 1
+    });
+    expect(work.body.data).not.toHaveProperty("works");
+  });
+
+  it("拒绝越界时区偏移", async () => {
+    await request(runtime.app).get("/api/platform/ai/usage?timezoneOffset=900").expect(400);
+  });
+});

@@ -23,6 +23,16 @@ describe("页面刷新路由", () => {
       returnView: "module",
       returnModule: "relationships"
     });
+    const usageHash = serializePageRoute({
+      view: "platform-usage",
+      workId: "work-1",
+      returnView: "shelf"
+    });
+    expect(parsePageRoute(usageHash)).toEqual({
+      view: "platform-usage",
+      workId: "work-1",
+      returnView: "shelf"
+    });
   });
 
   it("往返保存登录页路由", () => {
