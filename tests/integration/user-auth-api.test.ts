@@ -969,6 +969,91 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
       .expect(403);
+
+    const analysisTask = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({ taskType: "book-analysis", scope: { type: "book" } })
+      .expect(201);
+    const taskId = String(analysisTask.body.data.id);
+    const traceTimestamp = new Date().toISOString();
+    runtime.database.run(
+      `INSERT INTO ai_calls (id, work_id, task_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+       status, input_chars, output_chars, created_at, completed_at) VALUES (?, ?, ?, 'book-analysis', ?, ?, '{}', '{}',
+       'completed', 16, 2, ?, ?)`,
+      "call_permission_trace",
+      workId,
+      taskId,
+      "deleted_provider_permission_trace",
+      "deleted_model_permission_trace",
+      traceTimestamp,
+      traceTimestamp
+    );
+    runtime.database.run(
+      `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, created_at, updated_at)
+       VALUES (?, ?, ?, '[]', ?, ?)`,
+      "call_permission_trace",
+      taskId,
+      JSON.stringify([{ role: "user", content: "TOP_SECRET_PROSE" }]),
+      traceTimestamp,
+      traceTimestamp
+    );
+    const ownerTrace = await owner.agent.get(`/api/tasks/${taskId}/trace`).expect(200);
+    expect(JSON.stringify(ownerTrace.body.data)).toContain("TOP_SECRET_PROSE");
+
+    const secretCharacter = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "TOP_SECRET_CHARACTER" })
+      .expect(201);
+    const targetedTask = await owner.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        taskType: "relationship-analysis",
+        scope: { type: "book", characterIds: [secretCharacter.body.data.id] }
+      })
+      .expect(201);
+    expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER");
+
+    const noContentPermissions = Object.fromEntries(Object.keys(basePermissions).map((module) => [module, "none"]));
+    await owner.agent.patch(`/api/works/${workId}/members/${analysisOnly.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: { ...noContentPermissions, "ai-analysis": "write" } })
+      .expect(200);
+    await analysisOnly.agent.get(`/api/works/${workId}/characters`).expect(403);
+    const protectedTasks = await analysisOnly.agent.get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
+    const protectedTaskSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === targetedTask.body.data.id);
+    expect(protectedTaskSummary.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(JSON.stringify(protectedTaskSummary)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}`).expect(200);
+    expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskDetail.body.data.scope.targetCharacters).toBeUndefined();
+    expect(JSON.stringify(protectedTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({})
+      .expect(200);
+    expect(protectedTaskCancellation.body.data.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskCancellation.body.data.scope.targetCharacters).toBeUndefined();
+    expect(JSON.stringify(protectedTaskCancellation.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const targetedTaskDenied = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({
+        taskType: "relationship-analysis",
+        scope: { type: "book", characterIds: [secretCharacter.body.data.id] }
+      })
+      .expect(403);
+    expect(targetedTaskDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const trailingSlashTaskDenied = await analysisOnly.agent.post(`/api/works/${workId}/tasks/`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({
+        taskType: "relationship-analysis",
+        scope: { type: "book", characterIds: [secretCharacter.body.data.id] }
+      })
+      .expect(403);
+    expect(trailingSlashTaskDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    await analysisOnly.agent.get(`/api/tasks/${taskId}`).expect(200);
+    const protectedTrace = await analysisOnly.agent.get(`/api/tasks/${taskId}/trace`).expect(403);
+    expect(protectedTrace.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(protectedTrace.body)).not.toContain("TOP_SECRET_PROSE");
   });
 
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {
@@ -1040,12 +1125,15 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await writer.agent.get("/api/works").expect(401);
   });
 
-  it("管理员可统一设置 Toast 位置，普通用户只能读取", async () => {
+  it("管理员可统一设置界面与分模块分页，普通用户只能读取", async () => {
     const admin = await register(runtime, "ui_admin");
     const writer = await register(runtime, "ui_writer");
 
     const defaults = await writer.agent.get("/api/ui-settings").expect(200);
-    expect(defaults.body.data).toMatchObject({ toastPosition: "bottom-right" });
+    expect(defaults.body.data).toMatchObject({
+      toastPosition: "bottom-right",
+      pageSizes: { characters: 30, analysisTasks: 30, fileVersions: 30 }
+    });
     await writer.agent.get("/api/platform/ui-settings").expect(403);
     await writer.agent.patch("/api/platform/ui-settings")
       .set("X-CSRF-Token", writer.csrfToken)
@@ -1060,14 +1148,39 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", admin.csrfToken)
       .send({ toastPosition: "top-right", unknown: true })
       .expect(400);
+    await admin.agent.patch("/api/platform/ui-settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ pageSizes: { characters: 9 } })
+      .expect(400);
+    await admin.agent.patch("/api/platform/ui-settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ pageSizes: { settings: 20 } })
+      .expect(400);
 
     const updated = await admin.agent.patch("/api/platform/ui-settings")
       .set("X-CSRF-Token", admin.csrfToken)
-      .send({ toastPosition: "top-right" })
+      .send({
+        toastPosition: "top-right",
+        pageSizes: { characters: 20, analysisTasks: 40, fileVersions: 15 }
+      })
       .expect(200);
-    expect(updated.body.data).toMatchObject({ toastPosition: "top-right" });
+    expect(updated.body.data).toMatchObject({
+      toastPosition: "top-right",
+      pageSizes: { characters: 20, analysisTasks: 40, fileVersions: 15 }
+    });
+    const partialUpdate = await admin.agent.patch("/api/platform/ui-settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ pageSizes: { characters: 25 } })
+      .expect(200);
+    expect(partialUpdate.body.data).toMatchObject({
+      toastPosition: "top-right",
+      pageSizes: { characters: 25, analysisTasks: 40, fileVersions: 15 }
+    });
     const visibleToWriter = await writer.agent.get("/api/ui-settings").expect(200);
-    expect(visibleToWriter.body.data).toMatchObject({ toastPosition: "top-right" });
+    expect(visibleToWriter.body.data).toMatchObject({
+      toastPosition: "top-right",
+      pageSizes: { characters: 25, analysisTasks: 40, fileVersions: 15 }
+    });
     expect(runtime.database.get(
       "SELECT action, user_id FROM audit_logs WHERE action = 'platform.ui-settings.updated'"
     )).toEqual({ action: "platform.ui-settings.updated", user_id: admin.user.userId });

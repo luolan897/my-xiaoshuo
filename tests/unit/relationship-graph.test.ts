@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, resolveRelationshipNodeGroup, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -166,6 +166,30 @@ describe("人物关系图数据与布局", () => {
     expect(getRelationshipNetworkInitialScale(80)).toBe(1);
     expect(getRelationshipNetworkInitialScale(219)).toBe(1.35);
     expect(getRelationshipNetworkInitialScale(219, true)).toBe(1);
+  });
+
+  it("点击普通关系图节点后居中放大，并在放大视图显示全部名称", () => {
+    const focused = getRelationshipNodeFocusView(
+      { x: 900, y: 160 },
+      { width: 1200, height: 640 },
+      { width: 1200, height: 640 },
+      1
+    );
+
+    expect(focused).toEqual({ scale: 1.8, x: -1020, y: 32 });
+    expect(900 / 1200 * 1200 * focused.scale + focused.x).toBe(600);
+    expect(160 / 640 * 640 * focused.scale + focused.y).toBe(320);
+    expect(shouldShowRelationshipNodeLabel(100, 1, 140, 1.35)).toBe(false);
+    expect(shouldShowRelationshipNodeLabel(100, 1, 140, 1.36)).toBe(true);
+    expect(shouldShowRelationshipNodeLabel(100, 4, 140, 1)).toBe(true);
+    expect(shouldShowRelationshipNodeLabel(100, 1, 140, 1, true)).toBe(true);
+  });
+
+  it("关系图缩放时保持紧凑且稳定的屏幕标签字号", () => {
+    expect(getRelationshipNodeLabelFontSize(1.35, 209) * 1.35).toBeCloseTo(8);
+    expect(getRelationshipNodeLabelFontSize(1.8, 209) * 1.8).toBeCloseTo(8);
+    expect(getRelationshipNodeLabelFontSize(1.25, 140) * 1.25).toBeCloseTo(8.5);
+    expect(getRelationshipNodeLabelFontSize(1, 80)).toBe(9);
   });
 
   it("拖拽节点时用弹簧与斥力带动关联节点并产生惯性位移", () => {

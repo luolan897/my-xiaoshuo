@@ -375,6 +375,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS platform_ui_settings (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+        page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
         updated_at TEXT NOT NULL
       );
 
@@ -393,6 +394,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS ai_calls (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        task_id TEXT REFERENCES analysis_tasks(id) ON DELETE SET NULL,
         task_type TEXT NOT NULL,
         provider_id TEXT NOT NULL,
         model_id TEXT NOT NULL,
@@ -453,6 +455,15 @@ export class Database {
         result_json TEXT NOT NULL DEFAULT '{}',
         failure_json TEXT NOT NULL DEFAULT '[]',
         source_versions_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS ai_call_traces (
+        call_id TEXT PRIMARY KEY REFERENCES ai_calls(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES analysis_tasks(id) ON DELETE CASCADE,
+        initial_messages_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(initial_messages_json) AND json_type(initial_messages_json) = 'array'),
+        rounds_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(rounds_json) AND json_type(rounds_json) = 'array'),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1632,6 +1643,48 @@ export class Database {
           this.run(`UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?`, JSON.stringify(next), row.work_id);
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (40, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(41)) {
+      this.transaction(() => {
+        const callColumns = new Set(this.all("PRAGMA table_info(ai_calls)").map((row) => String(row.name)));
+        if (!callColumns.has("task_id")) {
+          this.run("ALTER TABLE ai_calls ADD COLUMN task_id TEXT REFERENCES analysis_tasks(id) ON DELETE SET NULL");
+        }
+        this.run(`CREATE TABLE IF NOT EXISTS ai_call_traces (
+          call_id TEXT PRIMARY KEY REFERENCES ai_calls(id) ON DELETE CASCADE,
+          task_id TEXT NOT NULL REFERENCES analysis_tasks(id) ON DELETE CASCADE,
+          initial_messages_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(initial_messages_json) AND json_type(initial_messages_json) = 'array'),
+          rounds_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(rounds_json) AND json_type(rounds_json) = 'array'),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_calls_task ON ai_calls(task_id, created_at, id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_call_traces_task ON ai_call_traces(task_id, created_at, call_id)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (41, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(42)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(platform_ui_settings)").map((row) => String(row.name)));
+        if (!columns.has("page_sizes_json")) {
+          this.run(`ALTER TABLE platform_ui_settings ADD COLUMN page_sizes_json TEXT NOT NULL
+            DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}'
+            CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object')`);
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (42, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

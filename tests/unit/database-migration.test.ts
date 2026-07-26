@@ -30,6 +30,12 @@ function createLegacyDatabase(conflict = false): string {
       analysis_status TEXT NOT NULL DEFAULT 'pending', excluded_from_analysis INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
+    CREATE TABLE platform_ui_settings (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO platform_ui_settings (id, toast_position, updated_at) VALUES (1, 'top-right', '2025-01-01');
     CREATE TABLE characters (
       id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE, name TEXT NOT NULL,
       aliases_json TEXT NOT NULL DEFAULT '[]', attributes_json TEXT NOT NULL DEFAULT '{}', profile_json TEXT NOT NULL DEFAULT '{}',
@@ -68,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }, { version: 38 }, { version: 39 }, { version: 40 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }, { version: 38 }, { version: 39 }, { version: 40 }, { version: 41 }, { version: 42 }]);
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -96,6 +102,12 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(races)").some((column) => column.name === "settings_sections_json")).toBe(true);
     expect(first.all("PRAGMA table_info(organizations)").some((column) => column.name === "settings_sections_json")).toBe(true);
     expect(first.all("PRAGMA index_list(analysis_tasks)").some((index) => index.name === "idx_tasks_work_created")).toBe(true);
+    expect(first.all("PRAGMA table_info(ai_calls)").some((column) => column.name === "task_id")).toBe(true);
+    expect(first.all("PRAGMA table_info(ai_call_traces)").map((column) => column.name)).toEqual(
+      expect.arrayContaining(["call_id", "task_id", "initial_messages_json", "rounds_json", "created_at", "updated_at"])
+    );
+    expect(first.all("PRAGMA index_list(ai_calls)").some((index) => index.name === "idx_calls_task")).toBe(true);
+    expect(first.all("PRAGMA index_list(ai_call_traces)").some((index) => index.name === "idx_ai_call_traces_task")).toBe(true);
     expect(first.get("SELECT race_id FROM characters WHERE id = 'character-a'")?.race_id).toBe("race_migration_1");
     expect(first.get("SELECT race_id FROM characters WHERE id = 'character-b'")?.race_id).toBeNull();
     expect(first.all("SELECT character_id, version_no, source, change_note FROM character_versions ORDER BY character_id")).toEqual([
@@ -115,7 +127,11 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "metadata_json")).toBe(true);
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
-    expect(first.get("SELECT toast_position FROM platform_ui_settings WHERE id = 1")).toEqual({ toast_position: "bottom-right" });
+    expect(first.get("SELECT toast_position, page_sizes_json FROM platform_ui_settings WHERE id = 1")).toEqual({
+      toast_position: "top-right",
+      page_sizes_json: '{"characters":30,"analysisTasks":30,"fileVersions":30}'
+    });
+    expect(first.all("PRAGMA table_info(platform_ui_settings)").some((column) => column.name === "page_sizes_json")).toBe(true);
     expect(first.get("SELECT chapter_id, content FROM chapter_paragraph_search WHERE chapter_id = 'chapter-old'")).toEqual({ chapter_id: "chapter-old", content: "旧正文" });
     expect(first.get(`SELECT paragraph.rowid AS id FROM chapter_paragraph_search_fts paragraph
       WHERE chapter_paragraph_search_fts MATCH '"旧正文"'`)).toEqual({ id: 1 });
@@ -224,5 +240,32 @@ describe("数据库版本化迁移", () => {
     ]);
     expect(second.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 40")?.count).toBe(1);
     second.close();
+  });
+
+  it("从迁移 40 的历史调用表升级并保留任务追踪索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-call-trace-"));
+    roots.push(root);
+    const filename = join(root, "call-trace.db");
+    const current = new Database(filename);
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DROP INDEX idx_calls_task;
+      DROP TABLE ai_call_traces;
+      ALTER TABLE ai_calls DROP COLUMN task_id;
+      DELETE FROM schema_migrations WHERE version = 41;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 41")?.count).toBe(1);
+    expect(migrated.all("PRAGMA table_info(ai_calls)").some((column) => column.name === "task_id")).toBe(true);
+    expect(migrated.all("PRAGMA table_info(ai_call_traces)").map((column) => column.name)).toEqual(
+      expect.arrayContaining(["call_id", "task_id", "initial_messages_json", "rounds_json", "created_at", "updated_at"])
+    );
+    expect(migrated.all("PRAGMA index_list(ai_calls)").some((index) => index.name === "idx_calls_task")).toBe(true);
+    expect(migrated.all("PRAGMA index_list(ai_call_traces)").some((index) => index.name === "idx_ai_call_traces_task")).toBe(true);
+    migrated.close();
   });
 });
