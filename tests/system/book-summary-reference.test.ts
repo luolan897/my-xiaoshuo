@@ -50,6 +50,7 @@ describe("全书概要上下文引用", () => {
     expect(styles.text).not.toContain(".ai-book-summary-reference");
     expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px;");
     expect(styles.text).toContain(".config-inline-save { display: flex; align-items: flex-end; gap: 10px;");
+    expect(styles.text).toContain('.config-inline-save .context-compact-threshold-field { display: grid; gap: 6px; width: 64px;');
     expect(styles.text).toContain(".relationship-index-summary { display: grid;");
     expect(styles.text).toContain(".config-section .config-save-button { min-height: 32px; padding: 5px 11px; font-size: 11px; }");
     expect(styles.text).toContain(".ai-agent-tools { display: grid; gap: 8px; }");
