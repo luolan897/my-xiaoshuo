@@ -1424,11 +1424,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/tasks", (request, response) => {
-    const pagination = parsePagination(request.query);
-    const summary = request.query.view === "summary";
-    data(response, pagination
-      ? (summary ? store.listTaskSummariesPage(request.params.workId, pagination) : store.listTasksPage(request.params.workId, pagination))
-      : store.listTasks(request.params.workId));
+    data(response, store.listTaskSummariesPage(
+      request.params.workId,
+      parsePagination(request.query) ?? { page: 1, limit: 50, offset: 0 }
+    ));
   });
   app.post("/api/works/:workId/tasks", (request, response) => {
     const input = parse(analysisTaskSchema, request.body);

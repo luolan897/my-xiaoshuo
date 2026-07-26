@@ -812,6 +812,7 @@ let entityEditorDirty = false;
 let entityEditorReadOnly = false;
 let chapterEditorReadOnly = true;
 let characterListPage = 1;
+let taskListPage = 1;
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
 let settingEditorItem = null;
@@ -2808,6 +2809,7 @@ function resetWorkScopedUiCaches() {
   state.characters = [];
   state.settings = [];
   characterListPage = 1;
+  taskListPage = 1;
   state.collapsedVolumeIds.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
@@ -3060,7 +3062,7 @@ async function showModule(module) {
     if (module === "outlines") await renderOutlines();
     if (module === "relationships") await renderRelationships();
     if (module === "reviews") await renderReviews();
-    if (module === "tasks") await renderTasks();
+    if (module === "tasks") await renderTasks(taskListPage);
     if (module === "ai-settings") await renderBookAiSettings();
   } catch (error) {
     $("#module-content").innerHTML = `<div class="empty-state"><b>载入失败</b>${esc(error.message)}</div>`;
@@ -3906,27 +3908,35 @@ async function renderReviews() {
   }));
 }
 
-async function renderTasks() {
+async function renderTasks(page = taskListPage) {
   stopTaskProgressRefresh();
-  const [tasks, settings] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/tasks?view=summary`),
+  const [taskPage, settings] = await Promise.all([
+    apiPage(`/api/works/${state.work.id}/tasks`, page, 50),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
       : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
   ]);
-  mountModuleCount(tasks.length);
+  if (!taskPage.items.length && page > 1) return renderTasks(page - 1);
+  taskListPage = taskPage.page;
+  const tasks = taskPage.items;
+  const taskTotal = Number(taskPage.total ?? taskPage.stats?.total ?? tasks.length);
+  mountModuleCount(taskTotal);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
-  const pendingCount = tasks.filter((item) => item.status === "pending").length;
-  const runningTasks = tasks.filter((item) => item.status === "running");
-  const runningCount = runningTasks.length;
+  const pendingCount = Number(taskPage.stats?.pendingCount ?? 0);
+  const runningCount = Number(taskPage.stats?.runningCount ?? 0);
   const activeTaskCount = pendingCount + runningCount;
-  const runningProgress = runningCount
-    ? Math.round(runningTasks.reduce((total, item) => total + Math.min(100, Math.max(0, Number(item.progress) || 0)), 0) / runningCount)
-    : 0;
+  const runningProgress = runningCount ? analysisTaskProgressValue(taskPage.stats?.runningProgress) : 0;
   const visibleTaskIds = new Set(tasks.map((item) => String(item.id)));
   for (const taskId of taskStatusSnapshots.keys()) {
     if (!visibleTaskIds.has(taskId)) taskStatusSnapshots.delete(taskId);
   }
+  const pagination = tasks.length && (taskPage.page > 1 || taskPage.hasMore)
+    ? `<nav class="module-pagination" aria-label="AI 分析任务分页">
+      <button type="button" data-task-page="${taskPage.page - 1}" ${taskPage.page <= 1 ? "disabled" : ""}>上一页</button>
+      <span>第 ${taskPage.page}/${Math.max(1, Math.ceil(taskTotal / taskPage.limit))} 页 · 本页 ${tasks.length} 个任务 · 共 ${taskTotal} 个任务</span>
+      <button type="button" data-task-page="${taskPage.nextPage ?? taskPage.page + 1}" ${taskPage.hasMore ? "" : "disabled"}>下一页</button>
+    </nav>`
+    : "";
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel ${canConfigureAutoRun ? "" : "hidden"}" aria-labelledby="task-auto-run-title">
       <div class="task-auto-run-copy">
@@ -3958,7 +3968,13 @@ async function renderTasks() {
         ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
-    </tr>`).join("")}</tbody></table>` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
+    </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
+
+  $("#module-content").querySelectorAll("[data-task-page]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    $("#module-content").querySelectorAll("[data-task-page]").forEach((control) => { control.disabled = true; });
+    await renderTasks(Number(button.dataset.taskPage));
+  }));
 
   $("#task-auto-run-save")?.addEventListener("click", async () => {
     const button = $("#task-auto-run-save");
@@ -6210,7 +6226,8 @@ async function openTaskDialog() {
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
-    await renderTasks();
+    taskListPage = 1;
+    await renderTasks(1);
   });
   const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
   const scopeTypeSelect = $("#dialog-fields").querySelector('select[name="scopeType"]');

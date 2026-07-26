@@ -5295,23 +5295,22 @@ export class Store {
     return this.getTask(taskId);
   }
 
-  listTasks(workId: string): Record<string, unknown>[] {
+  listTaskSummariesPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> & {
+    stats: { total: number; pendingCount: number; runningCount: number; runningProgress: number };
+  } {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC", workId).map((row) => this.mapTask(row));
-  }
-
-  listTasksPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
-    this.getWork(workId);
-    const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC${page.sql}`, workId, ...page.params);
-    return paginated(rows.map((row) => this.mapTask(row)), pagination);
-  }
-
-  listTaskSummariesPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
-    this.getWork(workId);
+    const statsRow = this.db.get(
+      `SELECT COUNT(*) AS total,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+        SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_count,
+        AVG(CASE WHEN status = 'running' THEN progress ELSE NULL END) AS running_progress
+       FROM analysis_tasks WHERE work_id = ?`,
+      workId
+    ) ?? {};
+    const total = numberValue(statsRow, "total");
     const page = paginationSql(pagination);
     const rows = this.db.all(
-      `SELECT id, work_id, task_type, scope_json, status, progress, created_at, updated_at
+      `SELECT id, task_type, scope_json, status, progress, created_at, updated_at
        FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC${page.sql}`,
       workId,
       ...page.params
@@ -5329,7 +5328,15 @@ export class Store {
       "SELECT id, title FROM volumes WHERE work_id = ?",
       workId
     ).map((row) => [requiredString(row, "id"), requiredString(row, "title")] as const));
-    return paginated(rows.map((row) => this.mapTaskSummary(row, chapterSummaries, volumeTitles)), pagination);
+    return {
+      ...paginated(rows.map((row) => this.mapTaskSummary(row, chapterSummaries, volumeTitles)), pagination, total),
+      stats: {
+        total,
+        pendingCount: numberValue(statsRow, "pending_count"),
+        runningCount: numberValue(statsRow, "running_count"),
+        runningProgress: numberValue(statsRow, "running_progress")
+      }
+    };
   }
 
   getTask(taskId: string): Record<string, unknown> {
@@ -5448,9 +5455,7 @@ export class Store {
     const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
     return {
       id: requiredString(row, "id"),
-      workId: requiredString(row, "work_id"),
       taskType: requiredString(row, "task_type"),
-      scope,
       scopeSummary: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),

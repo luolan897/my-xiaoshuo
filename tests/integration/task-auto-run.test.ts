@@ -120,8 +120,9 @@ describe("分析任务自动运行", () => {
     expect(updated.body.data.contextCompactThreshold).toBe(90);
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
-    expect(tasks.body.data.length).toBeGreaterThanOrEqual(5);
-    expect(tasks.body.data[0]).toEqual(expect.objectContaining({
+    expect(tasks.body.data.items.length).toBeGreaterThanOrEqual(5);
+    const firstTask = await request(runtime.app).get(`/api/tasks/${tasks.body.data.items[0].id}`).expect(200);
+    expect(firstTask.body.data).toEqual(expect.objectContaining({
       id: expect.stringMatching(/^task_/u),
       scopeSummary: expect.stringContaining("第一卷"),
       scopeDetails: expect.any(Array)
@@ -129,17 +130,68 @@ describe("分析任务自动运行", () => {
 
     const summaries = await request(runtime.app).get(`/api/works/${workId}/tasks?view=summary&page=1&limit=5`).expect(200);
     expect(summaries.body.data.items).toHaveLength(5);
+    expect(summaries.body.data).toMatchObject({
+      page: 1,
+      limit: 5,
+      total: tasks.body.data.total,
+      stats: {
+        total: tasks.body.data.total,
+        pendingCount: tasks.body.data.total,
+        runningCount: 0,
+        runningProgress: 0
+      }
+    });
     expect(summaries.body.data.items[0]).toEqual(expect.objectContaining({
       id: expect.stringMatching(/^task_/u),
       scopeSummary: expect.stringContaining("第一卷")
     }));
     expect(summaries.body.data.items[0]).not.toHaveProperty("result");
     expect(summaries.body.data.items[0]).not.toHaveProperty("scopeDetails");
+    expect(summaries.body.data.items[0]).not.toHaveProperty("scope");
+    expect(summaries.body.data.items[0]).not.toHaveProperty("sourceVersions");
+    expect(summaries.body.data.items[0]).not.toHaveProperty("failures");
+    const defaultSummaryPage = await request(runtime.app).get(`/api/works/${workId}/tasks?view=summary`).expect(200);
+    expect(defaultSummaryPage.body.data).toMatchObject({ page: 1, limit: 50, total: tasks.body.data.total });
+    expect(defaultSummaryPage.body.data.items).toHaveLength(tasks.body.data.total);
     const detail = await request(runtime.app).get(`/api/tasks/${summaries.body.data.items[0].id}`).expect(200);
     expect(detail.body.data).toEqual(expect.objectContaining({
       result: expect.anything(),
       scopeDetails: expect.any(Array)
     }));
+  });
+
+  it("分析任务摘要默认分页且不返回详情字段", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const work = await request(runtime.app).post("/api/works").send({ title: "分页测试" }).expect(201);
+    const workId = work.body.data.id;
+    for (let index = 0; index < 55; index += 1) {
+      runtime.store.createTask(workId, {
+        taskType: "chapter-analysis",
+        scope: { type: "book", additionalPrompt: `不可出现在摘要中的提示-${index}` }
+      });
+    }
+
+    const firstPage = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
+    expect(firstPage.body.data).toMatchObject({
+      page: 1,
+      limit: 50,
+      total: 55,
+      hasMore: true,
+      nextPage: 2,
+      stats: { total: 55, pendingCount: 55, runningCount: 0, runningProgress: 0 }
+    });
+    expect(firstPage.body.data.items).toHaveLength(50);
+    expect(JSON.stringify(firstPage.body.data)).not.toContain("不可出现在摘要中的提示");
+    expect(firstPage.body.data.items[0]).not.toHaveProperty("scope");
+    expect(firstPage.body.data.items[0]).not.toHaveProperty("result");
+    expect(firstPage.body.data.items[0]).not.toHaveProperty("scopeDetails");
+    expect(firstPage.body.data.items[0]).not.toHaveProperty("sourceVersions");
+    expect(firstPage.body.data.items[0]).not.toHaveProperty("failures");
+
+    const secondPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=2&limit=50`).expect(200);
+    expect(secondPage.body.data).toMatchObject({ page: 2, limit: 50, total: 55, hasMore: false, nextPage: null });
+    expect(secondPage.body.data.items).toHaveLength(5);
   });
 
   it("开启自动运行后遵守并发与单次上限", async () => {
@@ -179,7 +231,7 @@ describe("分析任务自动运行", () => {
     await waitFor(() => runtime.store.countRunningTasks(workId) === 0);
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
-    const statuses = (tasks.body.data as Array<{ status: string }>).map((item) => item.status);
+    const statuses = (tasks.body.data.items as Array<{ status: string }>).map((item) => item.status);
     expect(statuses.filter((status) => status === "review")).toHaveLength(3);
     expect(statuses.filter((status) => status === "pending").length).toBeGreaterThanOrEqual(2);
 

@@ -11,6 +11,11 @@ describe("AI 分析全流程追踪界面", () => {
     ]);
 
     expect(application).toContain("Promise.all([");
+    expect(application).toContain('apiPage(`/api/works/${state.work.id}/tasks`, page, 50)');
+    expect(application).not.toContain('apiAllPages(`/api/works/${state.work.id}/tasks`');
+    expect(application).toContain('aria-label="AI 分析任务分页"');
+    expect(application).toContain('data-task-page="${taskPage.page - 1}"');
+    expect(application).toContain("taskPage.stats?.pendingCount");
     expect(application).toContain("`/api/tasks/${taskId}/trace`");
     expect(application).toContain("function renderTaskTraceVisualization(trace)");
     expect(application).toContain("function renderTaskTraceRound(round)");
