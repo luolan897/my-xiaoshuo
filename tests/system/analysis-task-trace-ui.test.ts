@@ -38,6 +38,7 @@ describe("AI 分析全流程追踪界面", () => {
     expect(application).toContain("function renderTaskResult(task)");
     expect(application).toContain("function renderTaskResultItem(item)");
     expect(application).toContain("function bindTaskResultActions(container)");
+    expect(application).toContain('<p><strong>任务 ID</strong><br><code>${esc(task.id)}</code><br><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>');
     expect(application).toContain("<h4>结果保存位置</h4>");
     expect(application).toContain('target.location || "当前作品 · AI 分析记录"');
     expect(application).not.toContain("target.database");

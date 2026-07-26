@@ -4464,14 +4464,13 @@ function openTaskDetailDialog(task, trace) {
   openDialog("任务详情",
     `<div class="task-detail">
       <section class="task-detail-overview">
-        <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code></p>
+        <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code><br><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
         <p><strong>类型</strong> ${esc(analysisTaskTypeLabel(task.taskType))}</p>
         <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
         <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
         <div><strong>失败信息</strong>${failureHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
-        <p><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
