@@ -29,10 +29,7 @@ import { APP_VERSION } from "./version.js";
 import { fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
-  editorPageKey,
   entityEditorPageKey,
-  modulePageKey,
-  pageLabelForKey,
   presencePageKinds
 } from "./collaboration-presence.js";
 import {
@@ -113,7 +110,7 @@ const presenceHeartbeatSchema = z.object({
     z.object({ kind: z.literal(presencePageKinds[0]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[1]), resourceId: identifier }).strict(),
     z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["settings", "characters", "races", "organizations", "timeline", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
-    z.object({ kind: z.literal(presencePageKinds[3]), module: z.enum(["setting", "character", "race", "organization"]), resourceId: identifier.optional() }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[3]), module: z.enum(["setting", "character", "race", "organization", "relationship"]), resourceId: identifier.optional() }).strict(),
     z.object({ kind: z.literal(presencePageKinds[4]) }).strict()
   ])
 }).strict();
@@ -694,13 +691,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
   const collaborationPresence = new CollaborationPresence();
-  const publishCollaborativeChange = (workId: string, pageKey: string, label = pageLabelForKey(pageKey)): void => {
+  const publishRelationshipChange = (workId: string, relationshipId: string): void => {
     const actor = currentRequestActor();
-    if (!actor || !workId || !pageKey) return;
-    collaborationPresence.publishChange(workId, pageKey, {
+    if (!actor || !workId || !relationshipId) return;
+    collaborationPresence.publishChange(workId, entityEditorPageKey("relationship", relationshipId), {
       userId: actor.userId,
       displayName: actor.displayName
-    }, label);
+    });
   };
   const getDevelopmentUser = (): AuthUser | null => options.devAuthBypass
     ? auth.listUsers().find((user) => user.status === "active") ?? null
@@ -1088,14 +1085,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const { source, changeNote, expectedVersionNo, ...chapterInput } = input;
     const chapter = store.saveChapter(request.params.chapterId, chapterInput, source ?? "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(chapter.workId), editorPageKey(String(chapter.id)));
     data(response, chapter);
   });
   app.delete("/api/chapters/:chapterId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const chapter = store.getChapter(request.params.chapterId);
     store.deleteChapter(request.params.chapterId, input.expectedVersionNo);
-    publishCollaborativeChange(String(chapter.workId), editorPageKey(String(chapter.id)));
     noContent(response);
   });
   app.get("/api/chapters/:chapterId/versions", (request, response) => {
@@ -1109,7 +1103,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/chapters/:chapterId/restore", (request, response) => {
     const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const chapter = store.restoreChapter(request.params.chapterId, input.versionNo, input.expectedVersionNo);
-    publishCollaborativeChange(String(chapter.workId), editorPageKey(String(chapter.id)));
     data(response, chapter);
   });
   app.post("/api/chapters/:chapterId/move", (request, response) => {
@@ -1126,14 +1119,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.put("/api/chapters/:chapterId/outline", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(chapterOutlineSchema.extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const outline = store.upsertChapterOutline(request.params.chapterId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(outline.workId), modulePageKey("outlines"));
     data(response, outline);
   });
   app.delete("/api/chapters/:chapterId/outline", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const chapter = store.getChapter(request.params.chapterId);
     store.deleteChapterOutline(request.params.chapterId, input.expectedVersionNo);
-    publishCollaborativeChange(String(chapter.workId), modulePageKey("outlines"));
     noContent(response);
   });
 
@@ -1149,42 +1139,34 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/foreshadows", (request, response) => {
     const foreshadow = store.createForeshadow(request.params.workId, parse(foreshadowSchema, request.body));
-    publishCollaborativeChange(request.params.workId, modulePageKey("outlines"));
     data(response, foreshadow, 201);
   });
   app.get("/api/foreshadows/:foreshadowId", (request, response) => data(response, store.getForeshadow(request.params.foreshadowId)));
   app.patch("/api/foreshadows/:foreshadowId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(foreshadowSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const foreshadow = store.updateForeshadow(request.params.foreshadowId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(foreshadow.workId), modulePageKey("outlines"));
     data(response, foreshadow);
   });
   app.delete("/api/foreshadows/:foreshadowId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const foreshadow = store.getForeshadow(request.params.foreshadowId);
     store.deleteForeshadow(request.params.foreshadowId, input.expectedVersionNo);
-    publishCollaborativeChange(String(foreshadow.workId), modulePageKey("outlines"));
     noContent(response);
   });
   app.post("/api/foreshadows/:foreshadowId/occurrences", (request, response) => {
     const input = parse(foreshadowOccurrenceSchema.extend({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const { expectedVersionNo, ...occurrenceInput } = input;
     const occurrence = store.createForeshadowOccurrence(request.params.foreshadowId, occurrenceInput, expectedVersionNo);
-    publishCollaborativeChange(String(occurrence.workId), modulePageKey("outlines"));
     data(response, occurrence, 201);
   });
   app.patch("/api/foreshadow-occurrences/:occurrenceId", (request, response) => {
     const input = parse(foreshadowOccurrenceSchema.partial().extend({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const { expectedVersionNo, ...occurrenceInput } = input;
     const occurrence = store.updateForeshadowOccurrence(request.params.occurrenceId, occurrenceInput, expectedVersionNo);
-    publishCollaborativeChange(String(occurrence.workId), modulePageKey("outlines"));
     data(response, occurrence);
   });
   app.delete("/api/foreshadow-occurrences/:occurrenceId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const occurrence = store.getForeshadowOccurrence(request.params.occurrenceId);
     store.deleteForeshadowOccurrence(request.params.occurrenceId, input.expectedVersionNo);
-    publishCollaborativeChange(String(occurrence.workId), modulePageKey("outlines"));
     noContent(response);
   });
 
@@ -1195,7 +1177,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/settings", (request, response) => {
     const setting = store.createSetting(request.params.workId, parse(settingSchema, request.body));
-    publishCollaborativeChange(request.params.workId, modulePageKey("settings"));
     data(response, setting, 201);
   });
   app.get("/api/works/:workId/settings/context", (request, response) => data(response, store.listSettings(request.params.workId, true)));
@@ -1203,14 +1184,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/settings/:settingId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(settingSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const setting = store.updateSetting(request.params.settingId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(setting.workId), entityEditorPageKey("setting", String(setting.id)));
     data(response, setting);
   });
   app.delete("/api/settings/:settingId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const setting = store.getSetting(request.params.settingId);
     store.deleteSetting(request.params.settingId, input.expectedVersionNo);
-    publishCollaborativeChange(String(setting.workId), entityEditorPageKey("setting", String(setting.id)));
     noContent(response);
   });
 
@@ -1229,7 +1207,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/characters", (request, response) => {
     const character = store.createCharacter(request.params.workId, parse(characterSchema, request.body));
-    publishCollaborativeChange(request.params.workId, modulePageKey("characters"));
     data(response, redactCharacterLinks(character, requestPermissions(request, request.params.workId)), 201);
   });
   app.get("/api/characters/:characterId", (request, response) => {
@@ -1238,7 +1215,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/characters/:characterId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(characterUpdateSchema.extend({ expectedVersionNo: expectedVersionNoSchema }), request.body);
     const character = store.updateCharacter(request.params.characterId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(character.workId), entityEditorPageKey("character", String(character.id)));
     data(response, redactCharacterLinks(character, requestPermissions(request)));
   });
   app.get("/api/characters/:characterId/versions", (request, response) => {
@@ -1250,14 +1226,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/characters/:characterId/restore", (request, response) => {
     const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const character = store.restoreCharacter(request.params.characterId, input.versionNo, input.expectedVersionNo);
-    publishCollaborativeChange(String(character.workId), entityEditorPageKey("character", String(character.id)));
     data(response, redactCharacterLinks(character, requestPermissions(request)));
   });
   app.delete("/api/characters/:characterId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const character = store.getCharacter(request.params.characterId);
     store.deleteCharacter(request.params.characterId, input.expectedVersionNo);
-    publishCollaborativeChange(String(character.workId), entityEditorPageKey("character", String(character.id)));
     noContent(response);
   });
   app.post("/api/characters/:characterId/merge", (request, response) => {
@@ -1285,7 +1258,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       request.params.characterId,
       parse(characterProfileSectionSchema, request.body)
     );
-    publishCollaborativeChange(String(section.workId), entityEditorPageKey("character", String(section.characterId)));
     data(response, section, 201);
   });
   app.get("/api/character-sections/:sectionId", (request, response) => {
@@ -1297,14 +1269,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       request.body
     );
     const section = store.updateCharacterProfileSection(request.params.sectionId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(section.workId), entityEditorPageKey("character", String(section.characterId)));
     data(response, section);
   });
   app.delete("/api/character-sections/:sectionId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const section = store.getCharacterProfileSection(request.params.sectionId);
     store.deleteCharacterProfileSection(request.params.sectionId, input.expectedVersionNo);
-    publishCollaborativeChange(String(section.workId), entityEditorPageKey("character", String(section.characterId)));
     noContent(response);
   });
   app.get("/api/character-sections/:sectionId/versions", (request, response) => {
@@ -1316,7 +1285,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/character-sections/:sectionId/restore", (request, response) => {
     const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const section = store.restoreCharacterProfileSection(request.params.sectionId, input.versionNo, input.expectedVersionNo);
-    publishCollaborativeChange(String(section.workId), entityEditorPageKey("character", String(section.characterId)));
     data(response, section);
   });
 
@@ -1370,7 +1338,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/races", (request, response) => {
     const race = store.createRace(request.params.workId, parse(raceSchema, request.body));
-    publishCollaborativeChange(request.params.workId, modulePageKey("races"));
     data(response, redactRaceMembers(race, requestPermissions(request, request.params.workId)), 201);
   });
   app.get("/api/races/:raceId", (request, response) => {
@@ -1379,14 +1346,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/races/:raceId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(raceSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const race = store.updateRace(request.params.raceId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(race.workId), entityEditorPageKey("race", String(race.id)));
     data(response, redactRaceMembers(race, requestPermissions(request)));
   });
   app.delete("/api/races/:raceId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const race = store.getRace(request.params.raceId);
     store.deleteRace(request.params.raceId, input.expectedVersionNo);
-    publishCollaborativeChange(String(race.workId), entityEditorPageKey("race", String(race.id)));
     noContent(response);
   });
   app.post("/api/races/:raceId/merge", (request, response) => {
@@ -1405,7 +1369,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/organizations", (request, response) => {
     const organization = store.createOrganization(request.params.workId, parse(organizationSchema, request.body));
-    publishCollaborativeChange(request.params.workId, modulePageKey("organizations"));
     data(response, redactOrganizationMembers(organization, requestPermissions(request, request.params.workId)), 201);
   });
   app.get("/api/organizations/:organizationId", (request, response) => {
@@ -1414,14 +1377,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/organizations/:organizationId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(organizationSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const organization = store.updateOrganization(request.params.organizationId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(organization.workId), entityEditorPageKey("organization", String(organization.id)));
     data(response, redactOrganizationMembers(organization, requestPermissions(request)));
   });
   app.delete("/api/organizations/:organizationId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const organization = store.getOrganization(request.params.organizationId);
     store.deleteOrganization(request.params.organizationId, input.expectedVersionNo);
-    publishCollaborativeChange(String(organization.workId), entityEditorPageKey("organization", String(organization.id)));
     noContent(response);
   });
   app.post("/api/organizations/:organizationId/merge", (request, response) => {
@@ -1437,21 +1397,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/timeline-tracks", (request, response) => {
     const track = store.createTimelineTrack(request.params.workId, parse(timelineTrackSchema, request.body));
-    publishCollaborativeChange(request.params.workId, modulePageKey("timeline"));
     data(response, track, 201);
   });
   app.get("/api/timeline-tracks/:trackId", (request, response) => data(response, store.getTimelineTrack(request.params.trackId)));
   app.patch("/api/timeline-tracks/:trackId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(timelineTrackSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const track = store.updateTimelineTrack(request.params.trackId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(track.workId), modulePageKey("timeline"));
     data(response, track);
   });
   app.delete("/api/timeline-tracks/:trackId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const track = store.getTimelineTrack(request.params.trackId);
     store.deleteTimelineTrack(request.params.trackId, input.expectedVersionNo);
-    publishCollaborativeChange(String(track.workId), modulePageKey("timeline"));
     noContent(response);
   });
 
@@ -1461,7 +1417,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/timeline", (request, response) => {
     const event = store.createTimelineEvent(request.params.workId, parse(timelineSchema, request.body));
-    publishCollaborativeChange(request.params.workId, modulePageKey("timeline"));
     data(response, event, 201);
   });
   app.post("/api/works/:workId/timeline/merge", (request, response) => {
@@ -1475,14 +1430,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }).strict(), request.body);
     const { expectedVersionNos, ...mergeInput } = input;
     const merged = store.mergeTimelineEvents(request.params.workId, input.eventIds, mergeInput, expectedVersionNos);
-    publishCollaborativeChange(request.params.workId, modulePageKey("timeline"));
     data(response, merged, 201);
   });
   app.get("/api/timeline/:eventId", (request, response) => data(response, store.getTimelineEvent(request.params.eventId)));
   app.patch("/api/timeline/:eventId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(timelineSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const event = store.updateTimelineEvent(request.params.eventId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(event.workId), modulePageKey("timeline"));
     data(response, event);
   });
   app.post("/api/timeline/:eventId/split", (request, response) => {
@@ -1496,15 +1449,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       expectedVersionNo: expectedVersionNoSchema
     }).strict(), request.body);
     const split = store.splitTimelineEvent(request.params.eventId, input.parts, input.expectedVersionNo);
-    const first = split[0];
-    if (first) publishCollaborativeChange(String(first.workId), modulePageKey("timeline"));
     data(response, split, 201);
   });
   app.delete("/api/timeline/:eventId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const event = store.getTimelineEvent(request.params.eventId);
     store.deleteTimelineEvent(request.params.eventId, input.expectedVersionNo);
-    publishCollaborativeChange(String(event.workId), modulePageKey("timeline"));
     noContent(response);
   });
 
@@ -1518,21 +1467,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/relationships", (request, response) => {
     const relationship = store.createRelationship(request.params.workId, parse(relationshipSchema, request.body));
-    publishCollaborativeChange(request.params.workId, modulePageKey("relationships"));
     data(response, relationship, 201);
   });
   app.get("/api/relationships/:relationshipId", (request, response) => data(response, store.getRelationship(request.params.relationshipId)));
   app.patch("/api/relationships/:relationshipId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(relationshipSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const relationship = store.updateRelationship(request.params.relationshipId, input, "manual", null, changeNote, expectedVersionNo);
-    publishCollaborativeChange(String(relationship.workId), modulePageKey("relationships"));
+    publishRelationshipChange(String(relationship.workId), String(relationship.id));
     data(response, relationship);
   });
   app.delete("/api/relationships/:relationshipId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     const relationship = store.getRelationship(request.params.relationshipId);
     store.deleteRelationship(request.params.relationshipId, input.expectedVersionNo);
-    publishCollaborativeChange(String(relationship.workId), modulePageKey("relationships"));
+    publishRelationshipChange(String(relationship.workId), String(relationship.id));
     noContent(response);
   });
 
@@ -1698,9 +1646,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   ));
   app.post("/api/tasks/:taskId/relationship-changes/apply", (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
-    const task = store.getTask(request.params.taskId);
     const applied = ai.applyRelationshipChangePreview(request.params.taskId);
-    publishCollaborativeChange(String(task.workId), modulePageKey("relationships"));
     data(response, redactTaskCharacterNames(applied, requestPermissions(request)));
   });
   app.post("/api/tasks/:taskId/relationship-changes/discard", (request, response) => {
