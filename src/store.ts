@@ -5319,27 +5319,33 @@ export class Store {
     return createHash("sha256").update(content).digest("hex");
   }
 
-  private relationshipSettingsSourceVersions(workId: string): Record<string, number | string> {
+  private relationshipRosterSourceVersions(workId: string): Record<string, number | string> {
     const versions: Record<string, number | string> = {};
-    const work = this.getWork(workId);
-    versions[`work:${workId}`] = Number(work.versionNo);
-    for (const setting of this.listSettings(workId)) versions[`setting:${String(setting.id)}`] = Number(setting.versionNo);
-    const characters = this.listCharacters(workId, true);
-    for (const character of characters) {
+    for (const character of this.listCharacters(workId, false)) {
       versions[`character:${String(character.id)}`] = Number(character.versionNo);
-      for (const section of this.listCharacterProfileSections(String(character.id))) {
-        versions[`character-section:${String(section.id)}`] = Number(section.versionNo);
-      }
     }
     for (const race of this.listRaces(workId)) versions[`race:${String(race.id)}`] = Number(race.versionNo);
     for (const organization of this.listOrganizations(workId)) {
       versions[`organization:${String(organization.id)}`] = Number(organization.versionNo);
     }
-    for (const track of this.listTimelineTracks(workId)) versions[`timeline-track:${String(track.id)}`] = Number(track.versionNo);
-    for (const event of this.listTimelineEvents(workId)) versions[`timeline-event:${String(event.id)}`] = Number(event.versionNo);
     for (const relationship of this.listRelationships(workId)) {
       versions[`relationship:${String(relationship.id)}`] = Number(relationship.versionNo);
     }
+    return versions;
+  }
+
+  private relationshipSettingsSourceVersions(workId: string): Record<string, number | string> {
+    const versions = this.relationshipRosterSourceVersions(workId);
+    const work = this.getWork(workId);
+    versions[`work:${workId}`] = Number(work.versionNo);
+    for (const setting of this.listSettings(workId)) versions[`setting:${String(setting.id)}`] = Number(setting.versionNo);
+    for (const character of this.listCharacters(workId, true)) {
+      for (const section of this.listCharacterProfileSections(String(character.id))) {
+        versions[`character-section:${String(section.id)}`] = Number(section.versionNo);
+      }
+    }
+    for (const track of this.listTimelineTracks(workId)) versions[`timeline-track:${String(track.id)}`] = Number(track.versionNo);
+    for (const event of this.listTimelineEvents(workId)) versions[`timeline-event:${String(event.id)}`] = Number(event.versionNo);
     for (const outline of this.listChapterOutlines(workId)) {
       const chapterId = String(outline.chapterId);
       versions[`chapter-meta:${chapterId}`] = Number(this.getChapter(chapterId).versionNo);
@@ -5370,6 +5376,9 @@ export class Store {
       for (const chapter of selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])) {
         sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
       }
+    }
+    if (scope.previewRelationshipChanges === true) {
+      Object.assign(sourceVersions, this.relationshipRosterSourceVersions(workId));
     }
     if (scope.type === "settings" || (scope.includeAllSettings === true && scope.previewRelationshipChanges === true)) {
       Object.assign(sourceVersions, this.relationshipSettingsSourceVersions(workId));

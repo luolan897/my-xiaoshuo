@@ -2055,7 +2055,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       currentStatus: "作者刚刚修改"
     }).expect(200);
     const staleApply = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
-    expect(staleApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_STALE");
+    expect(staleApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_SOURCE_CHANGED");
     const afterStaleApply = await request(runtime.app).get(`/api/relationships/${appliedTargetRelationships[0].id}`).expect(200);
     expect(afterStaleApply.body.data).toMatchObject({
       currentStatus: "作者刚刚修改",
@@ -2065,6 +2065,23 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(discarded.body.data.result.relationshipChangePreview.status).toBe("discarded");
     const applyDiscarded = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
     expect(applyDiscarded.body.error.code).toBe("RELATIONSHIP_PREVIEW_NOT_PENDING");
+
+    const rosterPreviewTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        characterIds: [linId],
+        replaceExistingRelationships: true,
+        previewRelationshipChanges: true
+      }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${rosterPreviewTask.body.data.id}/run`).send({ modelId }).expect(200);
+    await request(runtime.app).patch(`/api/characters/${linId}`).send({ aliases: ["小舟"] }).expect(200);
+    const staleRosterApply = await request(runtime.app)
+      .post(`/api/tasks/${rosterPreviewTask.body.data.id}/relationship-changes/apply`)
+      .send({})
+      .expect(409);
+    expect(staleRosterApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_SOURCE_CHANGED");
 
     const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
       title: "林舟关系补充",
