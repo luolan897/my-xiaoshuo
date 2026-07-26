@@ -33,10 +33,21 @@ const fixture = runWithRequestActor(owner.session.user, () => {
     title: "第一章",
     content: "原始协作正文。"
   });
+  const firstCharacter = runtime.store.createCharacter(workId, { name: "林舟" });
+  const secondCharacter = runtime.store.createCharacter(workId, { name: "沈星" });
+  const relationship = runtime.store.createRelationship(workId, {
+    fromCharacterId: String(firstCharacter.id),
+    toCharacterId: String(secondCharacter.id),
+    category: "social",
+    subtype: "朋友",
+    directed: false
+  });
   return {
     workId,
     chapterId: String(chapter.id),
-    versionNo: Number(chapter.versionNo)
+    chapterVersionNo: Number(chapter.versionNo),
+    relationshipId: String(relationship.id),
+    relationshipVersionNo: Number(relationship.versionNo)
   };
 });
 
@@ -44,13 +55,13 @@ const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   if (requestUrl.pathname === "/__e2e/login-writer") {
     response.setHeader("Set-Cookie", `scriverse_session=${encodeURIComponent(writer.token)}; Path=/; HttpOnly; SameSite=Lax`);
-    response.writeHead(302, { Location: `/#view=editor&work=${fixture.workId}&chapter=${fixture.chapterId}` });
+    response.writeHead(302, { Location: `/#view=module&work=${fixture.workId}&module=relationships` });
     response.end();
     return;
   }
   if (requestUrl.pathname === "/__e2e/login-owner") {
     response.setHeader("Set-Cookie", `scriverse_session=${encodeURIComponent(owner.token)}; Path=/; HttpOnly; SameSite=Lax`);
-    response.writeHead(302, { Location: `/#view=editor&work=${fixture.workId}&chapter=${fixture.chapterId}` });
+    response.writeHead(302, { Location: `/#view=module&work=${fixture.workId}&module=relationships` });
     response.end();
     return;
   }
@@ -66,7 +77,7 @@ const server = createServer((request, response) => {
           },
           body: JSON.stringify({
             content: `作者已更新协作正文 ${Date.now()}`,
-            expectedVersionNo: fixture.versionNo
+            expectedVersionNo: fixture.chapterVersionNo
           })
         });
         const payload = await chapter.json() as { data?: Json; error?: Json };
@@ -75,9 +86,40 @@ const server = createServer((request, response) => {
           response.end(JSON.stringify(payload));
           return;
         }
-        fixture.versionNo = Number(payload.data?.versionNo ?? fixture.versionNo);
+        fixture.chapterVersionNo = Number(payload.data?.versionNo ?? fixture.chapterVersionNo);
         response.writeHead(200, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ ok: true, versionNo: fixture.versionNo }));
+        response.end(JSON.stringify({ ok: true, versionNo: fixture.chapterVersionNo }));
+      } catch (error) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: String(error) }));
+      }
+    })();
+    return;
+  }
+  if (requestUrl.pathname === "/__e2e/owner-save-relationship" && request.method === "POST") {
+    void (async () => {
+      try {
+        const relationship = await fetch(`http://127.0.0.1:${port}/api/relationships/${fixture.relationshipId}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `scriverse_session=${encodeURIComponent(owner.token)}`,
+            "X-CSRF-Token": owner.session.csrfToken
+          },
+          body: JSON.stringify({
+            subtype: `盟友 ${Date.now()}`,
+            expectedVersionNo: fixture.relationshipVersionNo
+          })
+        });
+        const payload = await relationship.json() as { data?: Json; error?: Json };
+        if (!relationship.ok) {
+          response.writeHead(relationship.status, { "Content-Type": "application/json" });
+          response.end(JSON.stringify(payload));
+          return;
+        }
+        fixture.relationshipVersionNo = Number(payload.data?.versionNo ?? fixture.relationshipVersionNo);
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, versionNo: fixture.relationshipVersionNo }));
       } catch (error) {
         response.writeHead(500, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: String(error) }));
@@ -99,11 +141,12 @@ console.log(JSON.stringify({
   baseUrl,
   workId: fixture.workId,
   chapterId: fixture.chapterId,
+  relationshipId: fixture.relationshipId,
   writerLogin: `${baseUrl}/__e2e/login-writer`,
-  ownerSave: `${baseUrl}/__e2e/owner-save`
+  ownerSave: `${baseUrl}/__e2e/owner-save-relationship`
 }));
 
-async function presence(cookieToken: string, csrf: string, clientId: string, resourceId: string): Promise<Json> {
+async function presence(cookieToken: string, csrf: string, clientId: string, page: Json): Promise<Json> {
   const response = await fetch(`${baseUrl}/api/works/${fixture.workId}/presence`, {
     method: "POST",
     headers: {
@@ -113,7 +156,7 @@ async function presence(cookieToken: string, csrf: string, clientId: string, res
     },
     body: JSON.stringify({
       clientId,
-      page: { kind: "editor", resourceId }
+      page
     })
   });
   const payload = await response.json() as { data?: Json; error?: Json };
@@ -122,31 +165,43 @@ async function presence(cookieToken: string, csrf: string, clientId: string, res
 }
 
 try {
-  const firstClientId = randomUUID();
-  console.log("[e2e] presence clientId", firstClientId);
-  await presence(writer.token, writer.session.csrfToken, firstClientId, fixture.chapterId);
-
-  const saveResponse = await fetch(`${baseUrl}/__e2e/owner-save`, { method: "POST" });
-  const savePayload = await saveResponse.json() as Json;
-  assert.equal(saveResponse.status, 200, JSON.stringify(savePayload));
-  assert.equal(savePayload.ok, true);
-
-  const writerClientId = randomUUID();
-  const afterSave = await presence(writer.token, writer.session.csrfToken, writerClientId, fixture.chapterId);
-  const recentChanges = Array.isArray(afterSave.recentChanges) ? afterSave.recentChanges as Json[] : [];
-  assert.ok(recentChanges.some((change) => (
-    change.pageKey === `editor:${fixture.chapterId}`
-    && change.actorUserId === owner.session.user.userId
-    && change.actorDisplayName === "collab_owner"
-  )), `expected recentChanges for chapter save, got ${JSON.stringify(recentChanges)}`);
-
-  const otherPage = await presence(writer.token, writer.session.csrfToken, writerClientId, "other-chapter");
-  const otherChanges = Array.isArray(otherPage.recentChanges) ? otherPage.recentChanges as Json[] : [];
-  assert.ok(otherChanges.some((change) => change.pageKey === `editor:${fixture.chapterId}`));
-
-  console.log("[e2e] collaboration-refresh: API recentChanges after same-page save OK");
-
   if (!keepAlive) {
+    const writerClientId = randomUUID();
+    const ownerClientId = randomUUID();
+    console.log("[e2e] presence clientId", writerClientId);
+    await presence(writer.token, writer.session.csrfToken, writerClientId, { kind: "editor", resourceId: fixture.chapterId });
+
+    const saveResponse = await fetch(`${baseUrl}/__e2e/owner-save`, { method: "POST" });
+    const savePayload = await saveResponse.json() as Json;
+    assert.equal(saveResponse.status, 200, JSON.stringify(savePayload));
+    assert.equal(savePayload.ok, true);
+
+    const afterChapterSave = await presence(writer.token, writer.session.csrfToken, writerClientId, { kind: "editor", resourceId: fixture.chapterId });
+    const chapterChanges = Array.isArray(afterChapterSave.recentChanges) ? afterChapterSave.recentChanges as Json[] : [];
+    assert.deepEqual(chapterChanges, []);
+
+    const relationshipPage = { kind: "entity-editor", module: "relationship", resourceId: fixture.relationshipId };
+    await presence(writer.token, writer.session.csrfToken, writerClientId, relationshipPage);
+    await presence(owner.token, owner.session.csrfToken, ownerClientId, relationshipPage);
+    const relationshipSaveResponse = await fetch(`${baseUrl}/__e2e/owner-save-relationship`, { method: "POST" });
+    const relationshipSavePayload = await relationshipSaveResponse.json() as Json;
+    assert.equal(relationshipSaveResponse.status, 200, JSON.stringify(relationshipSavePayload));
+    assert.equal(relationshipSavePayload.ok, true);
+
+    const afterRelationshipSave = await presence(writer.token, writer.session.csrfToken, writerClientId, relationshipPage);
+    const relationshipChanges = Array.isArray(afterRelationshipSave.recentChanges) ? afterRelationshipSave.recentChanges as Json[] : [];
+    assert.ok(relationshipChanges.some((change) => (
+      change.pageKey === `entity-editor:relationship:${fixture.relationshipId}`
+      && change.actorUserId === owner.session.user.userId
+      && change.actorDisplayName === "collab_owner"
+    )), `expected targeted relationship change, got ${JSON.stringify(relationshipChanges)}`);
+
+    const globalList = await presence(writer.token, writer.session.csrfToken, writerClientId, { kind: "module", module: "relationships" });
+    const globalChanges = Array.isArray(globalList.recentChanges) ? globalList.recentChanges as Json[] : [];
+    assert.deepEqual(globalChanges, []);
+
+    console.log("[e2e] collaboration-refresh: targeted relationship changes OK");
+
     server.closeAllConnections();
     server.close();
     runtime.close();

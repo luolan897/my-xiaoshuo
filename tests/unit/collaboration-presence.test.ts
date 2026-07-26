@@ -30,42 +30,60 @@ describe("作品协作者在线状态", () => {
     expect(refreshed.participants[0]?.page).toEqual({ key: "module:timeline", label: "时间轴" });
   });
 
-  it("登记同页保存变更并在心跳中返回最近事件", () => {
+  it("仅向正在查看同一资料的其他用户返回最近事件", () => {
     let now = Date.parse("2026-07-24T09:00:00.000Z");
     const presence = new CollaborationPresence(45_000, () => now, 120_000, 50);
     const owner = { userId: "owner", username: "owner", displayName: "作者", avatarUrl: null };
     const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const reader = { userId: "reader", username: "reader", displayName: "读者", avatarUrl: null };
 
-    const published = presence.publishChange("work-1", editorPageKey("chapter-1"), {
+    presence.heartbeat("work-1", "client-owner", owner, { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" });
+    presence.heartbeat("work-1", "client-writer", writer, { kind: "entity-editor", module: "relationship", resourceId: "relationship-2" });
+    expect(presence.publishChange("work-1", entityEditorPageKey("relationship", "relationship-1"), {
+      userId: owner.userId,
+      displayName: owner.displayName
+    })).toBeNull();
+
+    presence.heartbeat("work-1", "client-writer", writer, { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" });
+    const published = presence.publishChange("work-1", entityEditorPageKey("relationship", "relationship-1"), {
       userId: owner.userId,
       displayName: owner.displayName
     });
     expect(published).toMatchObject({
-      pageKey: "editor:chapter-1",
-      label: "正文编辑",
+      pageKey: "entity-editor:relationship:relationship-1",
+      label: "人物关系编辑",
       actorUserId: "owner",
       actorDisplayName: "作者"
     });
+    if (!published) throw new Error("应登记同一人物关系的协作变更");
 
-    const heartbeat = presence.heartbeat("work-1", "client-writer", writer, { kind: "editor", resourceId: "chapter-1" });
+    const heartbeat = presence.heartbeat("work-1", "client-writer", writer, { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" });
     expect(heartbeat.recentChanges).toEqual([
       expect.objectContaining({
         id: published.id,
-        pageKey: "editor:chapter-1",
+        pageKey: "entity-editor:relationship:relationship-1",
         actorUserId: "owner"
       })
     ]);
+    const actorHeartbeat = presence.heartbeat("work-1", "client-owner", owner, { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" });
+    expect(actorHeartbeat.recentChanges).toEqual([]);
+    const lateViewer = presence.heartbeat("work-1", "client-reader", reader, { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" });
+    expect(lateViewer.recentChanges).toEqual([]);
+    const globalList = presence.heartbeat("work-1", "client-writer", writer, { kind: "module", module: "relationships" });
+    expect(globalList.recentChanges).toEqual([]);
 
     now += 120_001;
-    const expired = presence.heartbeat("work-1", "client-writer", writer, { kind: "editor", resourceId: "chapter-1" });
+    const expired = presence.heartbeat("work-1", "client-writer", writer, { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" });
     expect(expired.recentChanges).toEqual([]);
   });
 
   it("生成稳定的页面键与标签", () => {
     expect(editorPageKey("chapter-9")).toBe("editor:chapter-9");
     expect(entityEditorPageKey("character", "char-1")).toBe("entity-editor:character:char-1");
+    expect(entityEditorPageKey("relationship", "relationship-1")).toBe("entity-editor:relationship:relationship-1");
     expect(modulePageKey("relationships")).toBe("module:relationships");
     expect(pageLabelForKey("entity-editor:race:race-1")).toBe("种族编辑");
+    expect(pageLabelForKey("entity-editor:relationship:relationship-1")).toBe("人物关系编辑");
     expect(pageLabelForKey("module:outlines")).toBe("大纲与伏笔");
   });
 });

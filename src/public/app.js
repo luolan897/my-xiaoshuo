@@ -123,7 +123,7 @@ let presenceHeartbeatQueued = null;
 let presenceHeartbeatRequest = 0;
 const acknowledgedCollaborativeChangeIds = new Set();
 let collaborativeChangePromptOpen = false;
-let peerPageStale = false;
+let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
 
 let timelineMultiSelectEnabled = false;
@@ -552,6 +552,7 @@ function replacePageRoute(route) {
 
 function presencePageForRoute(route = currentPageRoute()) {
   if (!state.work || route.view === "shelf" || route.view === "platform-ai") return null;
+  if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
   if (route.view === "module") return { kind: "module", module: route.module };
@@ -641,7 +642,7 @@ async function refreshPresence() {
       presenceParticipants = Array.isArray(payload) ? payload : (payload?.participants ?? []);
       renderPresence();
       const recentChanges = Array.isArray(payload) ? [] : (payload?.recentChanges ?? []);
-      void handleCollaborativeChanges(recentChanges);
+      void handleRelationshipCollaborativeChanges(recentChanges);
     }
   } catch {
     if (state.work?.id === workId) renderPresence();
@@ -651,14 +652,10 @@ async function refreshPresence() {
   return presenceParticipants;
 }
 
-function localEditingDirty() {
-  return Boolean(state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty);
-}
-
-async function handleCollaborativeChanges(recentChanges) {
+async function handleRelationshipCollaborativeChanges(recentChanges) {
   if (!Array.isArray(recentChanges) || !recentChanges.length || collaborativeChangePromptOpen) return;
   const localKey = presencePageKey(presencePageForRoute());
-  if (!localKey) return;
+  if (!localKey.startsWith("entity-editor:relationship:")) return;
   const selfId = state.user?.userId;
   const incoming = recentChanges.filter((change) => (
     change
@@ -675,14 +672,10 @@ async function handleCollaborativeChanges(recentChanges) {
     const oldest = acknowledgedCollaborativeChangeIds.values().next().value;
     acknowledgedCollaborativeChangeIds.delete(oldest);
   }
-  peerPageStale = true;
   collaborativeChangePromptOpen = true;
-  const dirtyHint = localEditingDirty()
-    ? "你当前页面还有未保存修改。请先把正在编辑的内容复制保存到别处（本页无法代为另存），再刷新页面后重新提交。"
-    : "请先确认本地没有需要保留的草稿；如有，请复制保存到别处（本页无法代为另存），再刷新页面后继续编辑。";
   try {
-    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新「${latest.label || "当前页面"}」。${dirtyHint}`, {
-      title: "协作者已更新",
+    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新当前人物关系。请先确认本地没有需要保留的修改，再刷新页面继续查看。`, {
+      title: "人物关系已更新",
       confirmLabel: "刷新页面",
       cancelLabel: "稍后处理"
     });
@@ -690,17 +683,6 @@ async function handleCollaborativeChanges(recentChanges) {
   } finally {
     collaborativeChangePromptOpen = false;
   }
-}
-
-async function confirmPeerStaleSave() {
-  if (!peerPageStale) return true;
-  const confirmed = await confirmToast("协作者已更新当前页面。请先把正在编辑的内容复制保存到别处（本页无法代为另存），再刷新页面后重新提交。继续保存可能覆盖对方修改或触发冲突。", {
-    title: "页面内容已过期",
-    confirmLabel: "仍然保存",
-    cancelLabel: "暂不保存"
-  });
-  if (confirmed) peerPageStale = false;
-  return confirmed;
 }
 
 function schedulePresenceHeartbeat() {
@@ -711,9 +693,15 @@ function schedulePresenceHeartbeat() {
   }, 80);
 }
 
+function setRelationshipPresence(relationshipId) {
+  const nextId = relationshipId ? String(relationshipId) : null;
+  if (relationshipPresenceId === nextId) return;
+  relationshipPresenceId = nextId;
+  void refreshPresence();
+}
+
 async function confirmConcurrentSave() {
   await refreshPresence();
-  if (!(await confirmPeerStaleSave())) return false;
   const localKey = presencePageKey(presencePageForRoute());
   const peers = presenceParticipants.filter((participant) => participant.clientId !== presenceClientId && participant.page.key === localKey);
   if (!peers.length) return true;
@@ -6917,6 +6905,7 @@ async function openRelationshipDialog(item, options = {}) {
     <div><strong>关系操作</strong><small>删除操作会记录到版本历史和审计日志。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-relationship-delete>删除关系</button></div>
   </section>` : "";
+  setRelationshipPresence(item?.id ?? null);
   openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false) + management, async (form) => {
     const keywords = uniqueRelationshipKeywords(form.getAll("keywords").map(String));
     await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed", ...(item ? { expectedVersionNo: item.versionNo } : {}) } });
@@ -6924,15 +6913,19 @@ async function openRelationshipDialog(item, options = {}) {
   }, item ? "关系档案" : "人工确认关系");
   $("#dialog-fields").querySelector("[data-dialog-relationship-delete]")?.addEventListener("click", async () => {
     const dialog = $("#form-dialog");
+    const reopenDialog = () => {
+      setRelationshipPresence(item.id);
+      dialog.showModal();
+    };
     dialog.close();
-    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return dialog.showModal();
-    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return dialog.showModal();
+    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return reopenDialog();
+    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return reopenDialog();
     try {
       await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
       await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
       toast(`已删除人物关系“${relationshipName}”`);
     } catch (error) {
-      dialog.showModal();
+      reopenDialog();
       toast(error.message, "error");
     }
   });
@@ -8303,6 +8296,9 @@ $("#members-dialog").addEventListener("close", () => {
   memberDialogWork = null;
   memberDialogMembers = [];
   memberDialogDirectory = [];
+});
+$("#form-dialog").addEventListener("close", () => {
+  if (relationshipPresenceId && !$("#form-dialog").open) setRelationshipPresence(null);
 });
 $("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));
 $("#member-permission-form").querySelectorAll("[data-permission-preset]").forEach((button) => button.addEventListener("click", () => {

@@ -220,7 +220,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('item && canEditModule("relationships") ? `<section class="entity-dialog-management"');
     expect(application.text).toContain('title: "删除人物关系", confirmLabel: "继续删除"');
     expect(application.text).toContain('title: "删除操作需要再次确认", confirmLabel: "确认删除"');
-    expect(application.text).toContain('return dialog.showModal()');
+    expect(application.text).toContain('return reopenDialog()');
     expect(application.text).toContain('method: "DELETE", body: { expectedVersionNo: item.versionNo }');
     expect(application.text).toContain('field("keywords", "关系关键词", "keyword-chips"');
     expect(application.text).toContain("splitRelationshipKeywordInput");
@@ -297,7 +297,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-background-center-v3');
+    expect(page.text).toContain('/app.js?v=20260727-relationship-presence-v2');
     expect(page.text).toContain('/styles.css?v=20260727-background-center-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
@@ -305,10 +305,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
-    expect(application.text).toContain("function handleCollaborativeChanges(recentChanges)");
-    expect(application.text).toContain("协作者已更新");
-    expect(application.text).toContain("本页无法代为另存");
-    expect(application.text).toContain("peerPageStale");
+    expect(application.text).toContain("function handleRelationshipCollaborativeChanges(recentChanges)");
+    expect(application.text).toContain("人物关系已更新");
+    expect(application.text).toContain('localKey.startsWith("entity-editor:relationship:")');
+    expect(application.text).not.toContain("peerPageStale");
     expect(styles.text).toContain(".dev-auth-bypass .auth-view { display: none !important; }");
     expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
