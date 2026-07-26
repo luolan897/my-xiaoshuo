@@ -5,6 +5,7 @@ import {
   levelLabel,
   outlineStatusLabel,
   providerConnectionLabel,
+  providerProtocolLabel,
   providerStatusLabel,
   relationshipCategoryLabel,
   relationshipConfirmationLabel,
@@ -34,6 +35,7 @@ describe("前端枚举中文标签", () => {
     expect(taskScopeLabel("book")).toBe("全书");
     expect(providerStatusLabel("enabled")).toBe("已启用");
     expect(providerConnectionLabel("success")).toBe("连接正常");
+    expect(providerProtocolLabel("anthropic-messages")).toBe("Anthropic Messages");
     expect(chapterVersionSourceLabel("ai-suggestion")).toBe("AI 建议");
   });
 

@@ -41,7 +41,7 @@
 - 大纲与伏笔：维护章节目标、冲突、转折和伏笔的埋设、提醒与回收。
 - AI 创作助手：支持 Markdown 和流式输出，可引用章节行、附加角色与设定上下文。
 - AI 任务：结构分析、章节分析、角色抽取、时间线分析、关系分析和一致性检查。
-- 供应商管理：兼容 OpenAI Chat Completions 协议，可配置模型、最大输出 Token、并发数和 RPM。
+- 供应商管理：兼容 OpenAI Chat Completions 与 Anthropic Messages 协议，可配置模型、最大输出 Token、并发数和 RPM。
 - 安全导出：支持 JSON、TXT 和 Markdown，导出内容不包含 AI 密钥。
 
 ## 技术栈
@@ -141,7 +141,7 @@ npm start
 配置前请先阅读 [AI 供应商兼容性与配置指南](docs/AI-PROVIDER-COMPATIBILITY.md)，其中列出了已验证的服务商、基础地址、模型标识符和已知差异。
 
 1. 启动项目后，点击顶部“AI 管理”进入平台级配置。
-2. 新建兼容 OpenAI Chat Completions 的供应商，填写基础地址、API 密钥、并发数、RPM 与最大输出 Token。
+2. 新建兼容 OpenAI Chat Completions 或 Anthropic Messages 的供应商，选择协议并填写基础地址、API 密钥、并发数、RPM 与最大输出 Token。
 3. 为模型填写其支持的上下文总量（Token），再添加模型。
 4. 在平台页设置全局系统提示词；它会追加在内置提示词之后。
 5. 打开一本作品，在“更多 → AI 设置”中设置该书的追加系统提示词和任务默认模型；书籍提示词会追加在全局提示词之后。
@@ -216,7 +216,8 @@ curl http://127.0.0.1:13210/api/health
   "data": {
     "status": "ok",
     "version": "0.3.3",
-    "protocol": "openai-chat-completions"
+    "protocol": "openai-chat-completions",
+    "protocols": ["openai-chat-completions", "anthropic-messages"]
   }
 }
 ```

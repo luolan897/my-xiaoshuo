@@ -1,0 +1,172 @@
+import request from "supertest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Runtime } from "../../src/app.js";
+import { createTestRuntime } from "../helpers.js";
+
+describe("Anthropic Messages 供应商", () => {
+  let runtime: Runtime;
+  let workId: string;
+  let chapterId: string;
+  let providerId: string;
+  let modelId: string;
+  let completionCount: number;
+  let streaming = false;
+  let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+
+  beforeEach(async () => {
+    completionCount = 0;
+    fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer longcat-test-key");
+      expect(headers.get("x-api-key")).toBe("longcat-test-key");
+      expect(headers.get("anthropic-version")).toBe("2023-06-01");
+
+      if (url === "https://api.longcat.chat/anthropic/v1/models") {
+        return new Response(JSON.stringify({ error: { message: "not found" } }), { status: 404 });
+      }
+      if (url === "https://api.longcat.chat/v1/models") {
+        return new Response(JSON.stringify({ data: [{ id: "LongCat-2.0" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      expect(url).toBe("https://api.longcat.chat/anthropic/v1/messages");
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body.model).toBe("LongCat-2.0");
+      expect(body.system).toEqual(expect.stringContaining("小说作者的创作协作助手"));
+      expect(body.thinking).toEqual({ type: "enabled" });
+      expect(body.messages).toBeInstanceOf(Array);
+      expect((body.messages as Array<{ role: string }>).some((message) => message.role === "system")).toBe(false);
+
+      if (streaming) {
+        expect(body.stream).toBe(true);
+        expect(body).not.toHaveProperty("stream_options");
+        return new Response([
+          'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":20,"cache_read_input_tokens":10}}}',
+          'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先检查上下文。"}}',
+          'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+          'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"LongCat"}}',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" 流式响应"}}',
+          'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}',
+          'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":6}}',
+          'event: message_stop\ndata: {"type":"message_stop"}'
+        ].join("\n\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+
+      completionCount += 1;
+      if (completionCount === 1) {
+        expect(body.tools).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            name: "story_index",
+            input_schema: expect.objectContaining({ type: "object" })
+          })
+        ]));
+        expect(body.tool_choice).toEqual({ type: "auto" });
+        return new Response(JSON.stringify({
+          id: "msg_longcat_tool",
+          type: "message",
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "需要读取作品目录。", signature: "longcat-signed-thinking" },
+            { type: "text", text: "我先读取目录。" },
+            { type: "tool_use", id: "toolu_longcat", name: "story_index", input: { limit: 1 } }
+          ],
+          stop_reason: "tool_use",
+          usage: { input_tokens: 40, output_tokens: 12 }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+
+      const messages = body.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      const assistant = messages.find((message) => message.role === "assistant");
+      expect(assistant?.content).toEqual(expect.arrayContaining([
+        { type: "thinking", thinking: "需要读取作品目录。", signature: "longcat-signed-thinking" },
+        { type: "tool_use", id: "toolu_longcat", name: "story_index", input: { limit: 1 } }
+      ]));
+      const toolResult = messages.find((message) => message.role === "user" && message.content.some((block) => block.type === "tool_result"));
+      expect(toolResult?.content[0]).toMatchObject({ type: "tool_result", tool_use_id: "toolu_longcat" });
+      return new Response(JSON.stringify({
+        id: "msg_longcat_final",
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "LongCat 已读取目录。", thinking: "工具结果足够回答。" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 80, output_tokens: 9 }
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    runtime = createTestRuntime(fetchMock);
+    const work = await request(runtime.app).post("/api/works").send({ title: "Anthropic 测试作品" }).expect(201);
+    workId = work.body.data.id;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "林舟抵达北港。"
+    }).expect(201);
+    chapterId = chapter.body.data.id;
+
+    const provider = await request(runtime.app).post("/api/platform/ai/providers").send({
+      name: "LongCat Messages",
+      protocol: "anthropic-messages",
+      baseUrl: "https://api.longcat.chat/anthropic",
+      apiKey: "longcat-test-key",
+      status: "enabled"
+    }).expect(201);
+    providerId = provider.body.data.id;
+    expect(provider.body.data).toMatchObject({
+      protocol: "anthropic-messages",
+      baseUrl: "https://api.longcat.chat/anthropic"
+    });
+    const model = await request(runtime.app).post(`/api/providers/${providerId}/models`).send({
+      displayName: "LongCat 2.0",
+      modelId: "LongCat-2.0"
+    }).expect(201);
+    modelId = model.body.data.id;
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({ ok: true, availableModels: ["LongCat-2.0"] });
+  });
+
+  afterEach(() => {
+    runtime.close();
+  });
+
+  it("通过 LongCat Messages 格式完成工具调用与普通响应", async () => {
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: ["story_index"] }).expect(200);
+    const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "读取目录后回答。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+    expect(suggestion.body.data).toMatchObject({
+      content: "LongCat 已读取目录。",
+      outputTokens: 9,
+      toolCalls: [expect.objectContaining({ id: "toolu_longcat", name: "story_index", status: "completed" })]
+    });
+    expect(suggestion.body.data.processSteps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "thinking", content: "需要读取作品目录。" }),
+      expect.objectContaining({ type: "intermediate", content: "我先读取目录。" }),
+      expect.objectContaining({ type: "thinking", content: "工具结果足够回答。" })
+    ]));
+    expect(completionCount).toBe(2);
+  });
+
+  it("解析 LongCat Messages SSE 的思考、正文与用量", async () => {
+    streaming = true;
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    const response = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "进行流式测试。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    expect(response.text).toContain('event: delta\ndata: {"delta":"LongCat"}');
+    expect(response.text).toContain('event: delta\ndata: {"delta":" 流式响应"}');
+    expect(response.text).toContain('"type":"thinking","round":1,"content":"先检查上下文。"');
+    expect(response.text).toContain('"outputTokens":6,"cacheHitPercent":50');
+    const suggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
+    expect(suggestions.body.data[0].content).toBe("LongCat 流式响应");
+  });
+});

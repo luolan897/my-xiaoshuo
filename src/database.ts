@@ -324,6 +324,7 @@ export class Database {
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         base_url TEXT NOT NULL,
+        protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages')),
         encrypted_key TEXT NOT NULL,
         key_iv TEXT NOT NULL,
         key_tag TEXT NOT NULL,
@@ -2039,6 +2040,22 @@ export class Database {
           timestamp
         );
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (46, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(47)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(providers)").map((row) => String(row.name)));
+        if (!columns.has("protocol")) {
+          this.run(`ALTER TABLE providers ADD COLUMN protocol TEXT NOT NULL DEFAULT 'openai-chat-completions'
+            CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages'))`);
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (47, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

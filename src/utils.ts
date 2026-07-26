@@ -55,7 +55,7 @@ export function json<T>(value: string | null | undefined, fallback: T): T {
 }
 
 export function normalizeBaseUrl(value: string): string {
-  return value.replace(/\/+$/u, "").replace(/\/chat\/completions$/u, "");
+  return value.replace(/\/+$/u, "").replace(/\/(?:chat\/completions|messages)$/u, "");
 }
 
 export function normalizeUploadFileName(value: string): string {
