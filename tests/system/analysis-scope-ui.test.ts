@@ -11,7 +11,10 @@ describe("AI 分析范围交互", () => {
       readFile(join(publicPath, "index.html"), "utf8")
     ]);
 
-    expect(application).toContain('allSettingsOption.textContent = "全书 + 所有设定"');
+    expect(application).toContain('allSettingsOption.textContent = "全书 + 设定集"');
+    expect(application).toContain('settingsOnlyOption.textContent = "仅设定集"');
+    expect(application).toContain('const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings"');
+    expect(application).toContain('{ type: "settings"');
     expect(application).toContain('const enabled = taskTypeSelect.value === "relationship-analysis"');
     expect(application).toContain('const disabled = scopeTypeSelect.value !== "chapter"');
     expect(application).toContain("chapterSelect.disabled = disabled");
@@ -24,6 +27,8 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('data-relationship-character-clear');
     expect(application).toContain('input[name="characterIds"]');
     expect(application).toContain('class="relationship-analysis-helper"');
+    expect(application).toContain("默认仅追加不存在的关系，不修改或删除已有关系");
+    expect(application).toContain("不勾选则只追加新关系");
     expect(application).toContain('class="relationship-overwrite-card hidden"');
     expect(application).toContain('name="replaceExistingRelationships" type="checkbox" disabled');
     expect(application).toContain('relationshipOptions.classList.toggle("hidden", !enabled)');

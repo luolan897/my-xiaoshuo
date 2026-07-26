@@ -4089,7 +4089,7 @@ async function renderTasks(page = taskListPage) {
     button.disabled = true;
     const taskId = encodeURIComponent(button.dataset.taskDetail);
     Promise.all([
-      api(`/api/tasks/${taskId}`),
+      api(`/api/tasks/${taskId}/detail`),
       api(`/api/tasks/${taskId}/trace`).catch((error) => {
         if (error.code === "WORK_MODULE_READ_DENIED") return { restricted: true, captured: false, calls: [] };
         throw error;
@@ -4241,32 +4241,6 @@ function renderTaskTraceRound(round) {
   </section>`;
 }
 
-function renderTaskTraceRoundSummary(round) {
-  return `<section class="task-trace-round task-trace-round-summary">
-    <header class="task-trace-round-header">
-      <span class="task-trace-round-index">${esc(String(round?.round ?? 1))}</span>
-      <div><strong>Agent 轮次 ${esc(String(round?.round ?? 1))}</strong><small>${Number(round?.messageCount ?? 0)} 条消息 · ${Number(round?.attemptCount ?? 0)} 次请求尝试 · ${Number(round?.toolExecutionCount ?? 0)} 次工具执行</small></div>
-      <time>${esc(formatDateTime(round?.requestedAt))}</time>
-    </header>
-    <p>本轮 Prompt 共 ${Number(round?.promptChars ?? 0).toLocaleString("zh-CN")} 字符，正文、模型响应和工具结果尚未传输。</p>
-  </section>`;
-}
-
-function renderTaskTraceCallPreview(detail) {
-  const trace = detail?.trace && typeof detail.trace === "object" ? detail.trace : {};
-  const messages = Array.isArray(trace.initialMessages) ? trace.initialMessages : [];
-  const rounds = Array.isArray(trace.rounds) ? trace.rounds : [];
-  return `<div class="task-trace-load-state is-loaded">
-    <div><strong>Prompt 预览</strong><p>全部消息合计最多传输 ${Number(detail?.previewLimit ?? 3000).toLocaleString("zh-CN")} 个字符；模型响应和工具结果仍未传输。</p></div>
-    <details class="task-trace-initial" open>
-      <summary>初始上下文预览（${messages.length} 条消息 · 原文 ${Number(detail?.totalPromptChars ?? 0).toLocaleString("zh-CN")} 字符）</summary>
-      ${renderTaskTraceMessages(messages)}
-    </details>
-    <div class="task-trace-rounds">${rounds.map(renderTaskTraceRoundSummary).join("") || '<p class="task-trace-empty">尚未记录 Agent 轮次。</p>'}</div>
-    <div class="card-actions"><button class="ghost-button" type="button" data-load-task-trace-call="full">查看完整调用</button></div>
-  </div>`;
-}
-
 function renderTaskTraceCallFull(detail) {
   const trace = detail?.trace && typeof detail.trace === "object" ? detail.trace : {};
   const messages = Array.isArray(trace.initialMessages) ? trace.initialMessages : [];
@@ -4285,19 +4259,17 @@ function bindTaskTraceCallActions(container) {
     const call = button.closest("[data-task-trace-call]");
     const content = call?.querySelector("[data-task-trace-call-content]");
     if (!call || !content || button.disabled) return;
-    const mode = button.dataset.loadTaskTraceCall;
     button.disabled = true;
-    button.textContent = mode === "full" ? "正在加载完整内容" : "正在加载预览";
+    button.textContent = "正在加载中";
     try {
       const taskId = encodeURIComponent(call.dataset.taskTraceTask);
       const callId = encodeURIComponent(call.dataset.taskTraceCall);
-      const detail = await api(`/api/tasks/${taskId}/trace/calls/${callId}${mode === "full" ? "?full=true" : ""}`);
-      content.innerHTML = mode === "full" ? renderTaskTraceCallFull(detail) : renderTaskTraceCallPreview(detail);
-      bindTaskTraceCallActions(content);
+      const detail = await api(`/api/tasks/${taskId}/trace/calls/${callId}`);
+      content.innerHTML = renderTaskTraceCallFull(detail);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
-      button.textContent = mode === "full" ? "查看完整调用" : "加载内容预览";
+      button.textContent = "加载完整内容";
     }
   }));
 }
@@ -4323,7 +4295,7 @@ function renderTaskTraceVisualization(trace, taskId) {
   return `<section class="task-trace-section" aria-labelledby="task-trace-title">
     <header class="task-trace-heading">
       <div><span class="eyebrow">执行追踪</span><h3 id="task-trace-title">完整全流程上下文</h3></div>
-      <p>首次只加载调用摘要；Prompt 预览与完整调用内容均按需单独请求。</p>
+      <p>首次只加载调用摘要；每次调用的完整 Prompt、响应和工具结果按需单独请求。</p>
     </header>
     <div class="task-trace-metrics" aria-label="执行追踪统计">
       <div><strong>${capturedCalls.length}</strong><span>模型调用</span></div>
@@ -4334,10 +4306,12 @@ function renderTaskTraceVisualization(trace, taskId) {
     <div class="task-trace-calls">${capturedCalls.map((call, index) => {
       const modelName = call.model?.displayName || call.model?.modelId || "未知模型";
       const providerName = call.provider?.name || "未知供应商";
+      const sourceRefs = Array.isArray(call.sourceRefs) ? call.sourceRefs : [];
+      const sourceSummary = sourceRefs.map((source) => String(source?.title || "")).filter(Boolean).join("、");
       return `<details class="task-trace-call is-${esc(call.status || "failed")}" data-task-trace-call="${esc(call.id)}" data-task-trace-task="${esc(taskId)}" ${index === 0 ? "open" : ""}>
         <summary>
           <span class="task-trace-call-index">${index + 1}</span>
-          <span><strong>${esc(modelName)}</strong><small>${esc(providerName)} · ${Number(call.trace?.roundCount || 0)} 轮 · ${Number(call.inputChars || 0).toLocaleString("zh-CN")} → ${Number(call.outputChars || 0).toLocaleString("zh-CN")} 字符</small></span>
+          <span><strong>${esc(modelName)}</strong><small>${esc(providerName)} · ${Number(call.trace?.roundCount || 0)} 轮 · ${Number(call.inputChars || 0).toLocaleString("zh-CN")} → ${Number(call.outputChars || 0).toLocaleString("zh-CN")} 字符</small>${sourceSummary ? `<small class="task-trace-call-sources" title="${esc(sourceSummary)}">发送：${esc(sourceSummary)}</small>` : ""}</span>
           <span class="task-trace-status">${call.status === "completed" ? "已完成" : call.status === "running" ? "运行中" : "失败"}</span>
         </summary>
         <div class="task-trace-call-body">
@@ -4346,13 +4320,92 @@ function renderTaskTraceVisualization(trace, taskId) {
           <div data-task-trace-call-content>
             <div class="task-trace-load-state">
               <div><strong>调用内容尚未加载</strong><p>这次调用的 Prompt、模型响应和工具结果不会随任务详情传输。</p></div>
-              <button class="ghost-button" type="button" data-load-task-trace-call="preview">加载内容预览</button>
+              <button class="ghost-button" type="button" data-load-task-trace-call="full">加载完整内容</button>
             </div>
           </div>
         </div>
       </details>`;
     }).join("")}</div>
   </section>`;
+}
+
+function renderTaskResultEvidence(item) {
+  const evidence = Array.isArray(item.evidence) ? item.evidence : [];
+  if (!evidence.length) return '<p class="task-result-muted">没有保存可展示的证据摘录。</p>';
+  return `<ul class="task-result-evidence">${evidence.map((item) => {
+    const source = item.chapterTitle || item.chapterId || "未标明章节";
+    return `<li><strong>${esc(source)}</strong>${item.quote ? `<q>${esc(item.quote)}</q>` : ""}${item.supports ? `<small>${esc(item.supports)}</small>` : ""}</li>`;
+  }).join("")}</ul>`;
+}
+
+function renderTaskResultItem(item) {
+  const tags = Array.isArray(item.tags) ? item.tags : [];
+  const details = Array.isArray(item.details) ? item.details : [];
+  const evidence = Array.isArray(item.evidence) ? item.evidence : [];
+  return `<article class="task-result-item">
+      <header>
+        <div><strong>${esc(item.title || "未命名结果")}</strong>${item.subtitle ? `<small>${esc(item.subtitle)}</small>` : ""}</div>
+      </header>
+      ${item.description ? `<p class="task-result-item-description">${esc(item.description)}</p>` : ""}
+      ${details.length ? `<dl class="task-result-item-details">${details.map((detail) => `<div><dt>${esc(detail.label || "详情")}</dt><dd>${esc(detail.value ?? "")}</dd></div>`).join("")}</dl>` : ""}
+      ${tags.length ? `<div class="task-result-tags">${tags.map((tag) => `<span>${esc(tag)}</span>`).join("")}</div>` : ""}
+      ${evidence.length ? `<details><summary>查看原文证据（${evidence.length} 条）</summary>${renderTaskResultEvidence(item)}</details>` : ""}
+    </article>`;
+}
+
+function renderTaskResult(task) {
+  const result = task.resultSummary && typeof task.resultSummary === "object" ? task.resultSummary : {};
+  const metrics = Array.isArray(result.metrics) ? result.metrics : [];
+  const storageTargets = Array.isArray(result.storageTargets) ? result.storageTargets : [];
+  const sections = Array.isArray(result.sections) ? result.sections : [];
+  return `<div class="task-result-readable">
+    <section class="task-result-section">
+      <h4>${esc(result.title || "分析结果")}</h4>
+      <p><strong>分析内容</strong> ${esc(result.analysisContent || `${analysisTaskTypeLabel(task.taskType)}；范围：${task.scopeSummary || "未指定"}`)}</p>
+      <p class="task-result-summary">${esc(result.summary || "任务尚未产生分析结果。")}</p>
+      ${result.restricted ? '<p class="task-result-warning">部分结果因当前账号权限受限而隐藏。</p>' : ""}
+    </section>
+    <section class="task-result-section">
+      <h4>结果保存位置</h4>
+      <p><strong>作品</strong> ${esc(state.work?.title || "当前作品")}</p>
+      <div class="task-result-storage-list">${storageTargets.map((target) => `<article><strong>${esc(target.label || "分析结果")}</strong><p>${esc(target.location || "当前作品 · AI 分析记录")}</p><small>保存 ${Number(target.count || 0)} 条${target.note ? ` · ${esc(target.note)}` : ""}</small></article>`).join("") || "<p>没有可说明的结果保存位置。</p>"}</div>
+      ${metrics.length ? `<div class="task-result-metrics" aria-label="分析结果统计">${metrics.map((item) => `<span><strong>${esc(item.value ?? 0)}</strong>${esc(item.label || "数量")}</span>`).join("")}</div>` : ""}
+    </section>
+    ${sections.map((section) => {
+      const items = Array.isArray(section.items) ? section.items : [];
+      const totalCount = Number(section.totalCount ?? items.length);
+      return `<section class="task-result-section"><h4>${esc(section.title || "分析结论")}（${totalCount}）</h4>${items.map(renderTaskResultItem).join("") || `<p class="task-result-empty">${esc(section.emptyMessage || "没有可展示的结果。")}</p>`}${totalCount > items.length ? `<p class="task-result-muted">可读摘要展示前 ${items.length} 项；完整 ${totalCount} 项可通过下方按钮查看完整 JSON。</p>` : ""}</section>`;
+    }).join("")}
+    <section class="task-result-json-loader">
+      <div><strong>完整返回 JSON</strong><p>点击后按需从服务器拉取本任务的完整 JSON，不做字符截断。</p></div>
+      <button class="ghost-button" type="button" data-load-task-result-json="${esc(task.id)}" ${task.hasResult ? "" : "disabled"}>${task.hasResult ? "查看完整 JSON" : "尚无 JSON 结果"}</button>
+      <div class="task-result-json-content" data-task-result-json-content></div>
+    </section>
+  </div>`;
+}
+
+function bindTaskResultActions(container) {
+  container.querySelectorAll("[data-load-task-result-json]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const content = button.closest(".task-result-json-loader")?.querySelector("[data-task-result-json-content]");
+    if (!content) return;
+    button.disabled = true;
+    button.textContent = "正在拉取完整 JSON";
+    try {
+      const payload = await api(`/api/tasks/${encodeURIComponent(button.dataset.loadTaskResultJson)}/result`);
+      const resultJson = document.createElement("textarea");
+      resultJson.readOnly = true;
+      resultJson.spellcheck = false;
+      resultJson.setAttribute("aria-label", "完整返回 JSON");
+      resultJson.value = JSON.stringify(payload.result, null, 2);
+      content.replaceChildren(resultJson);
+      button.textContent = "完整 JSON 已加载";
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+      button.textContent = "重新加载完整 JSON";
+    }
+  }));
 }
 
 function openTaskDetailDialog(task, trace) {
@@ -4371,26 +4424,27 @@ function openTaskDetailDialog(task, trace) {
       </li>`;
     }
     if (item.type === "book") return "<li>全书</li>";
+    if (item.type === "selection") return item.restricted
+      ? "<li>选定内容（正文读取权限受限）</li>"
+      : `<li>选定内容：${esc(item.selection || "未提供")}</li>`;
+    if (item.type === "none") return "<li>无上下文</li>";
     return `<li>${esc(JSON.stringify(item))}</li>`;
   }).join("") || "<li>无范围详情</li>";
   const failures = Array.isArray(task.failures) ? task.failures : [];
   const failureHtml = failures.length
     ? `<ul>${failures.map((item) => `<li>${esc(item.message || JSON.stringify(item))}</li>`).join("")}</ul>`
     : "<p>无</p>";
-  const resultPreview = task.result && Object.keys(task.result).length
-    ? `<pre class="task-detail-result">${esc(JSON.stringify(task.result, null, 2).slice(0, 2000))}</pre>`
-    : "<p>尚无结果</p>";
+  const resultPreview = renderTaskResult(task);
   openDialog("任务详情",
     `<div class="task-detail">
       <section class="task-detail-overview">
-        <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code></p>
+        <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code><br><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
         <p><strong>类型</strong> ${esc(analysisTaskTypeLabel(task.taskType))}</p>
         <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
         <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
         <div><strong>失败信息</strong>${failureHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
-        <p><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
@@ -4398,6 +4452,7 @@ function openTaskDetailDialog(task, trace) {
     "AI 分析详情",
     { submitLabel: "关闭", wide: true, trace: true });
   bindTaskTraceCallActions($("#dialog-fields"));
+  bindTaskResultActions($("#dialog-fields"));
 }
 
 function renderProviderCards(providers, models) {
@@ -6377,10 +6432,10 @@ async function openTaskDialog() {
   const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
-    <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。</span></p>
+    <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。默认仅追加不存在的关系，不修改或删除已有关系。</span></p>
     <div class="relationship-overwrite-card hidden">
       <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
-      <p>任务成功后，会先删除所有涉及所选角色的旧关系，再写入本次分析结果。</p>
+      <p>勾选后，任务成功时会先删除所有涉及所选角色的旧关系，再写入本次分析结果；不勾选则只追加新关系。</p>
     </div>
     <label>额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将同时追加到证据收集和全局关系归纳提示词，仅影响本次任务。</small></label>
   </div>`;
@@ -6388,10 +6443,13 @@ async function openTaskDialog() {
     const taskType = String(form.get("taskType"));
     const scopeType = String(form.get("scopeType"));
     const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
+    const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
     const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
     const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
-    const scope = taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
+    const scope = settingsOnly
+      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
@@ -6424,7 +6482,10 @@ async function openTaskDialog() {
   const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-overwrite-card");
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
-  allSettingsOption.textContent = "全书 + 所有设定";
+  allSettingsOption.textContent = "全书 + 设定集";
+  const settingsOnlyOption = document.createElement("option");
+  settingsOnlyOption.value = "settings";
+  settingsOnlyOption.textContent = "仅设定集";
   const syncChapterField = () => {
     const disabled = scopeTypeSelect.value !== "chapter";
     chapterSelect.disabled = disabled;
@@ -6460,9 +6521,14 @@ async function openTaskDialog() {
   const syncRelationshipOptions = () => {
     const enabled = taskTypeSelect.value === "relationship-analysis";
     if (enabled && !allSettingsOption.isConnected) scopeTypeSelect.append(allSettingsOption);
+    if (enabled && !settingsOnlyOption.isConnected) scopeTypeSelect.append(settingsOnlyOption);
     if (!enabled && allSettingsOption.isConnected) {
       if (scopeTypeSelect.value === allSettingsOption.value) scopeTypeSelect.value = "book";
       allSettingsOption.remove();
+    }
+    if (!enabled && settingsOnlyOption.isConnected) {
+      if (scopeTypeSelect.value === settingsOnlyOption.value) scopeTypeSelect.value = "book";
+      settingsOnlyOption.remove();
     }
     relationshipOptions.classList.toggle("hidden", !enabled);
     relationshipPrompt.disabled = !enabled;

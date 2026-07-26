@@ -52,7 +52,7 @@ export type AiMessage = {
 };
 
 export type ContextScope = {
-  type: "none" | "selection" | "chapter" | "volume" | "book" | "entities";
+  type: "none" | "selection" | "chapter" | "volume" | "book" | "settings" | "entities";
   chapterId?: string;
   volumeId?: string;
   selection?: string;
@@ -64,4 +64,5 @@ export type ContextScope = {
   additionalPrompt?: string;
   replaceExistingRelationships?: boolean;
   excludeRelationshipConstraints?: boolean;
+  suppressAutomaticContext?: boolean;
 };

@@ -408,7 +408,7 @@ const contextSchema = z.object({
 
 const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
 const relationshipAnalysisScopeSchema = z.object({
-  type: z.enum(["chapter", "book"]),
+  type: z.enum(["chapter", "book", "settings"]),
   chapterId: identifier.optional(),
   includeAllSettings: z.boolean().optional(),
   additionalPrompt: z.string().trim().max(10_000).optional(),
@@ -518,14 +518,88 @@ function redactOrganizationMembers(record: Record<string, unknown>, permissions:
   return permissions.characters === "none" ? { ...record, memberIds: [], members: [] } : record;
 }
 
+const taskResultPermissionModules: Partial<Record<string, keyof WorkModulePermissions>> = {
+  "chapter-analysis": "prose",
+  "character-extraction": "characters",
+  "character-summary": "characters",
+  "character-identity-audit": "reviews",
+  "timeline-analysis": "timeline",
+  "relationship-analysis": "relationships",
+  "worldview-analysis": "settings",
+  "setting-extraction": "settings",
+  "consistency-check": "reviews",
+  "book-analysis": "prose",
+  structure: "outlines",
+  "report-update": "prose"
+};
+
+function requiredTaskResultModule(taskType: unknown): keyof WorkModulePermissions | undefined {
+  return taskResultPermissionModules[String(taskType)];
+}
+
 function redactTaskCharacterNames(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
   const { scopeSummaryWithoutCharacterNames, ...result } = record;
-  if (permissions.characters !== "none") return result;
-  if (typeof scopeSummaryWithoutCharacterNames === "string") result.scopeSummary = scopeSummaryWithoutCharacterNames;
-  const scope = recordValue(result.scope);
-  if (scope) {
-    const { targetCharacters: _targetCharacters, ...redactedScope } = scope;
-    result.scope = redactedScope;
+  const proseRestricted = permissions.prose === "none";
+  const proseScope = recordValue(result.scope);
+  const selectionScopeRestricted = proseRestricted
+    && (proseScope?.type === "selection" || String(result.scopeSummary ?? "").startsWith("选定内容："));
+  if (selectionScopeRestricted) {
+    if (proseScope) {
+      const { selection: _selection, ...redactedScope } = proseScope;
+      result.scope = redactedScope;
+    }
+    result.scopeSummary = "选定内容（正文读取权限受限）";
+    if (Array.isArray(result.scopeDetails)) {
+      result.scopeDetails = result.scopeDetails.map((item) => {
+        const detail = recordValue(item);
+        return detail?.type === "selection" ? { type: "selection", restricted: true } : item;
+      });
+    }
+  }
+  const characterRestricted = permissions.characters === "none";
+  if (characterRestricted) {
+    if (!selectionScopeRestricted && typeof scopeSummaryWithoutCharacterNames === "string") result.scopeSummary = scopeSummaryWithoutCharacterNames;
+    const scope = recordValue(result.scope);
+    if (scope) {
+      const { targetCharacters: _targetCharacters, ...redactedScope } = scope;
+      result.scope = redactedScope;
+    }
+    const taskResult = recordValue(result.result);
+    if (taskResult) {
+      const redactedTaskResult = { ...taskResult };
+      if (Array.isArray(taskResult.relationshipResults)) {
+        redactedTaskResult.relationshipResults = taskResult.relationshipResults.map((value) => {
+          const relationship = recordValue(value);
+          if (!relationship) return value;
+          const {
+            fromCharacterName: _fromCharacterName,
+            toCharacterName: _toCharacterName,
+            ...redactedRelationship
+          } = relationship;
+          return redactedRelationship;
+        });
+      }
+      const analysisTarget = recordValue(taskResult.analysisTarget);
+      if (analysisTarget) {
+        const { characterNames: _characterNames, ...redactedAnalysisTarget } = analysisTarget;
+        redactedTaskResult.analysisTarget = redactedAnalysisTarget;
+      }
+      result.result = redactedTaskResult;
+    }
+  }
+  const resultSummary = recordValue(result.resultSummary);
+  const characterSensitiveTask = ["character-extraction", "character-summary", "character-identity-audit", "relationship-analysis"]
+    .includes(String(result.taskType));
+  const requiredResultModule = requiredTaskResultModule(result.taskType);
+  const resultRestricted = requiredResultModule !== undefined && permissions[requiredResultModule] === "none";
+  if (resultSummary && (resultRestricted || (characterRestricted && characterSensitiveTask))) {
+    result.resultSummary = {
+      ...resultSummary,
+      analysisContent: `${String(resultSummary.title ?? "AI 分析")}；范围：${String(result.scopeSummary ?? "未指定")}`,
+      summary: "当前账号缺少相关资料的读取权限，无法展示对应的可读结论。",
+      sections: [],
+      restricted: true
+    };
   }
   return result;
 }
@@ -1461,15 +1535,30 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
     data(response, ai.startAutoRunBatch(request.params.workId));
   });
+  app.get("/api/tasks/:taskId/detail", (request, response) => data(
+    response,
+    redactTaskCharacterNames(store.getTaskDetail(request.params.taskId), requestPermissions(request))
+  ));
+  app.get("/api/tasks/:taskId/result", (request, response) => {
+    const task = store.getTaskResultPayload(request.params.taskId);
+    const permissions = requestPermissions(request);
+    const requiredModule = requiredTaskResultModule(task.taskType);
+    if (requiredModule && permissions[requiredModule] === "none") {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该分析结果对应资料模块的权限");
+    }
+    const redacted = redactTaskCharacterNames(
+      task,
+      permissions
+    );
+    data(response, { taskId: task.id, result: redacted.result });
+  });
   app.get("/api/tasks/:taskId", (request, response) => data(
     response,
     redactTaskCharacterNames(store.getTask(request.params.taskId), requestPermissions(request))
   ));
   app.get("/api/tasks/:taskId/trace", (request, response) => data(response, ai.getTaskTrace(request.params.taskId)));
-  app.get("/api/tasks/:taskId/trace/calls/:callId", (request, response) => {
-    const full = parse(z.enum(["true", "false"]).default("false"), request.query.full ?? "false") === "true";
-    data(response, ai.getTaskTraceCall(request.params.taskId, request.params.callId, full));
-  });
+  app.get("/api/tasks/:taskId/trace/calls/:callId", (request, response) =>
+    data(response, ai.getTaskTraceCall(request.params.taskId, request.params.callId)));
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
     data(response, redactTaskCharacterNames(

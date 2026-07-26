@@ -1014,6 +1014,49 @@ describe("用户、作品权限与操作者追踪 API", () => {
       })
       .expect(201);
     expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER");
+    runtime.database.run(
+      "UPDATE analysis_tasks SET result_json = ? WHERE id = ?",
+      JSON.stringify({
+        relationshipResults: [{
+          relationshipId: "relationship_secret",
+          fromCharacterId: secretCharacter.body.data.id,
+          fromCharacterName: "TOP_SECRET_CHARACTER",
+          toCharacterId: "character_other",
+          toCharacterName: "TOP_SECRET_OTHER",
+          subtype: "盟友"
+        }],
+        analysisTarget: {
+          mode: "targeted-characters",
+          characterIds: [secretCharacter.body.data.id],
+          characterNames: ["TOP_SECRET_CHARACTER"]
+        }
+      }),
+      targetedTask.body.data.id
+    );
+    const secretTimeline = runtime.store.createTimelineEvent(workId, {
+      name: "TOP_SECRET_TIMELINE",
+      description: "TOP_SECRET_TIMELINE_DESCRIPTION",
+      eventType: "conflict",
+      timeLabel: "秘密年代",
+      chapterIds: [],
+      participantIds: [],
+      location: "秘密地点",
+      impactScope: "秘密范围"
+    }, "manual", "permission-readable-result-test");
+    const timelineTask = await owner.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ taskType: "timeline-analysis", scope: { type: "book" } })
+      .expect(201);
+    runtime.store.updateTask(String(timelineTask.body.data.id), {
+      status: "completed",
+      progress: 100,
+      result: { eventIds: [secretTimeline.id] }
+    });
+    const secretSelectionTask = await owner.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ taskType: "book-analysis", scope: { type: "selection", selection: "TOP_SECRET_SELECTION_PROSE" } })
+      .expect(201);
+    expect(secretSelectionTask.body.data.scopeSummary).toContain("TOP_SECRET_SELECTION_PROSE");
 
     const noContentPermissions = Object.fromEntries(Object.keys(basePermissions).map((module) => [module, "none"]));
     await owner.agent.patch(`/api/works/${workId}/members/${analysisOnly.user.userId}`)
@@ -1025,10 +1068,37 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const protectedTaskSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === targetedTask.body.data.id);
     expect(protectedTaskSummary.scopeSummary).toBe("全书 · 定向 1 人");
     expect(JSON.stringify(protectedTaskSummary)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedSelectionSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === secretSelectionTask.body.data.id);
+    expect(protectedSelectionSummary.scopeSummary).toBe("选定内容（正文读取权限受限）");
+    expect(JSON.stringify(protectedSelectionSummary)).not.toContain("TOP_SECRET_SELECTION_PROSE");
     const protectedTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}`).expect(200);
     expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人");
     expect(protectedTaskDetail.body.data.scope.targetCharacters).toBeUndefined();
+    expect(protectedTaskDetail.body.data.result.relationshipResults[0].fromCharacterName).toBeUndefined();
+    expect(protectedTaskDetail.body.data.result.relationshipResults[0].toCharacterName).toBeUndefined();
+    expect(protectedTaskDetail.body.data.result.analysisTarget.characterNames).toBeUndefined();
     expect(JSON.stringify(protectedTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedReadableTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}/detail`).expect(200);
+    expect(protectedReadableTaskDetail.body.data).not.toHaveProperty("result");
+    expect(protectedReadableTaskDetail.body.data.resultSummary.restricted).toBe(true);
+    expect(protectedReadableTaskDetail.body.data.resultSummary.sections).toEqual([]);
+    expect(JSON.stringify(protectedReadableTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedFullTaskResult = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}/result`).expect(403);
+    expect(protectedFullTaskResult.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const protectedTimelineDetail = await analysisOnly.agent.get(`/api/tasks/${timelineTask.body.data.id}/detail`).expect(200);
+    expect(protectedTimelineDetail.body.data.resultSummary.restricted).toBe(true);
+    expect(protectedTimelineDetail.body.data.resultSummary.sections).toEqual([]);
+    expect(JSON.stringify(protectedTimelineDetail.body.data)).not.toContain("TOP_SECRET_TIMELINE");
+    const protectedTimelineResult = await analysisOnly.agent.get(`/api/tasks/${timelineTask.body.data.id}/result`).expect(403);
+    expect(protectedTimelineResult.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const protectedSelectionDetail = await analysisOnly.agent.get(`/api/tasks/${secretSelectionTask.body.data.id}/detail`).expect(200);
+    expect(protectedSelectionDetail.body.data.scopeSummary).toBe("选定内容（正文读取权限受限）");
+    expect(protectedSelectionDetail.body.data.scope.selection).toBeUndefined();
+    expect(protectedSelectionDetail.body.data.scopeDetails).toEqual([{ type: "selection", restricted: true }]);
+    expect(protectedSelectionDetail.body.data.resultSummary.restricted).toBe(true);
+    expect(JSON.stringify(protectedSelectionDetail.body.data)).not.toContain("TOP_SECRET_SELECTION_PROSE");
+    const protectedSelectionResult = await analysisOnly.agent.get(`/api/tasks/${secretSelectionTask.body.data.id}/result`).expect(403);
+    expect(protectedSelectionResult.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})

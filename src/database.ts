@@ -464,6 +464,7 @@ export class Database {
         task_id TEXT NOT NULL REFERENCES analysis_tasks(id) ON DELETE CASCADE,
         initial_messages_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(initial_messages_json) AND json_type(initial_messages_json) = 'array'),
         rounds_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(rounds_json) AND json_type(rounds_json) = 'array'),
+        source_refs_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(source_refs_json) AND json_type(source_refs_json) = 'array'),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1662,6 +1663,7 @@ export class Database {
           task_id TEXT NOT NULL REFERENCES analysis_tasks(id) ON DELETE CASCADE,
           initial_messages_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(initial_messages_json) AND json_type(initial_messages_json) = 'array'),
           rounds_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(rounds_json) AND json_type(rounds_json) = 'array'),
+          source_refs_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(source_refs_json) AND json_type(source_refs_json) = 'array'),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         )`);
@@ -1685,6 +1687,22 @@ export class Database {
             CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object')`);
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (42, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(43)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_call_traces)").map((row) => String(row.name)));
+        if (!columns.has("source_refs_json")) {
+          this.run(`ALTER TABLE ai_call_traces ADD COLUMN source_refs_json TEXT NOT NULL DEFAULT '[]'
+            CHECK(json_valid(source_refs_json) AND json_type(source_refs_json) = 'array')`);
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (43, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

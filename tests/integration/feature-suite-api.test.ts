@@ -883,7 +883,36 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "book" } }).expect(201);
     expect(Object.keys(task.body.data.sourceVersions)).toHaveLength(3);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
-    expect(result.body.data.result).toMatchObject({ candidateCount: 1, rawCandidateCount: 2, coveredChapterCount: 3, fallbackSegmentCount: 0 });
+    expect(result.body.data.result).toMatchObject({
+      candidateCount: 1,
+      createdCount: 1,
+      updatedCount: 0,
+      unchangedCount: 0,
+      rawCandidateCount: 2,
+      coveredChapterCount: 3,
+      fallbackSegmentCount: 0,
+      analysisTarget: {
+        mode: "all-relationships",
+        scopeType: "book",
+        coveredChapterCount: 3
+      },
+      relationshipResults: [{
+        action: "created",
+        category: "social",
+        subtype: "朋友",
+        keywords: ["长期信任", "共同守望"],
+        currentStatus: "active",
+        evidenceCount: 1,
+        evidence: [{
+          chapterTitle: "第一章 埋线",
+          quote: "我们一直是朋友"
+        }]
+      }]
+    });
+    expect([
+      result.body.data.result.relationshipResults[0].fromCharacterName,
+      result.body.data.result.relationshipResults[0].toCharacterName
+    ].sort()).toEqual(["林舟", "沈星"].sort());
     expect(result.body.data.result.policyOmittedSegmentCount).toBeGreaterThan(0);
     const prompts = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).messages[1].content as string);
     expect(prompts.filter((prompt) => (prompt.match(/<CHAPTER id=/gu) ?? []).length > 1)).toHaveLength(1);
@@ -897,6 +926,24 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data).toHaveLength(1);
     expect(relationships.body.data[0]).toMatchObject({ subtype: "朋友", keywords: ["长期信任", "共同守望"], confirmationStatus: "pending" });
+    runtime.database.run(
+      "UPDATE analysis_tasks SET result_json = ? WHERE id = ?",
+      JSON.stringify({ relationshipIds: [relationships.body.data[0].id], candidateCount: 1, coveredChapterCount: 3 }),
+      task.body.data.id
+    );
+    const historicalTask = await request(runtime.app).get(`/api/tasks/${task.body.data.id}`).expect(200);
+    expect(historicalTask.body.data.result).toMatchObject({
+      relationshipResults: [{
+        relationshipId: relationships.body.data[0].id,
+        snapshotSource: "current-record",
+        subtype: "朋友"
+      }]
+    });
+    expect(historicalTask.body.data.result).not.toHaveProperty("storageTarget");
+    expect([
+      historicalTask.body.data.result.relationshipResults[0].fromCharacterName,
+      historicalTask.body.data.result.relationshipResults[0].toCharacterName
+    ].sort()).toEqual(["林舟", "沈星"].sort());
   });
 
   it("关系分析可将所有设定和额外提示加入每个抽取批次", async () => {
@@ -927,13 +974,108 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
         additionalPrompt: "重点检查退位者与继承人的师承变化。"
       }
     }).expect(201);
-    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定");
+    expect(task.body.data.scopeSummary).toBe("全书 + 设定集");
     await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(userPrompts.length).toBeGreaterThan(0);
-    expect(userPrompts.every((prompt) => prompt.includes("全部作品设定（关系分析参考）"))).toBe(true);
-    expect(userPrompts.every((prompt) => prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
-    expect(userPrompts.every((prompt) => prompt.includes("王位只能由正式继承人承接"))).toBe(true);
+    const settingPrompts = userPrompts.filter((prompt) => prompt.includes("<SETTING"));
+    expect(settingPrompts.length).toBeGreaterThan(0);
+    expect(settingPrompts.some((prompt) => prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
+    expect(settingPrompts.some((prompt) => prompt.includes("王位只能由正式继承人承接"))).toBe(true);
+    expect(userPrompts.filter((prompt) => prompt.includes("<CHAPTER")).every((prompt) => !prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
     expect(systemPrompts.every((prompt) => prompt.includes("作者追加的关系分析提示") && prompt.includes("重点检查退位者与继承人的师承变化"))).toBe(true);
+  });
+
+  it("可仅根据设定集分析人物关系且不要求章节", async () => {
+    let linId = "";
+    let shenId = "";
+    let settingId = "";
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+        fromCharacterId: linId,
+        toCharacterId: shenId,
+        category: "social",
+        subtype: "朋友",
+        keywords: ["自幼相识", "长期信任"],
+        directed: false,
+        currentStatus: "active",
+        confidence: 0.94,
+        timeRange: {},
+        evidence: [{
+          settingId,
+          settingTitle: "北港旧友",
+          quote: "林舟与沈星自幼相识，是彼此最信任的朋友。",
+          supports: "设定明确说明两人是长期朋友"
+        }]
+      }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const work = await request(runtime.app).post("/api/works").send({ title: "仅设定集关系分析" }).expect(201);
+    const workId = work.body.data.id as string;
+    const lin = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const shen = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    linId = lin.body.data.id as string;
+    shenId = shen.body.data.id as string;
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "北港旧友",
+      category: "人物关系",
+      content: "林舟与沈星自幼相识，是彼此最信任的朋友。",
+      locked: false
+    }).expect(201);
+    settingId = setting.body.data.id as string;
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "settings" }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toBe("仅设定集");
+    expect(task.body.data.sourceVersions).toMatchObject({
+      [`work:${workId}`]: 1,
+      [`setting:${settingId}`]: 1,
+      [`character:${linId}`]: 1,
+      [`character:${shenId}`]: 1
+    });
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      candidateCount: 1,
+      coveredChapterCount: 0,
+      coveredSettingCount: 4
+    });
+    expect(userPrompts).toHaveLength(1);
+    expect(userPrompts[0]).toContain(`<SETTING id="${settingId}" title="北港旧友">`);
+    expect(userPrompts[0]).not.toContain("<CHAPTER");
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(1);
+    expect(relationships.body.data[0]).toMatchObject({
+      subtype: "朋友",
+      evidence: [{ settingId, settingTitle: "北港旧友", quote: "林舟与沈星自幼相识，是彼此最信任的朋友。" }]
+    });
+  });
+
+  it("仅设定集任务在其他设定数据变化后过期", async () => {
+    runtime = createTestRuntime();
+    const work = await request(runtime.app).post("/api/works").send({ title: "设定新鲜度" }).expect(201);
+    const workId = String(work.body.data.id);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "守望会",
+      description: "负责旧港航线。"
+    }).expect(201);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "settings" }
+    }).expect(201);
+    expect(task.body.data.sourceVersions).toMatchObject({
+      [`work:${workId}`]: 1,
+      [`organization:${String(organization.body.data.id)}`]: 1
+    });
+
+    await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      description: "改为负责深空航线。"
+    }).expect(200);
+    const expired = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({}).expect(200);
+    expect(expired.body.data.status).toBe("expired");
   });
 
   it("选择角色后先收集跨章节证据再进行全局关系归纳", async () => {
@@ -960,6 +1102,9 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
           timeRange: { stages: ["北港重逢"] },
           evidence: [{ chapterId: userPrompt.match(/"chapterId":"([^"]+)"/u)?.[1], chapterTitle: "第一章 埋线", quote: "我们一直是朋友", contextType: "current", supports: "原文直接说明长期关系" }]
         }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (userPrompt.includes("<SETTING")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       const chapterId = userPrompt.match(/<CHAPTER id="([^"]+)"/u)?.[1] ?? "";
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
@@ -1004,12 +1149,12 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
         additionalPrompt: "重点检查失联前后的关系连续性。"
       }
     }).expect(201);
-    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定 · 定向 2 人：林舟、沈星");
+    expect(task.body.data.scopeSummary).toBe("全书 + 设定集 · 定向 2 人：林舟、沈星");
     expect(task.body.data.scope.targetCharacters).toEqual([{ id: linId, name: "林舟" }, { id: shenId, name: "沈星" }]);
     await request(runtime.app).patch(`/api/characters/${linId}`).send({ name: "林舟（调查员）" }).expect(200);
     const taskPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
     expect(taskPage.body.data.items.find((item: { id: string }) => item.id === task.body.data.id)?.scopeSummary)
-      .toBe("全书 + 所有设定 · 定向 2 人：林舟、沈星");
+      .toBe("全书 + 设定集 · 定向 2 人：林舟、沈星");
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({
       candidateCount: 1,
@@ -1018,17 +1163,206 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       aggregationBatchCount: 1,
       replacedRelationshipCount: 0
     });
-    expect(userPrompts).toHaveLength(2);
+    expect(userPrompts).toHaveLength(3);
     expect(userPrompts[0]).toContain("定向人物关系证据收集器");
-    expect(userPrompts[1]).toContain("小说人物关系全局归纳器");
-    expect(userPrompts[1]).toContain("沈星直接说明两人一直是朋友");
-    expect(userPrompts.every((prompt) => prompt.includes("北港旧约只认可长期互信"))).toBe(true);
+    expect(userPrompts.some((prompt) => prompt.includes("小说人物关系全局归纳器"))).toBe(true);
+    expect(userPrompts.some((prompt) => prompt.includes("沈星直接说明两人一直是朋友"))).toBe(true);
+    expect(userPrompts.every((prompt) => !prompt.includes("北港旧约只认可长期互信"))).toBe(true);
     expect(userPrompts.every((prompt) => prompt.includes("林舟") && prompt.includes("调查员"))).toBe(true);
     expect(systemPrompts.every((prompt) => prompt.includes("重点检查失联前后的关系连续性"))).toBe(true);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data.some((relationship: { id: string }) => relationship.id === unrelated.body.data.id)).toBe(true);
     expect(relationships.body.data.some((relationship: { fromCharacterId: string; toCharacterId: string; subtype: string }) =>
       new Set([relationship.fromCharacterId, relationship.toCharacterId]).has(linId) && relationship.subtype === "朋友"
+    )).toBe(true);
+  });
+
+  it("定向人物关系分析只发送命中人物名称或别名的章节与设定", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在旧港查看完整航海日志。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "这是一章完全无关的正文，不应发送。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[2].id}`).send({
+      content: "另一章也没有目标人物，不应发送。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "纪宁", aliases: ["阿宁"] }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾川" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "旧港盟约",
+      category: "人物关系",
+      content: "阿宁与顾川在旧港订立了长期守望盟约。"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "无关天文规则",
+      category: "世界规则",
+      content: "双月每隔百年重合一次，不含目标人物。",
+      locked: true
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "旁观者",
+      attributes: { identity: "绝密旁观者自动注入标记" },
+      lockedFields: ["identity"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "守望会",
+      description: "负责旧港航线。",
+      memberIds: [target.body.data.id]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "星图局",
+      description: "无关组织自动注入标记。"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      coveredChapterCount: 1,
+      targetedCharacterIds: [target.body.data.id]
+    });
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("阿宁在旧港查看完整航海日志。");
+    expect(sent).not.toContain("这是一章完全无关的正文，不应发送。");
+    expect(sent).not.toContain("另一章也没有目标人物，不应发送。");
+    expect(sent).toContain("阿宁与顾川在旧港订立了长期守望盟约。");
+    expect(sent).not.toContain("双月每隔百年重合一次，不含目标人物。");
+    expect(sent).not.toContain("绝密旁观者自动注入标记");
+    expect(sent).not.toContain("无关组织自动注入标记");
+    expect(sent).toContain('title="组织设定：守望会"');
+  });
+
+  it("仅在发送给 AI 时合并正文和设定中的连续空行", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    const chapterContent = "林舟进入旧港。\n\n\n \n沈星随后抵达。";
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({ content: chapterContent }).expect(200);
+    const settingContent = "林舟负责守望。\n\n\n\n沈星负责导航。";
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "旧港职责",
+      category: "人物关系",
+      content: settingContent
+    }).expect(201);
+    runtime.database.run("UPDATE chapters SET content = ? WHERE id = ?", chapterContent, chapters[0].id);
+    runtime.database.run("UPDATE settings SET content = ? WHERE id = ?", settingContent, setting.body.data.id);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("林舟进入旧港。\n\n沈星随后抵达。");
+    expect(sent).not.toContain("林舟进入旧港。\n\n\n");
+    expect(sent).toContain("林舟负责守望。\\n\\n沈星负责导航。");
+    expect(sent).not.toContain("林舟负责守望。\\n\\n\\n");
+    const storedChapter = await request(runtime.app).get(`/api/chapters/${chapters[0].id}`).expect(200);
+    const storedSetting = await request(runtime.app).get(`/api/settings/${setting.body.data.id}`).expect(200);
+    expect(storedChapter.body.data.content).toBe(chapterContent);
+    expect(storedSetting.body.data.content).toBe(settingContent);
+  });
+
+  it("未勾选覆盖时保留已有关系且只追加不存在的关系", async () => {
+    let chapterId = "";
+    let linId = "";
+    let shenId = "";
+    let qiaoId = "";
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+      fromCharacterId: linId,
+      toCharacterId: shenId,
+      category: "social",
+      subtype: "朋友",
+      keywords: ["模型新关键词"],
+      directed: false,
+      currentStatus: "模型新状态",
+      confidence: 0.98,
+      timeRange: {},
+      evidence: [{ chapterId, quote: "林舟和沈星一直是朋友", supports: "明确朋友关系" }]
+    }, {
+      fromCharacterId: linId,
+      toCharacterId: qiaoId,
+      category: "social",
+      subtype: "盟友",
+      keywords: ["正式结盟", "共同守望"],
+      directed: false,
+      currentStatus: "active",
+      confidence: 0.92,
+      timeRange: {},
+      evidence: [{ chapterId, quote: "林舟与乔安正式结盟", supports: "明确联盟关系" }]
+    }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    chapterId = String(chapters[0].id);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
+      content: "林舟和沈星一直是朋友。林舟与乔安正式结盟。"
+    }).expect(200);
+    const lin = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const shen = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const qiao = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "乔安" }).expect(201);
+    const ye = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "叶宁" }).expect(201);
+    linId = lin.body.data.id as string;
+    shenId = shen.body.data.id as string;
+    qiaoId = qiao.body.data.id as string;
+    const existingFriend = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: linId,
+      toCharacterId: shenId,
+      category: "social",
+      subtype: "朋友",
+      keywords: ["作者原关键词"],
+      directed: false,
+      currentStatus: "作者原状态",
+      confidence: 0.7,
+      confirmationStatus: "pending"
+    }).expect(201);
+    const unrelatedPending = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: qiaoId,
+      toCharacterId: ye.body.data.id,
+      category: "conflict",
+      subtype: "竞争者",
+      directed: false,
+      confirmationStatus: "pending"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book" }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result.candidateCount).toBe(1);
+    expect(result.body.data.result.skipped.some((item: { reason: string }) => item.reason.includes("追加模式不更新"))).toBe(true);
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(3);
+    expect(relationships.body.data.find((item: { id: string }) => item.id === existingFriend.body.data.id)).toMatchObject({
+      keywords: ["作者原关键词"],
+      currentStatus: "作者原状态",
+      confidence: 0.7,
+      evidence: [],
+      versionNo: 1
+    });
+    expect(relationships.body.data.some((item: { id: string }) => item.id === unrelatedPending.body.data.id)).toBe(true);
+    expect(relationships.body.data.some((item: { fromCharacterId: string; toCharacterId: string; subtype: string }) =>
+      new Set([item.fromCharacterId, item.toCharacterId]).has(linId)
+      && new Set([item.fromCharacterId, item.toCharacterId]).has(qiaoId)
+      && item.subtype === "盟友"
     )).toBe(true);
   });
 
@@ -1431,7 +1765,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data.filter((item: { subtype: string }) => item.subtype === "朋友")).toHaveLength(2);
   });
 
-  it("新强关系原地升级已有待确认弱关系", async () => {
+  it("追加模式把新强关系新增为独立边并保留已有弱关系", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
       fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
@@ -1450,11 +1784,34 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     }).expect(201);
     const modelId = await configureAi(runtime, workId);
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "chapter", chapterId } }).expect(201);
-    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      createdCount: 1,
+      updatedCount: 0,
+      unchangedCount: 0,
+      relationshipResults: [{
+        action: "created",
+        subtype: "盟友",
+        keywords: ["正式结盟", "共同守望"]
+      }]
+    });
+    expect(result.body.data.result.relationshipResults[0].relationshipId).not.toBe(weaker.body.data.id);
+    expect([
+      result.body.data.result.relationshipResults[0].fromCharacterName,
+      result.body.data.result.relationshipResults[0].toCharacterName
+    ].sort()).toEqual(["林舟", "沈星"].sort());
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
-    expect(relationships.body.data).toHaveLength(1);
-    expect(relationships.body.data[0]).toMatchObject({ id: weaker.body.data.id, subtype: "盟友", confidence: 0.95 });
-    expect(relationships.body.data[0].keywords).toEqual(["旧有信任", "正式结盟", "共同守望"]);
+    expect(relationships.body.data).toHaveLength(2);
+    expect(relationships.body.data.find((item: { id: string }) => item.id === weaker.body.data.id)).toMatchObject({
+      subtype: "朋友",
+      confidence: 0.5,
+      keywords: ["旧有信任"],
+      versionNo: 1
+    });
+    expect(relationships.body.data.find((item: { subtype: string }) => item.subtype === "盟友")).toMatchObject({
+      confidence: 0.95,
+      keywords: ["正式结盟", "共同守望"]
+    });
   });
 
   it("同义社会关系不能绕过长期证据且明示结盟可通过", async () => {
@@ -1481,7 +1838,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0]).toMatchObject({ subtype: "盟友" });
   });
 
-  it("目标强边已存在时先合并强边再清理弱边", async () => {
+  it("追加模式遇到已有强边时不合并证据也不清理弱边", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
       fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
@@ -1506,11 +1863,19 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "chapter", chapterId } }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data).toMatchObject({ status: "review" });
+    expect(result.body.data.result.candidateCount).toBe(0);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
-    expect(relationships.body.data).toHaveLength(1);
-    expect(relationships.body.data[0]).toMatchObject({ id: stronger.body.data.id, subtype: "盟友", confidence: 0.97 });
-    expect(relationships.body.data[0].evidence).toHaveLength(1);
-    expect(relationships.body.data.some((item: { id: string }) => item.id === weaker.body.data.id)).toBe(false);
+    expect(relationships.body.data).toHaveLength(2);
+    expect(relationships.body.data.find((item: { id: string }) => item.id === stronger.body.data.id)).toMatchObject({
+      subtype: "盟友",
+      confidence: 0.5,
+      evidence: [],
+      versionNo: 1
+    });
+    expect(relationships.body.data.find((item: { id: string }) => item.id === weaker.body.data.id)).toMatchObject({
+      subtype: "朋友",
+      versionNo: 1
+    });
   });
 
   it("拒绝礼称君臣和救援血亲，并把单场宿敌降级为战时敌对", async () => {
