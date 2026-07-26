@@ -1031,7 +1031,12 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       scope: { type: "settings" }
     }).expect(201);
     expect(task.body.data.scopeSummary).toBe("仅设定集");
-    expect(task.body.data.sourceVersions).toEqual({ [`setting:${settingId}`]: 1 });
+    expect(task.body.data.sourceVersions).toMatchObject({
+      [`work:${workId}`]: 1,
+      [`setting:${settingId}`]: 1,
+      [`character:${linId}`]: 1,
+      [`character:${shenId}`]: 1
+    });
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({
       candidateCount: 1,
@@ -1047,6 +1052,30 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       subtype: "朋友",
       evidence: [{ settingId, settingTitle: "北港旧友", quote: "林舟与沈星自幼相识，是彼此最信任的朋友。" }]
     });
+  });
+
+  it("仅设定集任务在其他设定数据变化后过期", async () => {
+    runtime = createTestRuntime();
+    const work = await request(runtime.app).post("/api/works").send({ title: "设定新鲜度" }).expect(201);
+    const workId = String(work.body.data.id);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "守望会",
+      description: "负责旧港航线。"
+    }).expect(201);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "settings" }
+    }).expect(201);
+    expect(task.body.data.sourceVersions).toMatchObject({
+      [`work:${workId}`]: 1,
+      [`organization:${String(organization.body.data.id)}`]: 1
+    });
+
+    await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      description: "改为负责深空航线。"
+    }).expect(200);
+    const expired = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({}).expect(200);
+    expect(expired.body.data.status).toBe("expired");
   });
 
   it("选择角色后先收集跨章节证据再进行全局关系归纳", async () => {

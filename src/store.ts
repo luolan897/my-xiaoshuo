@@ -5275,6 +5275,41 @@ export class Store {
     return createHash("sha256").update(content).digest("hex");
   }
 
+  private relationshipSettingsSourceVersions(workId: string): Record<string, number | string> {
+    const versions: Record<string, number | string> = {};
+    const work = this.getWork(workId);
+    versions[`work:${workId}`] = Number(work.versionNo);
+    for (const setting of this.listSettings(workId)) versions[`setting:${String(setting.id)}`] = Number(setting.versionNo);
+    const characters = this.listCharacters(workId, true);
+    for (const character of characters) {
+      versions[`character:${String(character.id)}`] = Number(character.versionNo);
+      for (const section of this.listCharacterProfileSections(String(character.id))) {
+        versions[`character-section:${String(section.id)}`] = Number(section.versionNo);
+      }
+    }
+    for (const race of this.listRaces(workId)) versions[`race:${String(race.id)}`] = Number(race.versionNo);
+    for (const organization of this.listOrganizations(workId)) {
+      versions[`organization:${String(organization.id)}`] = Number(organization.versionNo);
+    }
+    for (const track of this.listTimelineTracks(workId)) versions[`timeline-track:${String(track.id)}`] = Number(track.versionNo);
+    for (const event of this.listTimelineEvents(workId)) versions[`timeline-event:${String(event.id)}`] = Number(event.versionNo);
+    for (const relationship of this.listRelationships(workId)) {
+      versions[`relationship:${String(relationship.id)}`] = Number(relationship.versionNo);
+    }
+    for (const outline of this.listChapterOutlines(workId)) {
+      const chapterId = String(outline.chapterId);
+      versions[`chapter-meta:${chapterId}`] = Number(this.getChapter(chapterId).versionNo);
+      versions[`chapter-outline:${chapterId}`] = this.currentEntityVersionNo("chapter-outline", chapterId);
+    }
+    for (const foreshadow of this.listForeshadows(workId)) {
+      versions[`foreshadow:${String(foreshadow.id)}`] = Number(foreshadow.versionNo);
+    }
+    for (const review of this.listReviewItems(workId)) {
+      versions[`review:${String(review.id)}`] = String(review.updatedAt);
+    }
+    return versions;
+  }
+
   private mapContinuationGuard(row: Row): Record<string, unknown> {
     return {
       id: requiredString(row, "id"),
@@ -5295,7 +5330,7 @@ export class Store {
     const taskId = id("task");
     const timestamp = now();
     const scope = { ...(input.scope ?? { type: "book" }) };
-    const sourceVersions: Record<string, number> = {};
+    const sourceVersions: Record<string, number | string> = {};
     const targetCharacters: Array<{ id: string; name: string }> = [];
     if (Array.isArray(scope.characterIds)) {
       for (const characterId of scope.characterIds) {
@@ -5321,9 +5356,7 @@ export class Store {
         sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
       }
     } else if (scope.type === "settings") {
-      for (const setting of this.listSettings(workId)) {
-        sourceVersions[`setting:${String(setting.id)}`] = Number(setting.versionNo);
-      }
+      Object.assign(sourceVersions, this.relationshipSettingsSourceVersions(workId));
     }
     this.db.run(
       `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
@@ -5428,10 +5461,9 @@ export class Store {
   isTaskSourceCurrent(taskId: string): boolean {
     const task = this.getTask(taskId);
     const scope = task.scope as Record<string, unknown>;
-    const expected = task.sourceVersions as Record<string, number>;
+    const expected = task.sourceVersions as Record<string, number | string>;
     if (scope.type === "settings") {
-      const current = Object.fromEntries(this.listSettings(String(task.workId))
-        .map((setting) => [`setting:${String(setting.id)}`, Number(setting.versionNo)]));
+      const current = this.relationshipSettingsSourceVersions(String(task.workId));
       const expectedIds = Object.keys(expected).sort();
       const currentIds = Object.keys(current).sort();
       return expectedIds.length === currentIds.length
@@ -5458,6 +5490,18 @@ export class Store {
     const currentIds = Object.keys(current).sort();
     return expectedIds.length === currentIds.length
       && expectedIds.every((chapterId, index) => chapterId === currentIds[index] && expected[chapterId] === current[chapterId]);
+  }
+
+  refreshTaskSourceVersions(taskId: string): void {
+    const task = this.getTask(taskId);
+    const scope = task.scope as Record<string, unknown>;
+    if (scope.type !== "settings") return;
+    this.db.run(
+      "UPDATE analysis_tasks SET source_versions_json = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify(this.relationshipSettingsSourceVersions(String(task.workId))),
+      now(),
+      taskId
+    );
   }
 
   cancelTask(taskId: string): Record<string, unknown> {

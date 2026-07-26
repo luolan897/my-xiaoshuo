@@ -4251,6 +4251,7 @@ export class AiManager {
       });
     };
     let replacedRelationshipCount = 0;
+    if (!this.taskCanCommit(taskId)) return { interrupted: true, callIds };
     this.store.db.transaction(() => {
       if (targeted && scope.replaceExistingRelationships === true) {
         const relationshipsToReplace = this.store.listRelationships(workId).filter((relationship) =>
@@ -4447,6 +4448,7 @@ export class AiManager {
         recordRelationshipOutcome("created", relationship);
         existing.push(relationship);
       }
+      if (taskId && settingsOnly) this.store.refreshTaskSourceVersions(taskId);
     });
     const characterNameById = new Map(characters.map((character) => [String(character.id), String(character.name)]));
     const relationshipResults = [...relationshipOutcomes.values()].map(({ action, relationship }) => {
