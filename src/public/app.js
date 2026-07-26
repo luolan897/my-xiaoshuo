@@ -3655,14 +3655,15 @@ async function renderCharacters(page = characterListPage) {
     : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
-  [state.characters, state.races, state.organizations] = [characterPage.items, races, organizations];
+  const pageCharacters = characterPage.items;
+  [state.races, state.organizations] = [races, organizations];
   mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
   const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
   const characterLockBadge = (item) => item.lockedFields.length
     ? `<span class="character-lock-badge" aria-label="${item.lockedFields.length} 个锁定字段" title="锁定字段：${esc(item.lockedFields.join("、"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>${item.lockedFields.length}</span></span>`
     : "";
-  const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
+  const characterCards = () => `<div class="card-grid">${pageCharacters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
     <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
@@ -3677,7 +3678,7 @@ async function renderCharacters(page = characterListPage) {
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
     </article>`;
   }).join("")}</div>`;
-  const characterRows = () => `<div class="module-row-list">${state.characters.map((item) => {
+  const characterRows = () => `<div class="module-row-list">${pageCharacters.map((item) => {
     const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${characterStateFieldLabel(key)}：${value}`).join(" ") || "尚未记录当前状态");
     const meta = [
       item.code ? `编号 ${item.code}` : "",
@@ -3693,10 +3694,10 @@ async function renderCharacters(page = characterListPage) {
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
-  const pagination = state.characters.length && (characterPage.page > 1 || characterPage.hasMore)
+  const pagination = pageCharacters.length && (characterPage.page > 1 || characterPage.hasMore)
     ? `<nav class="module-pagination" aria-label="角色列表分页">
       <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
-      <span>第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页 · 本页 ${state.characters.length} 个角色 · 共 ${characterPage.total} 个角色</span>
+      <span>第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页 · 本页 ${pageCharacters.length} 个角色 · 共 ${characterPage.total} 个角色</span>
       <button type="button" data-character-page="${characterPage.nextPage ?? characterPage.page + 1}" ${characterPage.hasMore ? "" : "disabled"}>下一页</button>
     </nav>`
     : "";
@@ -3715,8 +3716,8 @@ async function renderCharacters(page = characterListPage) {
     <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
   mountCharacterFilterToggle();
-  if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
-  $("#module-content").innerHTML = filterToolbar + (state.characters.length
+  if (pageCharacters.length) mountModuleLayoutToggle(layout, "角色列表样式");
+  $("#module-content").innerHTML = filterToolbar + (pageCharacters.length
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
@@ -3745,8 +3746,8 @@ async function renderCharacters(page = characterListPage) {
     $("#module-content").querySelectorAll("[data-character-page]").forEach((control) => { control.disabled = true; });
     await renderCharacters(Number(button.dataset.characterPage));
   }));
-  bindRecordPreview("[data-open-character]", (id) => openCharacterEditor(state.characters.find((item) => item.id === id), { readOnly: true }));
-  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
+  bindRecordPreview("[data-open-character]", (id) => openCharacterEditor(pageCharacters.find((item) => item.id === id), { readOnly: true }));
+  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(pageCharacters.find((item) => item.id === button.dataset.editCharacter))));
 }
 
 async function renderRaces(page = moduleListPages.races) {
@@ -6780,9 +6781,10 @@ async function showCharacterHistory() {
 
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
-  [state.races, state.organizations] = await Promise.all([
+  [state.races, state.organizations, state.characters] = await Promise.all([
     canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
+    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];

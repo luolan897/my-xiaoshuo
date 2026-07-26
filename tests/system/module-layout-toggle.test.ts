@@ -24,8 +24,8 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260727-inline-save-spacing-v2');
-    expect(page.text).toContain('/app.js?v=20260727-all-module-pagination-v2');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260727-all-module-pagination-v2"></script>');
+    expect(page.text).toContain('/app.js?v=20260727-character-pagination-cache-v1');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260727-character-pagination-cache-v1"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -97,7 +97,7 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain(".module-count-badge { display: inline-grid; min-width: 28px; height: 28px;");
     expect(styles.text).toContain(".module-header h1 { margin: 0 0 6px; font-weight: 500; font-size: 24px;");
     expect(application.text).toContain("characterPage.hasMore");
-    expect(application.text).toContain("state.characters.length && (characterPage.page > 1 || characterPage.hasMore)");
+    expect(application.text).toContain("pageCharacters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
     expect(application.text).toContain('const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;');
     expect(application.text).toContain('hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`)');
