@@ -24,8 +24,8 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260726-settings-select-spacing-v1');
-    expect(page.text).toContain('/app.js?v=20260726-settings-parent-navigation-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260726-settings-parent-navigation-v1"></script>');
+    expect(page.text).toContain('/app.js?v=20260726-relationship-pinyin-v10');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260726-relationship-pinyin-v10"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -58,9 +58,11 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('function openReviewDetailDialog(item)');
     expect(application.text).toContain('data-open-review="${esc(item.id)}" role="button" tabindex="0"');
     expect(application.text).toContain('bindRecordPreview("[data-open-review]"');
+    expect(application.text).toContain('entry.sourceTitle || entry.chapterTitle || entry.chapterId');
+    expect(application.text).toContain('置信度 ${Math.round(entry.confidence * 100)}%');
     expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
     expect(application.text).toContain('hideCancel: true');
-    expect(application.text).toContain('/display-labels.js?v=20260725-state-field-zh');
+    expect(application.text).toContain('/display-labels.js?v=20260726-character-name-variant');
     expect(application.text).toContain('settingStatusLabel(item.status)');
     expect(application.text).not.toContain('characterVisibilityLabel(item.visibility)');
     expect(application.text).toContain('timelineStatusLabel(item.status)');
