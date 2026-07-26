@@ -1382,6 +1382,9 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", code: "A17" }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
     const modelId = await configureAi(runtime, workId);
+    (runtime.ai as unknown as { relationshipFuzzyIndexMatches: () => Set<string> }).relationshipFuzzyIndexMatches = () => {
+      throw new Error("两字名称不应先经过可能截断身份锚点的普通模糊索引查询");
+    };
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "relationship-analysis",
       scope: { type: "book", characterIds: [target.body.data.id] }
