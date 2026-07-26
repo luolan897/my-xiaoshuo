@@ -6298,7 +6298,8 @@ export class Store {
         characterIds: targetCharacters.map((character) => String(character.id ?? "")).filter(Boolean),
         characterNames: targetCharacters.map((character) => String(character.name ?? "")).filter(Boolean),
         coveredChapterCount: Number(result.coveredChapterCount ?? 0),
-        includeAllSettings: scope.includeAllSettings === true
+        includeAllSettings: scope.includeAllSettings === true,
+        preFilterRelationshipSources: targetCharacters.length > 0 && scope.preFilterRelationshipSources !== false
       },
     });
   }
@@ -6458,10 +6459,11 @@ export class Store {
       : [];
     if (characterIds.length === 0) return "";
     const overwriteSuffix = scope.replaceExistingRelationships === true ? " · 覆盖已有关系" : "";
-    if (!includeCharacterNames) return ` · 定向 ${characterIds.length} 人${overwriteSuffix}`;
+    const preFilterSuffix = scope.preFilterRelationshipSources === false ? " · 未前置过滤" : "";
+    if (!includeCharacterNames) return ` · 定向 ${characterIds.length} 人${preFilterSuffix}${overwriteSuffix}`;
     const snapshotNames = this.taskCharacterSnapshotNames(scope);
     const names = characterIds.map((characterId) => snapshotNames.get(characterId) ?? characterNames.get(characterId) ?? "已删除角色");
-    return ` · 定向 ${characterIds.length} 人：${names.join("、")}${overwriteSuffix}`;
+    return ` · 定向 ${characterIds.length} 人：${names.join("、")}${preFilterSuffix}${overwriteSuffix}`;
   }
 
   private taskCharacterSnapshotNames(scope: Record<string, unknown>): Map<string, string> {

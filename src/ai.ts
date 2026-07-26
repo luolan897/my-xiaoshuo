@@ -4892,16 +4892,17 @@ export class AiManager {
       if (!character) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
     }
     const targeted = selectedCharacterIds.size > 0;
+    const preFilterRelationshipSources = targeted && scope.preFilterRelationshipSources !== false;
     const targetedRoster = characters
       .filter((character) => selectedCharacterIds.has(String(character.id)))
       .map((character) => `${String(character.id)} | ${String(character.name)}`)
       .join("\n");
-    const sourceSelection = targeted
+    const sourceSelection = preFilterRelationshipSources
       ? await this.selectRelationshipSources(workId, scope, characters, selectedCharacterIds, modelId, taskId)
       : null;
-    const scopedChapters = targeted ? [] : settingsOnly ? [] : this.getScopeChapters(workId, scope);
+    const scopedChapters = preFilterRelationshipSources || settingsOnly ? [] : this.getScopeChapters(workId, scope);
     const chapters = sourceSelection?.chapters ?? scopedChapters;
-    const availableSettings = targeted ? [] : settingsOnly || scope.includeAllSettings === true
+    const availableSettings = !preFilterRelationshipSources && (settingsOnly || scope.includeAllSettings === true)
       ? this.relationshipSettingSources(workId, characters)
       : [];
     const settings = sourceSelection?.settings ?? availableSettings;
@@ -4918,7 +4919,9 @@ export class AiManager {
         relationshipIds: [],
         candidateCount: 0,
         rawCandidateCount: 0,
-        skipped: [{ index: -1, reason: "没有章节或设定数据命中被分析角色的名称或别名" }],
+        skipped: [{ index: -1, reason: preFilterRelationshipSources
+          ? "没有章节或设定数据命中被分析角色的名称或别名"
+          : "人物关系分析范围内没有章节或设定数据" }],
         batchCount: 0,
         coveredChapterCount: 0,
         coveredSettingCount: 0,
@@ -4928,6 +4931,7 @@ export class AiManager {
         targetedEvidenceCount: 0,
         aggregationBatchCount: 0,
         replacedRelationshipCount: 0,
+        preFilterRelationshipSources,
         sourceSelection: sourceSelection?.summary,
         callIds: sourceSelection?.verificationCallIds ?? []
       };
@@ -5624,7 +5628,8 @@ export class AiManager {
       targetedCharacterCount: selectedCharacterIds.size,
       targetedEvidenceCount,
       aggregationBatchCount,
-      replacedRelationshipCount
+      replacedRelationshipCount,
+      preFilterRelationshipSources
     });
     return {
       relationshipIds,
@@ -5641,7 +5646,8 @@ export class AiManager {
           .filter((character) => selectedCharacterIds.has(String(character.id)))
           .map((character) => String(character.name)),
         coveredChapterCount: chapters.length,
-        includeAllSettings: scope.includeAllSettings === true
+        includeAllSettings: scope.includeAllSettings === true,
+        preFilterRelationshipSources
       },
       rawCandidateCount: rawCandidates.length,
       skipped,
@@ -5654,6 +5660,7 @@ export class AiManager {
       targetedEvidenceCount,
       aggregationBatchCount,
       replacedRelationshipCount,
+      preFilterRelationshipSources,
       ...(sourceSelection ? { sourceSelection: sourceSelection.summary } : {}),
       callIds
     };

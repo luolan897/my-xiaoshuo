@@ -415,6 +415,7 @@ const relationshipAnalysisScopeSchema = z.object({
   includeAllSettings: z.boolean().optional(),
   additionalPrompt: z.string().trim().max(10_000).optional(),
   characterIds: z.array(identifier).max(20).optional(),
+  preFilterRelationshipSources: z.boolean().optional(),
   replaceExistingRelationships: z.boolean().optional()
 }).strict().superRefine((scope, context) => {
   if (scope.type === "chapter" && !scope.chapterId) {
@@ -429,6 +430,9 @@ const relationshipAnalysisScopeSchema = z.object({
   if (scope.replaceExistingRelationships && !scope.characterIds?.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["replaceExistingRelationships"], message: "覆盖已有关系前必须选择被分析角色" });
   }
+  if (scope.preFilterRelationshipSources !== undefined && !scope.characterIds?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["preFilterRelationshipSources"], message: "来源前置过滤仅支持定向人物关系分析" });
+  }
 });
 const analysisTaskSchema = z.union([
   z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional(), modelId: identifier.optional() }).strict(),
@@ -438,6 +442,9 @@ const analysisTaskSchema = z.union([
     }
     if (input.scope?.additionalPrompt !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "additionalPrompt"], message: "额外分析提示仅支持人物关系分析" });
+    }
+    if (input.scope?.preFilterRelationshipSources !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "preFilterRelationshipSources"], message: "来源前置过滤仅支持人物关系分析" });
     }
     if (input.scope?.characterIds !== undefined || input.scope?.replaceExistingRelationships !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "characterIds"], message: "被分析角色仅支持人物关系分析" });

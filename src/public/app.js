@@ -6487,7 +6487,11 @@ async function openTaskDialog() {
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
     <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。默认仅追加不存在的关系，不修改或删除已有关系。</span></p>
-    <div class="relationship-overwrite-card hidden">
+    <div class="relationship-overwrite-card relationship-prefilter-card">
+      <label class="checkbox-field"><input name="preFilterRelationshipSources" type="checkbox" checked disabled><span>分析前按人物名称和拼音过滤来源</span></label>
+      <p>仅对定向人物分析生效。取消勾选后，将跳过前置过滤，无差别发送所选范围内的全部章节和设定来源。</p>
+    </div>
+    <div class="relationship-overwrite-card relationship-existing-overwrite-card hidden">
       <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
       <p>勾选后，任务成功时会先删除所有涉及所选角色的旧关系，再写入本次分析结果；不勾选则只追加新关系。</p>
     </div>
@@ -6501,12 +6505,13 @@ async function openTaskDialog() {
     const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
     const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
+    const preFilterRelationshipSources = characterIds.length > 0 && form.get("preFilterRelationshipSources") === "on";
     const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
     const scope = settingsOnly
-      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
-      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
-      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     taskListPage = 1;
     toast("分析任务已创建，已进入任务队列");
@@ -6534,8 +6539,9 @@ async function openTaskDialog() {
   const relationshipCharacterCount = relationshipOptions.querySelector("[data-relationship-character-count]");
   const relationshipCharacterClear = relationshipOptions.querySelector("[data-relationship-character-clear]");
   const relationshipCharacterEmpty = relationshipOptions.querySelector("[data-relationship-character-empty]");
+  const preFilterRelationships = relationshipOptions.querySelector('input[name="preFilterRelationshipSources"]');
   const replaceRelationships = relationshipOptions.querySelector('input[name="replaceExistingRelationships"]');
-  const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-overwrite-card");
+  const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-existing-overwrite-card");
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
   allSettingsOption.textContent = "全书 + 设定集";
@@ -6593,6 +6599,7 @@ async function openTaskDialog() {
     for (const input of relationshipCharacterInputs) input.disabled = !enabled;
     if (!enabled) setRelationshipCharacterBubbleOpen(false);
     const hasSelectedCharacters = enabled && relationshipCharacterInputs.some((input) => input.checked);
+    preFilterRelationships.disabled = !hasSelectedCharacters;
     replaceRelationships.disabled = !hasSelectedCharacters;
     relationshipOverwriteCard.classList.toggle("hidden", !hasSelectedCharacters);
     if (!hasSelectedCharacters) replaceRelationships.checked = false;
