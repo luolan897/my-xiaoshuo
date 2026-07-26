@@ -1083,21 +1083,22 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(protectedReadableTaskDetail.body.data.resultSummary.restricted).toBe(true);
     expect(protectedReadableTaskDetail.body.data.resultSummary.sections).toEqual([]);
     expect(JSON.stringify(protectedReadableTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
-    const protectedFullTaskResult = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}/result`).expect(200);
-    expect(protectedFullTaskResult.body.data.result.relationshipResults[0].fromCharacterName).toBeUndefined();
-    expect(protectedFullTaskResult.body.data.result.relationshipResults[0].toCharacterName).toBeUndefined();
-    expect(protectedFullTaskResult.body.data.result.analysisTarget.characterNames).toBeUndefined();
-    expect(JSON.stringify(protectedFullTaskResult.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedFullTaskResult = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}/result`).expect(403);
+    expect(protectedFullTaskResult.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     const protectedTimelineDetail = await analysisOnly.agent.get(`/api/tasks/${timelineTask.body.data.id}/detail`).expect(200);
     expect(protectedTimelineDetail.body.data.resultSummary.restricted).toBe(true);
     expect(protectedTimelineDetail.body.data.resultSummary.sections).toEqual([]);
     expect(JSON.stringify(protectedTimelineDetail.body.data)).not.toContain("TOP_SECRET_TIMELINE");
+    const protectedTimelineResult = await analysisOnly.agent.get(`/api/tasks/${timelineTask.body.data.id}/result`).expect(403);
+    expect(protectedTimelineResult.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     const protectedSelectionDetail = await analysisOnly.agent.get(`/api/tasks/${secretSelectionTask.body.data.id}/detail`).expect(200);
     expect(protectedSelectionDetail.body.data.scopeSummary).toBe("选定内容（正文读取权限受限）");
     expect(protectedSelectionDetail.body.data.scope.selection).toBeUndefined();
     expect(protectedSelectionDetail.body.data.scopeDetails).toEqual([{ type: "selection", restricted: true }]);
     expect(protectedSelectionDetail.body.data.resultSummary.restricted).toBe(true);
     expect(JSON.stringify(protectedSelectionDetail.body.data)).not.toContain("TOP_SECRET_SELECTION_PROSE");
+    const protectedSelectionResult = await analysisOnly.agent.get(`/api/tasks/${secretSelectionTask.body.data.id}/result`).expect(403);
+    expect(protectedSelectionResult.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
