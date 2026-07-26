@@ -826,6 +826,50 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(invalidBody.body.error.code).toBe("VALIDATION_ERROR");
   });
 
+  it("重跑关系任务时重新筛选已经变化的预检来源", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    const modelId = await configureAi(runtime, workId);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "林舟"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: {
+        type: "book",
+        characterIds: [target.body.data.id],
+        preFilterRelationshipSources: true,
+        relationshipSourceRefs: [{
+          sourceType: "chapter",
+          sourceId: chapters[0].id,
+          sourceVersion: String(chapters[0].versionNo)
+        }]
+      }
+    }).expect(201);
+    runtime.store.updateTask(original.body.data.id, { status: "completed", progress: 100, result: {} });
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "林舟与沈星在北港重新订立盟约。"
+    }).expect(200);
+
+    const rerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(201);
+    expect(rerun.body.data.scope).not.toHaveProperty("relationshipSourceRefs");
+    expect(rerun.body.data.sourceVersions[chapters[0].id]).toBe(2);
+    const completed = await request(runtime.app).post(`/api/tasks/${rerun.body.data.id}/run`).send({}).expect(200);
+    expect(completed.body.data.status).toBe("review");
+    expect(userPrompts.join("\n")).toContain("林舟与沈星在北港重新订立盟约。");
+  });
+
   it("续写前自动装载相关人物、大纲和伏笔，续写后返回冲突卡并绑定文本哈希", async () => {
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens: number };

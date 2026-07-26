@@ -2020,7 +2020,11 @@ export class AiManager {
     const originalScope = original.scope && typeof original.scope === "object" && !Array.isArray(original.scope)
       ? original.scope as Record<string, unknown>
       : {};
-    const { targetCharacters: _targetCharacters, ...scope } = originalScope;
+    const {
+      targetCharacters: _targetCharacters,
+      relationshipSourceRefs: _relationshipSourceRefs,
+      ...scope
+    } = originalScope;
     const originalModel = original.model && typeof original.model === "object" && !Array.isArray(original.model)
       ? original.model as Record<string, unknown>
       : null;
