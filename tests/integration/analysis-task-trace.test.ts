@@ -212,11 +212,15 @@ describe("AI 分析全流程追踪", () => {
         timestamp
       );
       runtime.database.run(
-        `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, created_at, updated_at)
-         VALUES (?, ?, ?, '[]', ?, ?)`,
+        `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, source_refs_json, created_at, updated_at)
+         VALUES (?, ?, ?, '[]', ?, ?, ?)`,
         callId,
         task.body.data.id,
         JSON.stringify(initialMessages),
+        JSON.stringify(index === 0 ? [
+          { type: "chapter", title: "第一章" },
+          { type: "setting", title: "旧港盟约" }
+        ] : []),
         timestamp,
         timestamp
       );

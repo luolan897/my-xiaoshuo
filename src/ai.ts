@@ -1710,7 +1710,7 @@ export class AiManager {
     const rows = this.store.db.all(
       `SELECT call.id, call.task_type, call.provider_id, call.model_id, call.status, call.failure,
         call.input_chars, call.output_chars, call.created_at, call.completed_at, trace.call_id AS trace_call_id,
-        trace.initial_messages_json, trace.rounds_json,
+        trace.source_refs_json,
         CASE WHEN trace.call_id IS NULL THEN 0 ELSE json_array_length(trace.initial_messages_json) END AS initial_message_count,
         CASE WHEN trace.call_id IS NULL THEN 0 ELSE json_array_length(trace.rounds_json) END AS round_count,
         CASE WHEN trace.call_id IS NULL THEN 0 ELSE length(trace.initial_messages_json) + length(trace.rounds_json) END AS trace_chars,
@@ -1728,10 +1728,7 @@ export class AiManager {
       const hasTrace = row.trace_call_id !== null && row.trace_call_id !== undefined;
       const failure = row.failure === null ? null : stringValue(row, "failure");
       const sourceRefs = hasTrace
-        ? taskTraceSourceRefs(
-            json<unknown[]>(stringValue(row, "initial_messages_json"), []),
-            json<unknown[]>(stringValue(row, "rounds_json"), [])
-          )
+        ? json<Array<{ type: "chapter" | "setting"; title: string }>>(stringValue(row, "source_refs_json"), [])
         : [];
       return {
         id: stringValue(row, "id"),
@@ -2331,11 +2328,12 @@ export class AiManager {
       );
       if (input.taskId) {
         this.store.db.run(
-          `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, created_at, updated_at)
-           VALUES (?, ?, ?, '[]', ?, ?)`,
+          `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, source_refs_json, created_at, updated_at)
+           VALUES (?, ?, ?, '[]', ?, ?, ?)`,
           callId,
           input.taskId,
           JSON.stringify(messages),
+          JSON.stringify(taskTraceSourceRefs(messages, [])),
           timestamp,
           timestamp
         );
@@ -2344,8 +2342,9 @@ export class AiManager {
     const saveTrace = (): void => {
       if (!input.taskId) return;
       this.store.db.run(
-        "UPDATE ai_call_traces SET rounds_json = ?, updated_at = ? WHERE call_id = ?",
+        "UPDATE ai_call_traces SET rounds_json = ?, source_refs_json = ?, updated_at = ? WHERE call_id = ?",
         JSON.stringify(traceRounds),
+        JSON.stringify(taskTraceSourceRefs(messages, traceRounds)),
         now(),
         callId
       );
