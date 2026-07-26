@@ -45,6 +45,25 @@ export function getRelationshipNetworkInitialScale(nodeCount, expanded = false) 
   return 1;
 }
 
+export function getRelationshipNodeFocusView(position, viewport, layout, currentScale = 1) {
+  const width = Math.max(0, Number(viewport?.width) || 0);
+  const height = Math.max(0, Number(viewport?.height) || 0);
+  const layoutWidth = Math.max(1, Number(layout?.width) || 1);
+  const layoutHeight = Math.max(1, Number(layout?.height) || 1);
+  const scale = clamp(Math.max(Number(currentScale) || 1, 1.8), 0.45, 3.2);
+  return {
+    scale,
+    x: width / 2 - Number(position?.x ?? 0) / layoutWidth * width * scale,
+    y: height / 2 - Number(position?.y ?? 0) / layoutHeight * height * scale
+  };
+}
+
+export function shouldShowRelationshipNodeLabel(nodeIndex, degree, nodeCount, viewScale, expanded = false) {
+  const count = Math.max(0, Number(nodeCount) || 0);
+  const defaultLabelLimit = count > 180 ? 36 : count > 120 ? 48 : count > 80 ? 64 : count;
+  return Boolean(expanded) || Number(nodeIndex) < defaultLabelLimit || Number(degree) >= 4 || Number(viewScale) > 1.35;
+}
+
 const GALAXY_CELESTIAL_PALETTES = Object.freeze([
   Object.freeze({ key: "solar", hue: 42, saturation: 96, lightness: 68, color: "#ffc95f", core: "#fff8d4", rim: "#9f3c18", atmosphere: "rgba(255,184,72,.58)", ring: "rgba(255,222,151,.72)" }),
   Object.freeze({ key: "azure", hue: 211, saturation: 94, lightness: 68, color: "#61b8ff", core: "#effaff", rim: "#173b85", atmosphere: "rgba(79,156,255,.56)", ring: "rgba(164,214,255,.68)" }),
@@ -835,12 +854,22 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   help.textContent = "滚轮缩放 · 拖拽空白平移 · 拖拽节点固定 · 悬浮高亮关联";
   viewport.append(focusBadge, help);
 
+  const nodeElements = new Map();
+  const updateNodeLabelVisibility = () => {
+    graph.nodes.forEach((node, index) => {
+      nodeElements.get(node.id)?.classList.toggle(
+        "is-label-visible",
+        shouldShowRelationshipNodeLabel(index, node.degree, graph.nodes.length, viewScale, options.expanded)
+      );
+    });
+  };
   const updateViewTransform = (animate = false) => {
     stage.classList.toggle("is-view-animating", animate);
     stage.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
     viewport.dataset.graphScale = viewScale.toFixed(3);
     viewport.dataset.viewX = viewX.toFixed(1);
     viewport.dataset.viewY = viewY.toFixed(1);
+    updateNodeLabelVisibility();
     if (animate) window.setTimeout(() => stage.classList.remove("is-view-animating"), 360);
   };
   updateViewTransform();
@@ -948,8 +977,6 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   svg.append(label);
   stage.append(svg);
 
-  const nodeElements = new Map();
-  const defaultLabelLimit = graph.nodes.length > 180 ? 36 : graph.nodes.length > 120 ? 48 : graph.nodes.length > 80 ? 64 : graph.nodes.length;
   const updateNodePosition = (nodeId) => {
     const position = positions.get(nodeId);
     const button = nodeElements.get(nodeId);
@@ -1271,7 +1298,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     button.className = `mind-node network-node obsidian-node${node.locked ? " is-locked" : ""}${node.degree === 0 ? " is-isolated" : ""}`;
     button.dataset.nodeId = node.id;
     button.dataset.groupKey = node.groupKey || appearance.group.key;
-    button.classList.toggle("is-label-visible", graph.nodes.indexOf(node) < defaultLabelLimit || node.degree >= 4);
+    button.classList.toggle("is-label-visible", shouldShowRelationshipNodeLabel(graph.nodes.indexOf(node), node.degree, graph.nodes.length, viewScale, options.expanded));
     button.style.setProperty("--node-size", `${nodeSize}px`);
     button.style.setProperty("--node-color-light", node.color || appearance.color);
     button.style.setProperty("--node-color-dark", node.darkColor || appearance.darkColor);
@@ -1368,6 +1395,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       selectedId = node.id;
       options.onSelect?.(node.id);
       applyNodeFocus(node.id);
+      focusViewOnNode(node.id);
     });
   }
 
@@ -1375,6 +1403,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     viewScale = 1;
     viewX = 0;
     viewY = 0;
+    delete viewport.dataset.focusedNodeId;
     updateViewTransform(true);
   };
   const setDefaultView = (animate = false) => {
@@ -1383,7 +1412,21 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     const height = viewport.clientHeight;
     viewX = width ? (width - width * viewScale) / 2 : 0;
     viewY = height ? (height - height * viewScale) / 2 : 0;
+    delete viewport.dataset.focusedNodeId;
     updateViewTransform(animate);
+  };
+  const focusViewOnNode = (nodeId) => {
+    const position = positions.get(nodeId);
+    if (!position) return;
+    const focused = getRelationshipNodeFocusView(position, {
+      width: viewport.clientWidth,
+      height: viewport.clientHeight
+    }, layout, viewScale);
+    viewScale = focused.scale;
+    viewX = focused.x;
+    viewY = focused.y;
+    viewport.dataset.focusedNodeId = nodeId;
+    updateViewTransform(true);
   };
   const animatePositions = (targets, duration = 650) => {
     freezePhysics();
@@ -1439,6 +1482,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     if (!panState || event.pointerId !== panState.pointerId) return;
     viewX = panState.viewX + event.clientX - panState.startX;
     viewY = panState.viewY + event.clientY - panState.startY;
+    delete viewport.dataset.focusedNodeId;
     updateViewTransform();
   });
   const endPan = (event) => {
@@ -1460,6 +1504,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     viewX = pointerX - (pointerX - viewX) * ratio;
     viewY = pointerY - (pointerY - viewY) * ratio;
     viewScale = nextScale;
+    delete viewport.dataset.focusedNodeId;
     updateViewTransform();
   }, { passive: false });
   viewport.addEventListener("click", (event) => {
@@ -1467,6 +1512,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     selectedEdgeId = null;
     selectedId = null;
     hoveredId = null;
+    delete viewport.dataset.focusedNodeId;
     clearGraphHighlight();
   });
 
