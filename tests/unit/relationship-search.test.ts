@@ -24,4 +24,9 @@ describe("人物关系来源搜索", () => {
   it("不会对单字名称做近似匹配", () => {
     expect(findApproximateNameMatches("小林站在门外", "林")).toEqual([]);
   });
+
+  it("中文名称不会把拉丁字段名或单字残片当成近似写法", () => {
+    expect(findApproximateNameMatches('{"name":"纪宁"}', "阿宁").some((item) => item.observed === "am")).toBe(false);
+    expect(findApproximateNameMatches("人物纪宁属于守望会", "阿宁").some((item) => item.observed === "宁")).toBe(false);
+  });
 });

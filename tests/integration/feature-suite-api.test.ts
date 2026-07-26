@@ -1243,6 +1243,61 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).toContain('title="组织设定：守望会"');
   });
 
+  it("通过拼音疑似写法确认来源并并发安全地去重审核项", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      userPrompts.push(prompt);
+      if (prompt.includes("人物名称变体确认器")) {
+        const keys = [...prompt.matchAll(/"key":"([^"]+)"/gu)].map((match) => match[1]);
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(keys.map((key) => ({
+          key,
+          verdict: "same",
+          confidence: 0.96,
+          reason: "片段中的行为和对手关系与目标人物一致"
+        }))) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "摩斯拉在旧港独自追踪拉顿留下的痕迹。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "这段正文没有任何目标人物，不应作为全文发送。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const runTask = async () => {
+      const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+        taskType: "relationship-analysis",
+        scope: { type: "book", characterIds: [target.body.data.id] }
+      }).expect(201);
+      return request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    };
+    const [first, second] = await Promise.all([runTask(), runTask()]);
+    expect(first.body.data.result.sourceSelection).toMatchObject({
+      exactSourceCount: 0,
+      confirmedSourceCount: 1,
+      rejectedSourceCount: 0,
+      uncertainSourceCount: 0
+    });
+    expect(first.body.data.result.sourceSelection.fuzzyCandidateCount).toBeGreaterThan(0);
+    expect(first.body.data.result.sourceSelection.reviewIds).toHaveLength(1);
+    expect(second.body.data.result.sourceSelection.reviewIds).toEqual(first.body.data.result.sourceSelection.reviewIds);
+    const reviews = await request(runtime.app).get(`/api/works/${workId}/reviews`).expect(200);
+    const variants = reviews.body.data.filter((item: { itemType: string }) => item.itemType === "character-name-variant");
+    expect(variants).toHaveLength(1);
+    expect(variants[0]).toMatchObject({ title: "疑似人物名错字：摩斯拉 → 魔斯拉" });
+    expect(variants[0].evidence[0]).toMatchObject({ sourceTitle: chapters[0].title, observed: "摩斯拉" });
+    const fullSourcePrompts = userPrompts.filter((prompt) => prompt.includes("定向人物关系证据收集器"));
+    expect(fullSourcePrompts.some((prompt) => prompt.includes("摩斯拉在旧港独自追踪拉顿留下的痕迹。"))).toBe(true);
+    expect(userPrompts.every((prompt) => !prompt.includes("这段正文没有任何目标人物，不应作为全文发送。"))).toBe(true);
+  });
+
   it("仅在发送给 AI 时合并正文和设定中的连续空行", async () => {
     const userPrompts: string[] = [];
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {

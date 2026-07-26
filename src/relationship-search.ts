@@ -84,6 +84,7 @@ export function findApproximateNameMatches(content: string, reference: string, l
   const sourceCharacters = [...normalizedContent];
   const referenceCharacters = [...normalizedReference];
   if (referenceCharacters.length < 2 || sourceCharacters.length === 0) return [];
+  const hanReference = referenceCharacters.every((character) => /\p{Script=Han}/u.test(character));
   const referencePinyin = relationshipPinyinSyllables(normalizedReference);
   const matches: ApproximateNameMatch[] = [];
   const seen = new Set<string>();
@@ -91,6 +92,8 @@ export function findApproximateNameMatches(content: string, reference: string, l
     if (windowLength < 1) continue;
     for (let start = 0; start + windowLength <= sourceCharacters.length; start += 1) {
       const observedCharacters = sourceCharacters.slice(start, start + windowLength);
+      if (observedCharacters.length < 2) continue;
+      if (hanReference && !observedCharacters.every((character) => /\p{Script=Han}/u.test(character))) continue;
       const observed = observedCharacters.join("");
       if (!observed.trim() || observed === normalizedReference) continue;
       const characterDistance = damerauLevenshteinDistance(referenceCharacters, observedCharacters, 1);
@@ -101,8 +104,18 @@ export function findApproximateNameMatches(content: string, reference: string, l
       if (seen.has(key)) continue;
       seen.add(key);
       matches.push({ observed, start, end: start + windowLength, characterDistance, pinyinDistance });
-      if (matches.length >= limit) return matches;
     }
   }
-  return matches.sort((left, right) => left.start - right.start);
+  const ranked = matches.sort((left, right) =>
+    Math.min(left.characterDistance, left.pinyinDistance) - Math.min(right.characterDistance, right.pinyinDistance)
+    || Math.abs([...left.observed].length - referenceCharacters.length) - Math.abs([...right.observed].length - referenceCharacters.length)
+    || left.start - right.start
+  );
+  const selected: ApproximateNameMatch[] = [];
+  for (const match of ranked) {
+    if (selected.some((item) => match.start < item.end && match.end > item.start)) continue;
+    selected.push(match);
+    if (selected.length >= limit) break;
+  }
+  return selected.sort((left, right) => left.start - right.start);
 }
