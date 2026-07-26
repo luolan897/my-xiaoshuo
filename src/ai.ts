@@ -4167,17 +4167,35 @@ export class AiManager {
       const exactReferences = [...new Set([String(character.name), ...(character.aliases as string[])].map((item) => item.trim()).filter(Boolean))];
       const normalizedExactReferences = new Set(exactReferences.map((item) => normalizeRelationshipSearchText(item).trim()));
       const anchors = this.relationshipIdentityAnchors(workId, character);
+      const anchorKeys = new Set<string>();
+      for (const anchor of anchors) {
+        for (const chapterId of this.relationshipChapterExactMatches(workId, anchor)) {
+          if (allowedChapterIds.has(chapterId)) anchorKeys.add(this.relationshipIndexedSourceKey("chapter", chapterId));
+        }
+        if (includeSettings) for (const key of this.relationshipSettingExactMatches(workId, anchor)) anchorKeys.add(key);
+      }
+      const targetIndexCandidateKeys = new Set<string>();
       const targetFuzzySourceKeys = new Set<string>();
       for (const reference of exactReferences) {
         for (const chapterId of this.relationshipChapterExactMatches(workId, reference)) {
           if (allowedChapterIds.has(chapterId)) exactKeys.add(this.relationshipIndexedSourceKey("chapter", chapterId));
         }
         if (includeSettings) for (const key of this.relationshipSettingExactMatches(workId, reference)) exactKeys.add(key);
-        if ([...normalizeRelationshipSearchText(reference).trim()].length < 2) continue;
+        const referenceLength = [...normalizeRelationshipSearchText(reference).trim()].length;
+        if (referenceLength < 2) continue;
         for (const key of this.relationshipFuzzyIndexMatches(workId, reference, includeSettings)) {
           const ref = this.relationshipIndexedSourceRef(key);
           if (ref.sourceType === "chapter" && !allowedChapterIds.has(ref.sourceId)) continue;
           if (ref.sourceType !== "chapter" && !includeSettings) continue;
+          if (referenceLength === 2 && !anchorKeys.has(key)) continue;
+          targetIndexCandidateKeys.add(key);
+          if (targetIndexCandidateKeys.size > 200) {
+            throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名来源过多，请补充人物别名或身份资料后重试", {
+              characterId: targetCharacterId,
+              candidateCount: targetIndexCandidateKeys.size,
+              maximum: 200
+            });
+          }
           let indexed = loadedSources.get(key);
           if (!indexed) {
             const loaded = this.relationshipIndexedSource(workId, ref.sourceType, ref.sourceId);
@@ -4206,7 +4224,7 @@ export class AiManager {
               resolved = null;
             }
             if (resolved && resolved !== targetCharacterId) continue;
-            if ([...normalizeRelationshipSearchText(reference).trim()].length === 2
+            if (referenceLength === 2
               && !anchors.some((anchor) => normalizedSearchable.includes(anchor))) continue;
             const occurrenceKey = [targetCharacterId, indexed.sourceType, indexed.sourceId, match.observed].join("|");
             const occurrenceCount = candidateOccurrences.get(occurrenceKey) ?? 0;

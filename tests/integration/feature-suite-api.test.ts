@@ -1298,6 +1298,45 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(userPrompts.every((prompt) => !prompt.includes("这段正文没有任何目标人物，不应作为全文发送。"))).toBe(true);
   });
 
+  it("两字人物疑似写法只召回同时命中身份锚点的来源", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      userPrompts.push(prompt);
+      if (prompt.includes("人物名称变体确认器")) {
+        const keys = [...prompt.matchAll(/"key":"([^"]+)"/gu)].map((match) => match[1]);
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(keys.map((key) => ({
+          key,
+          verdict: "same",
+          confidence: 0.9,
+          reason: "人物代码与目标档案一致"
+        }))) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "临舟在旧港独自查看潮汐，这里没有身份资料。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "临舟驾驶编号 A17 的调查艇进入深空。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", code: "A17" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [target.body.data.id] }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({ coveredChapterCount: 1 });
+    expect(result.body.data.result.sourceSelection.confirmedSourceCount).toBe(1);
+    expect(userPrompts.some((prompt) => prompt.includes("临舟驾驶编号 A17 的调查艇进入深空。"))).toBe(true);
+    expect(userPrompts.every((prompt) => !prompt.includes("临舟在旧港独自查看潮汐，这里没有身份资料。"))).toBe(true);
+  });
+
   it("仅在发送给 AI 时合并正文和设定中的连续空行", async () => {
     const userPrompts: string[] = [];
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
