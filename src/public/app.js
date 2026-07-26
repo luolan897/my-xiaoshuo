@@ -7,6 +7,7 @@ import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineN
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
+import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
@@ -33,10 +34,10 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260726-anthropic-messages-v2";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
-import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260726-race-filter-order";
+import { eligibleRaceParents, orderRaceFilterOptions, paginateRaceForest, racePathLabel } from "/race-hierarchy.js?v=20260727-race-tree-pagination-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
@@ -44,6 +45,7 @@ import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global
 import { resolveGlobalSearchTarget } from "/global-search.js?v=20260726-search-result-details";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -56,7 +58,14 @@ import {
 } from "/avatar-crop.js?v=20260725-avatar-crop";
 
 const defaultPageSizes = Object.freeze({
+  settings: 30,
   characters: 30,
+  races: 30,
+  organizations: 30,
+  timeline: 30,
+  outlines: 30,
+  relationships: 30,
+  reviews: 30,
   analysisTasks: 30,
   fileVersions: 30
 });
@@ -122,11 +131,18 @@ let presenceHeartbeatQueued = null;
 let presenceHeartbeatRequest = 0;
 const acknowledgedCollaborativeChangeIds = new Set();
 let collaborativeChangePromptOpen = false;
-let peerPageStale = false;
+let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
 
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
+let relationshipSearchIndexRefreshTimer = null;
+let backgroundTaskCenterTimer = null;
+let backgroundTaskCenterRequest = 0;
+let backgroundTaskCenterWorkId = null;
+let backgroundTaskCenterTasksInitialized = false;
+let backgroundTaskCenterTaskSnapshots = new Map();
+let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
 const taskProgressRefreshInterval = 2_500;
 const taskStatusSnapshots = new Map();
 
@@ -166,6 +182,10 @@ function analysisTaskStatusLabel(status) {
     expired: "已过期",
     cancelled: "已取消"
   })[String(status)] ?? "未知状态";
+}
+
+function canRerunAnalysisTask(task) {
+  return ["review", "completed", "partial", "expired", "cancelled"].includes(String(task?.status ?? ""));
 }
 
 function normalizedAnalysisTaskStatus(status) {
@@ -265,6 +285,7 @@ function applyWorkAccessMode() {
   $("#ai-prompt").readOnly = aiReadOnly;
   $("#ai-prompt").setAttribute("aria-readonly", String(aiReadOnly));
   $("#ai-send").classList.toggle("permission-hidden", aiReadOnly);
+  updateBackgroundTaskCenterVisibility();
   if (proseReadOnly) {
     chapterEditorReadOnly = true;
     cancelChapterAutoSave();
@@ -338,6 +359,7 @@ let workScopedUiGeneration = 0;
 let importHistoryRecords = [];
 let importHistoryNextPage = null;
 let importHistoryRequestId = 0;
+let chapterInsightRequestId = 0;
 
 const shelfOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
@@ -538,11 +560,12 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work || route.view === "shelf" || route.view === "platform-ai") return null;
+  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
+  if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
   if (route.view === "module") return { kind: "module", module: route.module };
-  if (route.view === "settings" || route.view === "platform-ai") return { kind: "settings" };
+  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage") return { kind: "settings" };
   return { kind: "welcome" };
 }
 
@@ -628,7 +651,7 @@ async function refreshPresence() {
       presenceParticipants = Array.isArray(payload) ? payload : (payload?.participants ?? []);
       renderPresence();
       const recentChanges = Array.isArray(payload) ? [] : (payload?.recentChanges ?? []);
-      void handleCollaborativeChanges(recentChanges);
+      void handleRelationshipCollaborativeChanges(recentChanges);
     }
   } catch {
     if (state.work?.id === workId) renderPresence();
@@ -638,14 +661,10 @@ async function refreshPresence() {
   return presenceParticipants;
 }
 
-function localEditingDirty() {
-  return Boolean(state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty);
-}
-
-async function handleCollaborativeChanges(recentChanges) {
+async function handleRelationshipCollaborativeChanges(recentChanges) {
   if (!Array.isArray(recentChanges) || !recentChanges.length || collaborativeChangePromptOpen) return;
   const localKey = presencePageKey(presencePageForRoute());
-  if (!localKey) return;
+  if (!localKey.startsWith("entity-editor:relationship:")) return;
   const selfId = state.user?.userId;
   const incoming = recentChanges.filter((change) => (
     change
@@ -662,14 +681,10 @@ async function handleCollaborativeChanges(recentChanges) {
     const oldest = acknowledgedCollaborativeChangeIds.values().next().value;
     acknowledgedCollaborativeChangeIds.delete(oldest);
   }
-  peerPageStale = true;
   collaborativeChangePromptOpen = true;
-  const dirtyHint = localEditingDirty()
-    ? "你当前页面还有未保存修改。请先把正在编辑的内容复制保存到别处（本页无法代为另存），再刷新页面后重新提交。"
-    : "请先确认本地没有需要保留的草稿；如有，请复制保存到别处（本页无法代为另存），再刷新页面后继续编辑。";
   try {
-    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新「${latest.label || "当前页面"}」。${dirtyHint}`, {
-      title: "协作者已更新",
+    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新当前人物关系。请先确认本地没有需要保留的修改，再刷新页面继续查看。`, {
+      title: "人物关系已更新",
       confirmLabel: "刷新页面",
       cancelLabel: "稍后处理"
     });
@@ -677,17 +692,6 @@ async function handleCollaborativeChanges(recentChanges) {
   } finally {
     collaborativeChangePromptOpen = false;
   }
-}
-
-async function confirmPeerStaleSave() {
-  if (!peerPageStale) return true;
-  const confirmed = await confirmToast("协作者已更新当前页面。请先把正在编辑的内容复制保存到别处（本页无法代为另存），再刷新页面后重新提交。继续保存可能覆盖对方修改或触发冲突。", {
-    title: "页面内容已过期",
-    confirmLabel: "仍然保存",
-    cancelLabel: "暂不保存"
-  });
-  if (confirmed) peerPageStale = false;
-  return confirmed;
 }
 
 function schedulePresenceHeartbeat() {
@@ -698,9 +702,15 @@ function schedulePresenceHeartbeat() {
   }, 80);
 }
 
+function setRelationshipPresence(relationshipId) {
+  const nextId = relationshipId ? String(relationshipId) : null;
+  if (relationshipPresenceId === nextId) return;
+  relationshipPresenceId = nextId;
+  void refreshPresence();
+}
+
 async function confirmConcurrentSave() {
   await refreshPresence();
-  if (!(await confirmPeerStaleSave())) return false;
   const localKey = presencePageKey(presencePageForRoute());
   const peers = presenceParticipants.filter((participant) => participant.clientId !== presenceClientId && participant.page.key === localKey);
   if (!peers.length) return true;
@@ -720,6 +730,7 @@ function currentPageRoute() {
   }
   if (!$("#settings-hub-view").classList.contains("hidden")) return { view: "settings", workId, ...settingsRouteContext() };
   if (!$("#platform-ai-view").classList.contains("hidden")) return { view: "platform-ai", workId, ...settingsRouteContext() };
+  if (!$("#platform-usage-view").classList.contains("hidden")) return { view: "platform-usage", workId, ...settingsRouteContext() };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
   if (!workId) return { view: "shelf" };
   if (!$("#editor-view").classList.contains("hidden")) return { view: "editor", workId, chapterId: state.chapter?.id ?? null };
@@ -843,6 +854,16 @@ let entityEditorReadOnly = false;
 let chapterEditorReadOnly = true;
 let characterListPage = 1;
 let taskListPage = 1;
+const moduleListPages = {
+  settings: 1,
+  races: 1,
+  organizations: 1,
+  timeline: 1,
+  outlinePlans: 1,
+  foreshadows: 1,
+  relationships: 1,
+  reviews: 1
+};
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
@@ -2077,6 +2098,40 @@ function pageSizeFor(module) {
   return normalizePageSize(state.uiSettings.pageSizes[module], defaultPageSizes[module] ?? 30);
 }
 
+function paginateModuleItems(items, page, sizeKey) {
+  const limit = pageSizeFor(sizeKey);
+  const total = items.length;
+  const pageCount = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(Math.max(1, Number(page) || 1), pageCount);
+  const start = (safePage - 1) * limit;
+  return {
+    items: items.slice(start, start + limit),
+    page: safePage,
+    limit,
+    total,
+    pageCount,
+    hasMore: safePage < pageCount,
+    nextPage: safePage < pageCount ? safePage + 1 : null
+  };
+}
+
+function renderModulePagination(pageResult, pageKey, label) {
+  if (pageResult.pageCount <= 1) return "";
+  return `<nav class="module-pagination" aria-label="${esc(label)}分页">
+    <button type="button" data-module-page-key="${esc(pageKey)}" data-module-page="${pageResult.page - 1}" ${pageResult.page <= 1 ? "disabled" : ""}>上一页</button>
+    <span>第 ${pageResult.page}/${pageResult.pageCount} 页 · 本页 ${pageResult.itemCount ?? pageResult.items.length} 条 · 共 ${pageResult.total} 条</span>
+    <button type="button" data-module-page-key="${esc(pageKey)}" data-module-page="${pageResult.nextPage ?? pageResult.page + 1}" ${pageResult.hasMore ? "" : "disabled"}>下一页</button>
+  </nav>`;
+}
+
+function bindModulePagination(pageKey, renderPage) {
+  $("#module-content").querySelectorAll(`[data-module-page-key="${CSS.escape(pageKey)}"]`).forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    $("#module-content").querySelectorAll(`[data-module-page-key="${CSS.escape(pageKey)}"]`).forEach((control) => { control.disabled = true; });
+    await renderPage(Number(button.dataset.modulePage));
+  }));
+}
+
 async function loadPlatformUiSettings() {
   try {
     applyPlatformUiSettings(await api("/api/ui-settings"));
@@ -2108,6 +2163,16 @@ function raiseToastRegion() {
   if (typeof region.showPopover !== "function") return;
   if (region.matches(":popover-open")) region.hidePopover();
   region.showPopover();
+}
+
+function dismissChapterInsightToast() {
+  chapterInsightRequestId += 1;
+  const region = $("#toast-region");
+  region.querySelector(".chapter-insight-toast")?.remove();
+  $("#insight-button").setAttribute("aria-expanded", "false");
+  if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+    region.hidePopover();
+  }
 }
 
 function toast(message, type = "info") {
@@ -2467,6 +2532,11 @@ async function initializePage() {
     if (route.view === "platform-ai") {
       await showPlatformAi();
       settingsReturnContext = restoredSettingsReturnContext(route);
+      return;
+    }
+    if (route.view === "platform-usage") {
+      await showPlatformUsage();
+      settingsReturnContext = restoredSettingsReturnContext(route);
     }
   } finally {
     document.body.classList.remove("auth-pending");
@@ -2477,12 +2547,15 @@ async function initializePage() {
 }
 
 function showShelf() {
+  stopBackgroundTaskCenter();
+  dismissChapterInsightToast();
   state.dirty = false;
   settingsReturnContext = null;
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.remove("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -2509,6 +2582,7 @@ function renderSettingsHub() {
   const canReadAggregate = hasWork && canReadAggregateContent();
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
@@ -2570,7 +2644,14 @@ async function openPlatformUiSettingsDialog() {
     const settings = await api("/api/platform/ui-settings");
     $("#toast-position").value = settings.toastPosition === "top-right" ? "top-right" : "bottom-right";
     const pageSizes = normalizePageSizes(settings.pageSizes);
+    $("#page-size-settings").value = String(pageSizes.settings);
     $("#page-size-characters").value = String(pageSizes.characters);
+    $("#page-size-races").value = String(pageSizes.races);
+    $("#page-size-organizations").value = String(pageSizes.organizations);
+    $("#page-size-timeline").value = String(pageSizes.timeline);
+    $("#page-size-outlines").value = String(pageSizes.outlines);
+    $("#page-size-relationships").value = String(pageSizes.relationships);
+    $("#page-size-reviews").value = String(pageSizes.reviews);
     $("#page-size-analysis-tasks").value = String(pageSizes.analysisTasks);
     $("#page-size-file-versions").value = String(pageSizes.fileVersions);
     $("#platform-ui-settings-dialog").showModal();
@@ -2727,7 +2808,9 @@ async function openSearchResult(result) {
   const target = resolveGlobalSearchTarget(result);
   if (!target) throw new Error("无法打开该搜索结果");
   $("#search-dialog").close();
-  const inSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
+  const inSettings = !$("#settings-hub-view").classList.contains("hidden")
+    || !$("#platform-ai-view").classList.contains("hidden")
+    || !$("#platform-usage-view").classList.contains("hidden");
   if (inSettings) await returnFromSettings();
   if (target.kind === "chapter") {
     await selectChapter(target.id);
@@ -2743,16 +2826,20 @@ async function openSearchResult(result) {
 }
 
 async function showSettingsHub() {
-  const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
+  const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
+    || !$("#platform-ai-view").classList.contains("hidden")
+    || !$("#platform-usage-view").classList.contains("hidden");
   if (!alreadyInSettings) {
     if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？"))) return false;
     settingsReturnContext = captureSettingsReturnContext();
     state.dirty = false;
   }
+  dismissChapterInsightToast();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -2778,6 +2865,7 @@ async function returnFromSettings() {
   $("#settings-button").removeAttribute("aria-current");
   $("#settings-hub-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -2791,10 +2879,12 @@ async function returnFromSettings() {
 async function showPlatformAi() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
+  dismissChapterInsightToast();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.remove("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -2804,6 +2894,26 @@ async function showPlatformAi() {
   setSaveState("平台 AI");
   await renderPlatformAiConfig();
   replacePageRoute({ view: "platform-ai", workId: state.work?.id ?? null, ...settingsRouteContext() });
+  return true;
+}
+
+async function showPlatformUsage() {
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 Token 用量面板将放弃本地修改。是否继续？"))) return false;
+  state.dirty = false;
+  updateDocumentTitle();
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.remove("hidden");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-meta").textContent = "Token 用量";
+  $("#settings-button").setAttribute("aria-current", "page");
+  setSaveState("Token 用量");
+  await renderPlatformTokenUsage();
+  replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
 }
 
@@ -2830,6 +2940,7 @@ function renderShelf() {
 }
 
 function resetWorkScopedUiCaches() {
+  stopBackgroundTaskCenter();
   workScopedUiGeneration += 1;
   loadedAiModelsWorkId = null;
   loadedAiReferencesWorkId = null;
@@ -2844,6 +2955,7 @@ function resetWorkScopedUiCaches() {
   state.characters = [];
   state.settings = [];
   characterListPage = 1;
+  Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
   taskListPage = 1;
@@ -2877,6 +2989,7 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#settings-button").removeAttribute("aria-current");
   settingsReturnContext = null;
@@ -2885,6 +2998,7 @@ async function selectWork(workId, preferredChapterId = null) {
   chapterEditorReadOnly = true;
   if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
   applyWorkAccessMode();
+  startBackgroundTaskCenter(nextWork.id);
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   $("#top-search-button").disabled = !canReadAggregateContent();
@@ -2993,7 +3107,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   $("#chapter-content").value = normalizedContent;
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
-  $("#chapter-insight").classList.add("hidden");
+  dismissChapterInsightToast();
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
   else if (chapterEditorReadOnly) setSaveState("阅读模式");
@@ -3028,6 +3142,7 @@ function tidyChapterBlankLines() {
 }
 
 function showWelcome(hasWork = false) {
+  dismissChapterInsightToast();
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#welcome-view").classList.remove("hidden");
@@ -3078,6 +3193,7 @@ async function showModule(module) {
     }
     return;
   }
+  dismissChapterInsightToast();
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.remove("hidden");
@@ -3508,19 +3624,22 @@ function renderSettingRows(records) {
   }).join("")}</div>`;
 }
 
-async function renderSettings() {
+async function renderSettings(page = moduleListPages.settings) {
   const records = await apiAllPages(`/api/works/${state.work.id}/settings`);
   state.settings = records;
   mountModuleCount(records.length);
+  const pageResult = paginateModuleItems(records, page, "settings");
+  moduleListPages.settings = pageResult.page;
   const layout = readModuleLayout();
   if (records.length) mountModuleLayoutToggle(layout, "设定列表样式");
   $("#module-content").innerHTML = records.length
-    ? `${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
+    ? `${layout === "rows" ? renderSettingRows(pageResult.items) : renderSettingCards(pageResult.items)}${renderModulePagination(pageResult, "settings", "设定库")}`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
-  bindModuleLayoutToggle(renderSettings);
+  bindModuleLayoutToggle(() => renderSettings(pageResult.page));
+  bindModulePagination("settings", renderSettings);
   const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
-  bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
+  bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
 }
 
 async function renderCharacters(page = characterListPage) {
@@ -3536,14 +3655,15 @@ async function renderCharacters(page = characterListPage) {
     : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
-  [state.characters, state.races, state.organizations] = [characterPage.items, races, organizations];
+  const pageCharacters = characterPage.items;
+  [state.races, state.organizations] = [races, organizations];
   mountModuleCount(characterPage.total);
   const layout = readModuleLayout();
   const characterActions = (item) => recordCardEditButton("edit-character", item.id, `角色“${item.name}”`);
   const characterLockBadge = (item) => item.lockedFields.length
     ? `<span class="character-lock-badge" aria-label="${item.lockedFields.length} 个锁定字段" title="锁定字段：${esc(item.lockedFields.join("、"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg><span>${item.lockedFields.length}</span></span>`
     : "";
-  const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
+  const characterCards = () => `<div class="card-grid">${pageCharacters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
     <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
@@ -3558,7 +3678,7 @@ async function renderCharacters(page = characterListPage) {
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
     </article>`;
   }).join("")}</div>`;
-  const characterRows = () => `<div class="module-row-list">${state.characters.map((item) => {
+  const characterRows = () => `<div class="module-row-list">${pageCharacters.map((item) => {
     const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${characterStateFieldLabel(key)}：${value}`).join(" ") || "尚未记录当前状态");
     const meta = [
       item.code ? `编号 ${item.code}` : "",
@@ -3574,10 +3694,10 @@ async function renderCharacters(page = characterListPage) {
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
-  const pagination = state.characters.length && (characterPage.page > 1 || characterPage.hasMore)
+  const pagination = pageCharacters.length && (characterPage.page > 1 || characterPage.hasMore)
     ? `<nav class="module-pagination" aria-label="角色列表分页">
       <button type="button" data-character-page="${characterPage.page - 1}" ${characterPage.page <= 1 ? "disabled" : ""}>上一页</button>
-      <span>第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页 · 本页 ${state.characters.length} 个角色 · 共 ${characterPage.total} 个角色</span>
+      <span>第 ${characterPage.page}/${Math.ceil(characterPage.total / characterPage.limit)} 页 · 本页 ${pageCharacters.length} 个角色 · 共 ${characterPage.total} 个角色</span>
       <button type="button" data-character-page="${characterPage.nextPage ?? characterPage.page + 1}" ${characterPage.hasMore ? "" : "disabled"}>下一页</button>
     </nav>`
     : "";
@@ -3596,8 +3716,8 @@ async function renderCharacters(page = characterListPage) {
     <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
   mountCharacterFilterToggle();
-  if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
-  $("#module-content").innerHTML = filterToolbar + (state.characters.length
+  if (pageCharacters.length) mountModuleLayoutToggle(layout, "角色列表样式");
+  $("#module-content").innerHTML = filterToolbar + (pageCharacters.length
     ? `${layout === "rows" ? characterRows() : characterCards()}${pagination}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
@@ -3626,14 +3746,18 @@ async function renderCharacters(page = characterListPage) {
     $("#module-content").querySelectorAll("[data-character-page]").forEach((control) => { control.disabled = true; });
     await renderCharacters(Number(button.dataset.characterPage));
   }));
-  bindRecordPreview("[data-open-character]", (id) => openCharacterEditor(state.characters.find((item) => item.id === id), { readOnly: true }));
-  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
+  bindRecordPreview("[data-open-character]", (id) => openCharacterEditor(pageCharacters.find((item) => item.id === id), { readOnly: true }));
+  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(pageCharacters.find((item) => item.id === button.dataset.editCharacter))));
 }
 
-async function renderRaces() {
+async function renderRaces(page = moduleListPages.races) {
   state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
   mountModuleCount(state.races.length);
   const layout = readModuleLayout();
+  const pageResult = layout === "rows"
+    ? paginateModuleItems(state.races, page, "races")
+    : paginateRaceForest(state.races, page, pageSizeFor("races"));
+  moduleListPages.races = pageResult.page;
   const canEditRaces = canEditModule("races");
   const raceActions = (item) => canEditRaces
     ? recordCardEditButton("edit-race", item.id, `种族“${item.name}”`)
@@ -3654,7 +3778,7 @@ async function renderRaces() {
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
-  const raceRows = () => `<div class="module-row-list">${state.races.map((item) => {
+  const raceRows = () => `<div class="module-row-list">${pageResult.items.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写种族简介");
     const meta = `${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
     return `
@@ -3668,22 +3792,25 @@ async function renderRaces() {
   if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
   if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle();
   $("#module-content").innerHTML = state.races.length
-    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
+    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${pageResult.items.map(renderRaceNode).join("")}</section>`}${renderModulePagination(pageResult, "races", "种族列表")}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
-  bindModuleLayoutToggle(renderRaces);
+  bindModuleLayoutToggle(() => renderRaces(pageResult.page));
+  bindModulePagination("races", renderRaces);
   bindRaceTreeExpandToggle();
   bindRaceTreeNodeToggles();
   const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
-  bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
+  bindEntityHistoryButtons(async () => { await renderRaces(pageResult.page); await loadAiReferences(); });
 }
 
-async function renderOrganizations() {
+async function renderOrganizations(page = moduleListPages.organizations) {
   [state.organizations, state.characters] = await Promise.all([
     apiAllPages(`/api/works/${state.work.id}/organizations`),
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   mountModuleCount(state.organizations.length);
+  const pageResult = paginateModuleItems(state.organizations, page, "organizations");
+  moduleListPages.organizations = pageResult.page;
   const layout = readModuleLayout();
   const canEditOrganizations = canEditModule("organizations");
   const organizationActions = (item) => canEditOrganizations
@@ -3692,14 +3819,14 @@ async function renderOrganizations() {
   const organizationCardActions = (item) => canEditOrganizations
     ? organizationActions(item)
     : `<div class="card-actions">${organizationActions(item)}</div>`;
-  const organizationCards = () => `<div class="card-grid organization-grid">${state.organizations.map((item) => `
+  const organizationCards = () => `<div class="card-grid organization-grid">${pageResult.items.map((item) => `
     <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条组织设定，打开查看详情</span>` : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
       ${organizationCardActions(item)}
     </article>`).join("")}</div>`;
-  const organizationRows = () => `<div class="module-row-list">${state.organizations.map((item) => {
+  const organizationRows = () => `<div class="module-row-list">${pageResult.items.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写组织简介");
     const members = item.members.length ? item.members.map((member) => member.name).join("、") : "暂无绑定角色";
     return `
@@ -3712,12 +3839,13 @@ async function renderOrganizations() {
   }).join("")}</div>`;
   if (state.organizations.length) mountModuleLayoutToggle(layout, "组织列表样式");
   $("#module-content").innerHTML = state.organizations.length
-    ? `${layout === "rows" ? organizationRows() : organizationCards()}`
+    ? `${layout === "rows" ? organizationRows() : organizationCards()}${renderModulePagination(pageResult, "organizations", "组织列表")}`
     : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
-  bindModuleLayoutToggle(renderOrganizations);
+  bindModuleLayoutToggle(() => renderOrganizations(pageResult.page));
+  bindModulePagination("organizations", renderOrganizations);
   const openOrganization = async (id, readOnly) => openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => { void openOrganization(button.dataset.editOrganization, false); }));
-  bindEntityHistoryButtons(async () => { await renderOrganizations(); await loadAiReferences(); });
+  bindEntityHistoryButtons(async () => { await renderOrganizations(pageResult.page); await loadAiReferences(); });
 }
 
 function updateTimelineMultiSelectControls() {
@@ -3742,12 +3870,14 @@ function setTimelineMultiSelectMode(enabled) {
   updateTimelineMultiSelectControls();
 }
 
-async function renderTimeline() {
+async function renderTimeline(page = moduleListPages.timeline) {
   const [events, tracks] = await Promise.all([
     apiAllPages(`/api/works/${state.work.id}/timeline`),
     apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
   ]);
   mountModuleCount(events.length);
+  const pageResult = paginateModuleItems(events, page, "timeline");
+  moduleListPages.timeline = pageResult.page;
   timelineMultiSelectEnabled = false;
   $("#timeline-tools")?.remove();
   $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button><button id="timeline-multi-select-toggle" class="ghost-button" type="button" aria-pressed="false">多选</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button" hidden>合并所选事件</button>' : ""}</div>`);
@@ -3755,9 +3885,10 @@ async function renderTimeline() {
   const lanes = [...tracks, { id: "", name: "未分组时间轴", description: "尚未归入独立大事件的时间节点。", sortOrder: Number.MAX_SAFE_INTEGER }];
   const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(timelineStatusLabel(item.status))}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
   $("#module-content").innerHTML = `<div class="timeline-kanban" data-testid="timeline-kanban">${lanes.map((track) => {
-    const laneEvents = events.filter((item) => (item.trackId ?? "") === track.id);
+    const laneEvents = pageResult.items.filter((item) => (item.trackId ?? "") === track.id);
     return `<section class="timeline-lane" data-track-id="${esc(track.id)}"><header><div><small>${laneEvents.length} 个节点</small><h3>${esc(track.name)}</h3></div>${track.id ? `<div class="timeline-track-actions"><button class="timeline-track-menu" data-edit-timeline-track="${esc(track.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(track.id)}" data-entity-title="${esc(track.name)}" type="button">历史</button></div>` : ""}</header><p class="timeline-track-description">${esc(track.description || "暂无说明")}</p><div class="timeline-lane-events">${laneEvents.map(eventCard).join("") || '<div class="timeline-lane-empty">还没有时间节点</div>'}</div><button class="timeline-add-event" data-add-event-track="${esc(track.id)}" type="button">添加事件</button></section>`;
-  }).join("")}</div>`;
+  }).join("")}</div>${renderModulePagination(pageResult, "timeline", "时间线事件")}`;
+  bindModulePagination("timeline", renderTimeline);
   $("#create-timeline-track").addEventListener("click", () => openTimelineTrackDialog());
   $("#timeline-multi-select-toggle").addEventListener("click", () => setTimelineMultiSelectMode(!timelineMultiSelectEnabled));
   $("#module-content").querySelectorAll("[data-event-select]").forEach((input) => input.addEventListener("change", updateTimelineMultiSelectControls));
@@ -3766,7 +3897,7 @@ async function renderTimeline() {
   $("#module-content").querySelectorAll("[data-add-event-track]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(null, button.dataset.addEventTrack || null)));
   $("#module-content").querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(events.find((item) => item.id === button.dataset.editEvent))));
   $("#module-content").querySelectorAll("[data-split-event]").forEach((button) => button.addEventListener("click", () => openTimelineSplitDialog(events.find((item) => item.id === button.dataset.splitEvent))));
-  bindEntityHistoryButtons(renderTimeline);
+  bindEntityHistoryButtons(() => renderTimeline(pageResult.page));
   $("#merge-events")?.addEventListener("click", () => {
     const eventIds = [...$("#module-content").querySelectorAll("[data-event-select]:checked")].map((input) => input.dataset.eventSelect);
     if (eventIds.length < 2) return toast("请至少选择两个时间事件", "error");
@@ -3777,30 +3908,34 @@ async function renderTimeline() {
         description: form.get("description") || undefined,
         expectedVersionNos: Object.fromEntries(eventIds.map((eventId) => [eventId, Number(events.find((event) => event.id === eventId)?.versionNo)]))
       } });
-      await renderTimeline();
+      await renderTimeline(pageResult.page);
     }, "保留参与者与证据");
   });
 }
 
-async function renderOutlines() {
+async function renderOutlines(outlinePage = moduleListPages.outlinePlans, foreshadowPage = moduleListPages.foreshadows) {
   const currentChapterId = state.chapter?.id;
   const [outlines, foreshadows] = await Promise.all([
     apiAllPages(`/api/works/${state.work.id}/outlines`),
     apiAllPages(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
   ]);
   mountModuleCount(outlines.length + foreshadows.length);
+  const outlinePageResult = paginateModuleItems(outlines, outlinePage, "outlines");
+  const foreshadowPageResult = paginateModuleItems(foreshadows, foreshadowPage, "outlines");
+  moduleListPages.outlinePlans = outlinePageResult.page;
+  moduleListPages.foreshadows = foreshadowPageResult.page;
   const layout = readModuleLayout();
   const unresolved = foreshadows.filter((item) => item.unresolved);
   const overdue = unresolved.filter((item) => item.overdue);
   const foreshadowActions = (item) => `<button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button><button data-entity-history="foreshadow" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button>`;
-  const foreshadowCards = () => `<div class="card-grid foreshadow-grid">${foreshadows.map((item) => `
+  const foreshadowCards = () => `<div class="card-grid foreshadow-grid">${foreshadowPageResult.items.map((item) => `
     <article class="record-card foreshadow-card ${item.overdue ? "is-overdue" : ""}">
       <small>${esc(levelLabel(item.importance))} · ${esc(foreshadowStatusLabel(item.status))}${item.overdue ? " · 已逾期" : ""}</small>
       <h3>${esc(item.title)}</h3><p>${esc(item.description || "暂无说明")}</p>
       <div class="foreshadow-links">${item.occurrences.length ? item.occurrences.map((link) => `<span class="pill">${esc(occurrenceRoleLabel(link.role))} · ${esc(link.volumeTitle)} / ${esc(link.chapterTitle)}</span>`).join("") : '<span class="pill">尚未关联章节</span>'}</div>
       <div class="card-actions">${foreshadowActions(item)}</div>
     </article>`).join("")}</div>`;
-  const foreshadowRows = () => `<div class="module-row-list">${foreshadows.map((item) => {
+  const foreshadowRows = () => `<div class="module-row-list">${foreshadowPageResult.items.map((item) => {
     const preview = moduleRowPreview(item.description || "暂无说明");
     const links = item.occurrences.length
       ? item.occurrences.map((link) => `${occurrenceRoleLabel(link.role)} · ${link.volumeTitle} / ${link.chapterTitle}`).join("；")
@@ -3814,28 +3949,32 @@ async function renderOutlines() {
     </article>`;
   }).join("")}</div>`;
   const foreshadowHtml = foreshadows.length
-    ? `${layout === "rows" ? foreshadowRows() : foreshadowCards()}`
+    ? `${layout === "rows" ? foreshadowRows() : foreshadowCards()}${renderModulePagination(foreshadowPageResult, "foreshadows", "伏笔列表")}`
     : emptyModule("还没有伏笔", "创建伏笔并关联埋设、提醒与回收章节，未回收项会持续显示。\n");
   if (foreshadows.length) mountModuleLayoutToggle(layout, "伏笔列表样式");
-  const outlineHtml = outlines.length ? `<div class="outline-list">${outlines.map((item) => `
+  const outlineHtml = outlines.length ? `<div class="outline-list">${outlinePageResult.items.map((item) => `
     <article class="outline-row ${item.status === "completed" ? "is-complete" : ""}">
       <div><small>${esc(item.volumeTitle)} · ${esc(outlineStatusLabel(item.status))}</small><h3>${esc(item.chapterTitle)}</h3></div>
       <div><b>目标</b><p>${esc(item.goal || "未填写")}</p></div>
       <div><b>冲突</b><p>${esc(item.conflict || "未填写")}</p></div>
       <div><b>转折</b><p>${esc(item.turningPoint || "未填写")}</p></div>
       <div class="outline-actions">${item.unresolvedForeshadowCount ? `<span>${item.unresolvedForeshadowCount} 个未回收伏笔</span>` : ""}<button data-edit-outline="${esc(item.chapterId)}">编辑</button><button data-entity-history="chapter-outline" data-entity-id="${esc(item.chapterId)}" data-entity-title="${esc(item.chapterTitle)}">版本历史</button></div>
-    </article>`).join("")}</div>` : emptyModule("还没有章节", "先创建章节，再为每章维护目标、冲突和转折。\n");
+    </article>`).join("")}</div>${renderModulePagination(outlinePageResult, "outlinePlans", "章节规划")}` : emptyModule("还没有章节", "先创建章节，再为每章维护目标、冲突和转折。\n");
   $("#module-content").innerHTML = `<div class="outline-summary"><article><strong>${outlines.length}</strong><span>章节规划</span></article><article><strong>${unresolved.length}</strong><span>未回收伏笔</span></article><article class="${overdue.length ? "danger-text" : ""}"><strong>${overdue.length}</strong><span>已逾期</span></article></div><section class="planning-section"><div class="section-title"><div><span class="eyebrow">伏笔追踪</span><h2>尚未回收与历史伏笔</h2></div></div>${foreshadowHtml}</section><section class="planning-section"><div class="section-title"><div><span class="eyebrow">逐章规划</span><h2>章节目标、冲突与转折</h2></div></div>${outlineHtml}</section>`;
-  bindModuleLayoutToggle(renderOutlines);
+  bindModuleLayoutToggle(() => renderOutlines(outlinePageResult.page, foreshadowPageResult.page));
+  bindModulePagination("foreshadows", (page) => renderOutlines(outlinePageResult.page, page));
+  bindModulePagination("outlinePlans", (page) => renderOutlines(page, foreshadowPageResult.page));
   $("#module-content").querySelectorAll("[data-edit-outline]").forEach((button) => button.addEventListener("click", () => openOutlineDialog(outlines.find((item) => item.chapterId === button.dataset.editOutline))));
   $("#module-content").querySelectorAll("[data-edit-foreshadow]").forEach((button) => button.addEventListener("click", () => openForeshadowDialog(foreshadows.find((item) => item.id === button.dataset.editForeshadow))));
-  bindEntityHistoryButtons(renderOutlines);
+  bindEntityHistoryButtons(() => renderOutlines(outlinePageResult.page, foreshadowPageResult.page));
 }
 
-async function renderRelationships() {
+async function renderRelationships(page = moduleListPages.relationships) {
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const relationships = await apiAllPages(`/api/works/${state.work.id}/relationships`);
   const filteredRelationships = filterRelationships(relationships, relationshipFilters);
+  const pageResult = paginateModuleItems(filteredRelationships, page, "relationships");
+  moduleListPages.relationships = pageResult.page;
   const hasRelationshipFilters = relationshipFilters.fromCharacterIds.length > 0 || relationshipFilters.toCharacterIds.length > 0;
   const canEditRelationships = canEditModule("relationships");
   mountModuleCount(filteredRelationships.length);
@@ -3859,10 +3998,11 @@ async function renderRelationships() {
   if ($("#relationship-map-dialog").open) $("#relationship-map-dialog").close();
   const graph = buildRelationshipGraph(state.characters, relationships);
   state.relationshipGraph = graph;
-  const relationshipList = filteredRelationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${filteredRelationships.map((item) => `
+  const relationshipList = filteredRelationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${pageResult.items.map((item) => `
     <tr><td>${esc(nameOf(item.fromCharacterId))} ${item.directed ? "→" : "—"} ${esc(nameOf(item.toCharacterId))}</td>
     <td>${esc(relationshipCategoryLabel(item.category))} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(relationshipConfirmationLabel(item.confirmationStatus))}</td><td class="relationship-actions">${canEditRelationships ? `<button data-edit-relationship="${esc(item.id)}">编辑</button>` : ""}<button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : relationships.length ? '<div class="relationship-empty-note">没有符合当前筛选条件的关系。</div>' : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>';
-  $("#module-content").innerHTML = `${filterToolbar}<div id="relationship-map-host"></div>${relationshipList}`;
+  $("#module-content").innerHTML = `${filterToolbar}<div id="relationship-map-host"></div>${relationshipList}${renderModulePagination(pageResult, "relationships", "人物关系列表")}`;
+  bindModulePagination("relationships", renderRelationships);
   const openGalaxy = () => {
     state.galaxy?.destroy();
     state.galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, { workId: state.work.id });
@@ -3882,24 +4022,24 @@ async function renderRelationships() {
   $("#relationship-from-character-filter").addEventListener("change", async () => {
     relationshipFiltersPanelOpen = true;
     relationshipFilters.fromCharacterIds = readSelectedValues("#relationship-from-character-filter");
-    await renderRelationships();
+    await renderRelationships(1);
   });
   $("#relationship-to-character-filter").addEventListener("change", async () => {
     relationshipFiltersPanelOpen = true;
     relationshipFilters.toCharacterIds = readSelectedValues("#relationship-to-character-filter");
-    await renderRelationships();
+    await renderRelationships(1);
   });
   $("#clear-relationship-filters")?.addEventListener("click", async () => {
     relationshipFiltersPanelOpen = true;
     relationshipFilters.fromCharacterIds = [];
     relationshipFilters.toCharacterIds = [];
-    await renderRelationships();
+    await renderRelationships(1);
   });
   $("#module-content").querySelectorAll("[data-edit-relationship]").forEach((button) => button.addEventListener("click", () => openRelationshipDialog(filteredRelationships.find((item) => item.id === button.dataset.editRelationship))));
-  bindEntityHistoryButtons(async () => { await renderRelationships(); await loadAiReferences(); });
+  bindEntityHistoryButtons(async () => { await renderRelationships(pageResult.page); await loadAiReferences(); });
 }
 
-async function renderReviews() {
+async function renderReviews(page = moduleListPages.reviews) {
   const canReadCharacters = canReadModule("characters");
   const canResolveReview = canEditModule("reviews");
   const canMergeCharacters = canResolveReview
@@ -3909,6 +4049,8 @@ async function renderReviews() {
     canReadCharacters ? apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
   ]);
   mountModuleCount(reviews.length);
+  const pageResult = paginateModuleItems(reviews, page, "reviews");
+  moduleListPages.reviews = pageResult.page;
   const characterById = new Map(characters.map((character) => [character.id, character]));
   const duplicateCard = (item) => {
     const refs = (item.entityRefs ?? []).filter((reference) => reference?.type === "character" && characterById.has(reference.id));
@@ -3946,13 +4088,14 @@ async function renderReviews() {
   };
   if (reviews.length) mountModuleLayoutToggle(layout, "审核列表样式");
   $("#module-content").innerHTML = reviews.length
-    ? `${layout === "rows" ? `<div class="module-row-list">${reviews.map(reviewRow).join("")}</div>` : `<div class="card-grid">${reviews.map(reviewCard).join("")}</div>`}`
+    ? `${layout === "rows" ? `<div class="module-row-list">${pageResult.items.map(reviewRow).join("")}</div>` : `<div class="card-grid">${pageResult.items.map(reviewCard).join("")}</div>`}${renderModulePagination(pageResult, "reviews", "审核列表")}`
     : emptyModule("没有待审核事项", "候选设定、冲突与低置信度结论会集中显示在这里。");
-  bindModuleLayoutToggle(renderReviews);
+  bindModuleLayoutToggle(() => renderReviews(pageResult.page));
+  bindModulePagination("reviews", renderReviews);
   bindRecordPreview("[data-open-review]", (id) => openReviewDetailDialog(reviews.find((item) => item.id === id)));
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
     await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
-    await renderReviews();
+    await renderReviews(pageResult.page);
   }));
   $("#module-content").querySelectorAll("[data-merge-review]").forEach((button) => button.addEventListener("click", async () => {
     const target = characterById.get(button.dataset.mergeTarget);
@@ -3971,7 +4114,7 @@ async function renderReviews() {
         expectedSourceVersionNo: Number(button.dataset.sourceVersion)
       } });
       toast(`已将“${source.name}”合并到“${target.name}”`);
-      await renderReviews();
+      await renderReviews(pageResult.page);
       await loadAiReferences();
     } catch (error) {
       toast(error.message, "error");
@@ -3983,7 +4126,7 @@ async function renderReviews() {
     try {
       await api(`/api/reviews/${button.dataset.keepCharactersSeparate}/character-resolution`, { method: "POST", body: { action: "keep-separate" } });
       toast("已确认这两个档案属于不同角色");
-      await renderReviews();
+      await renderReviews(pageResult.page);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
@@ -4097,6 +4240,7 @@ async function renderTasks(page = taskListPage) {
     try {
       const result = await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
       toast(`已开始下一轮，队列中还有 ${result.pendingCount} 个待执行任务`);
+      await refreshBackgroundTaskCenter({ announce: false });
       await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -4135,6 +4279,7 @@ async function renderTasks(page = taskListPage) {
       scheduleTaskProgressRefresh(workId, 1);
       const completed = await api(`/api/tasks/${button.dataset.runTask}/run`, { method: "POST", body: {} });
       toast(completed.status === "cancelled" ? "分析任务已取消" : completed.status === "expired" ? "正文已变化，本次分析已过期" : "分析已完成");
+      await refreshBackgroundTaskCenter({ announce: false });
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -4146,6 +4291,7 @@ async function renderTasks(page = taskListPage) {
     try {
       await api(`/api/tasks/${button.dataset.cancelTask}/cancel`, { method: "POST", body: {} });
       toast("分析任务已取消");
+      await refreshBackgroundTaskCenter({ announce: false });
       if (state.module === "tasks") await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -4153,6 +4299,23 @@ async function renderTasks(page = taskListPage) {
     }
   }));
   scheduleTaskProgressRefresh(state.work.id, runningCount);
+}
+
+async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {
+  const workId = state.work?.id;
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "正在创建";
+  try {
+    const rerun = await api(`/api/tasks/${encodeURIComponent(taskId)}/rerun`, { method: "POST", body: {} });
+    if (closeDetail) $("#form-dialog").close();
+    toast(`已按原配置创建新任务 ${rerun.id}`);
+    if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function stopTaskProgressRefresh() {
@@ -4373,6 +4536,30 @@ function renderTaskResultItem(item) {
     </article>`;
 }
 
+function renderRelationshipChangePreview(task, result) {
+  const preview = result.relationshipChangePreview && typeof result.relationshipChangePreview === "object"
+    ? result.relationshipChangePreview
+    : null;
+  if (!preview) return "";
+  const totalCount = Number(preview.totalCount ?? 0);
+  const counts = `新增 ${Number(preview.createdCount ?? 0)} 项 · 更新 ${Number(preview.updatedCount ?? 0)} 项 · 删除 ${Number(preview.deletedCount ?? 0)} 项`;
+  if (preview.status === "pending") {
+    return `<section class="relationship-change-preview is-pending" aria-label="人物关系变更待确认">
+      <div><small>写入前预览</small><h4>人物关系库尚未修改</h4><p>${esc(counts)}。请先核对下方关系和原文证据，再决定是否应用。</p></div>
+      ${Number(preview.deletedCount ?? 0) > 0 ? `<p class="relationship-change-preview-warning">确认应用后将删除 ${Number(preview.deletedCount)} 条已有关系；若资料已被他人修改，系统会阻止过期预览覆盖新版本。</p>` : ""}
+      <div class="relationship-change-preview-actions">
+        ${totalCount > 0 && canEditModule("relationships") ? `<button class="primary-button" type="button" data-apply-relationship-changes="${esc(task.id)}">确认并应用 ${totalCount} 项变更</button>` : ""}
+        <button class="ghost-button" type="button" data-discard-relationship-changes="${esc(task.id)}">${totalCount > 0 ? "放弃本次变更" : "结束无变更预览"}</button>
+        ${!canEditModule("relationships") && totalCount > 0 ? "<small>当前账号没有编辑人物关系的权限，只能查看或放弃本次变更。</small>" : ""}
+      </div>
+    </section>`;
+  }
+  const applied = preview.status === "applied";
+  return `<section class="relationship-change-preview ${applied ? "is-applied" : "is-discarded"}" aria-label="人物关系变更状态">
+    <div><small>写入前预览</small><h4>${applied ? "变更已应用" : "本次变更已放弃"}</h4><p>${esc(counts)}。${applied ? "人物关系库已按确认结果更新。" : "人物关系库未因本次预览发生修改。"}</p></div>
+  </section>`;
+}
+
 function renderTaskResult(task) {
   const result = task.resultSummary && typeof task.resultSummary === "object" ? task.resultSummary : {};
   const metrics = Array.isArray(result.metrics) ? result.metrics : [];
@@ -4385,6 +4572,7 @@ function renderTaskResult(task) {
       <p class="task-result-summary">${esc(result.summary || "任务尚未产生分析结果。")}</p>
       ${result.restricted ? '<p class="task-result-warning">部分结果因当前账号权限受限而隐藏。</p>' : ""}
     </section>
+    ${renderRelationshipChangePreview(task, result)}
     <section class="task-result-section">
       <h4>结果保存位置</h4>
       <p><strong>作品</strong> ${esc(state.work?.title || "当前作品")}</p>
@@ -4426,6 +4614,111 @@ function bindTaskResultActions(container) {
       button.textContent = "重新加载完整 JSON";
     }
   }));
+  container.querySelectorAll("[data-apply-relationship-changes], [data-discard-relationship-changes]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const taskId = button.dataset.applyRelationshipChanges || button.dataset.discardRelationshipChanges;
+    const action = button.dataset.applyRelationshipChanges ? "apply" : "discard";
+    const controls = button.closest(".relationship-change-preview")?.querySelectorAll("button") ?? [];
+    controls.forEach((control) => { control.disabled = true; });
+    button.textContent = action === "apply" ? "正在应用变更" : "正在放弃变更";
+    try {
+      await api(`/api/tasks/${encodeURIComponent(taskId)}/relationship-changes/${action}`, { method: "POST", body: {} });
+      $("#form-dialog").close();
+      toast(action === "apply" ? "人物关系变更已应用" : "本次人物关系变更已放弃");
+      if (state.module === "tasks") await renderTasks();
+    } catch (error) {
+      toast(error.message, "error");
+      controls.forEach((control) => { control.disabled = false; });
+      button.textContent = action === "apply" ? "重新确认并应用" : "重新放弃本次变更";
+    }
+  }));
+}
+
+function relationshipIdentityRepairFailure(task) {
+  if (task?.taskType !== "relationship-analysis" || !Array.isArray(task.failures)) return null;
+  return task.failures.find((failure) =>
+    failure?.code === "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED"
+    && failure.details
+    && typeof failure.details === "object"
+    && typeof failure.details.characterId === "string"
+  ) ?? null;
+}
+
+function relationshipIdentityRepairMetrics(details) {
+  const metrics = [];
+  if (Number.isFinite(Number(details.candidateCount))) {
+    metrics.push(["疑似来源", `${Number(details.candidateCount)} / 上限 ${Number(details.maximum)}`]);
+  }
+  if (Number.isFinite(Number(details.fuzzyReferenceCount))) {
+    metrics.push(["名称与别名", `${Number(details.fuzzyReferenceCount)} / 上限 ${Number(details.maximumFuzzyReferences)}`]);
+  }
+  if (Number.isFinite(Number(details.scannedCharacters))) {
+    metrics.push(["待核对文本", `${Number(details.scannedCharacters).toLocaleString("zh-CN")} / 上限 ${Number(details.maximumScannedCharacters).toLocaleString("zh-CN")} 字符`]);
+  }
+  if (Number.isFinite(Number(details.fuzzyMatchCount))) {
+    metrics.push(["疑似写法", `${Number(details.fuzzyMatchCount)} / 上限 ${Number(details.maximumFuzzyMatches)}`]);
+  }
+  metrics.push(["身份锚点", `${Number(details.identityAnchorCount ?? 0)} 个`]);
+  return metrics;
+}
+
+async function openRelationshipIdentityRepairDialog(task, failure) {
+  const details = failure.details && typeof failure.details === "object" ? failure.details : {};
+  const character = await api(`/api/characters/${encodeURIComponent(details.characterId)}`);
+  const anchors = [
+    character.code,
+    character.attributes?.identity,
+    character.race?.name || character.species,
+    ...(Array.isArray(character.organizations) ? character.organizations.map((organization) => organization.name) : [])
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  const metrics = relationshipIdentityRepairMetrics(details);
+  const metricHtml = metrics.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join("");
+  const anchorHtml = anchors.length
+    ? anchors.map((anchor) => `<span>${esc(anchor)}</span>`).join("")
+    : "<em>尚未登记可用于消歧的身份锚点</em>";
+  openDialog("修复人物身份资料",
+    `<section class="relationship-identity-repair-summary">
+      <div><span>匹配诊断</span><h3>${esc(character.name)}</h3><p>${esc(failure.message)}</p></div>
+      <dl>${metricHtml}</dl>
+      <div class="relationship-identity-anchor-list"><strong>当前身份锚点</strong><div>${anchorHtml}</div></div>
+    </section>
+    <p class="relationship-identity-repair-guidance">把原文中确实指向该人物的稳定称呼登记为别名；编号和身份定位应填写会在正文或设定中共同出现的辨识词。保存后，别名命中会转为精确匹配，身份锚点可收窄过多的拼音疑似来源。</p>
+    <label>角色标准名<input type="text" value="${esc(character.name)}" readonly></label>
+    ${field("aliases", "确认别名", "item-list", character.aliases ?? [])}
+    ${field("code", "人物编号或代号", "text", character.code)}
+    ${field("identity", "身份与定位", "text", character.attributes?.identity)}
+    <button class="ghost-button relationship-identity-full-profile" type="button" data-open-identity-character-profile>打开完整人物档案</button>`,
+    async (form) => {
+      const aliases = form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean);
+      const code = String(form.get("code") ?? "").trim();
+      const identity = String(form.get("identity") ?? "").trim();
+      const saved = await api(`/api/characters/${encodeURIComponent(character.id)}`, {
+        method: "PATCH",
+        body: {
+          aliases,
+          code,
+          attributes: { ...(character.attributes ?? {}), identity },
+          expectedVersionNo: character.versionNo,
+          changeNote: `修复人物关系来源匹配：${failure.message}`.slice(0, 500)
+        }
+      });
+      await loadAiReferences();
+      if (state.module === "tasks") await renderTasks(taskListPage);
+      toast(`“${saved.name}”的身份资料已保存为 v${saved.versionNo}，可重新运行原分析配置`);
+    },
+    "人物关系匹配修复",
+    {
+      submitLabel: "保存身份修复",
+      pendingLabel: "保存中…",
+      pendingMessage: "正在保存人物身份资料",
+      errorPrefix: "身份修复失败：",
+      wide: true
+    });
+  $("#dialog-fields").querySelector("[data-open-identity-character-profile]")?.addEventListener("click", async () => {
+    $("#form-dialog").close();
+    await openCharacterEditor(character);
+    activateCharacterEditorTab("profile");
+  });
 }
 
 function openTaskDetailDialog(task, trace) {
@@ -4454,6 +4747,15 @@ function openTaskDetailDialog(task, trace) {
   const failureHtml = failures.length
     ? `<ul>${failures.map((item) => `<li>${esc(item.message || JSON.stringify(item))}</li>`).join("")}</ul>`
     : "<p>无</p>";
+  const identityRepairFailure = relationshipIdentityRepairFailure(task);
+  const identityRepairHtml = identityRepairFailure
+    ? `<section class="relationship-identity-repair-entry">
+        <div><strong>可修复的人物身份匹配问题</strong><p>系统已定位到触发来源超限的角色。补充准确别名或身份锚点后，再按原配置重试。</p></div>
+        ${canEditModule("characters")
+          ? '<button class="primary-button" type="button" data-task-identity-repair>修复人物身份资料</button>'
+          : "<small>当前账户没有人物模块编辑权限。</small>"}
+      </section>`
+    : "";
   const resultPreview = renderTaskResult(task);
   openDialog("任务详情",
     `<div class="task-detail">
@@ -4464,8 +4766,9 @@ function openTaskDetailDialog(task, trace) {
         <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
         <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
-        <div><strong>失败信息</strong>${failureHtml}</div>
+        <div><strong>失败信息</strong>${failureHtml}${identityRepairHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
+        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重新执行</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
@@ -4474,6 +4777,19 @@ function openTaskDetailDialog(task, trace) {
     { submitLabel: "关闭", wide: true, trace: true });
   bindTaskTraceCallActions($("#dialog-fields"));
   bindTaskResultActions($("#dialog-fields"));
+  $("#dialog-fields").querySelector("[data-rerun-task-detail]")?.addEventListener("click", async (event) => {
+    await rerunAnalysisTask(event.currentTarget.dataset.rerunTaskDetail, event.currentTarget, { closeDetail: true });
+  });
+  $("#dialog-fields").querySelector("[data-task-identity-repair]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    $("#form-dialog").close();
+    try {
+      await openRelationshipIdentityRepairDialog(task, identityRepairFailure);
+    } catch (error) {
+      toast(`身份修复向导加载失败：${error.message}`, "error");
+    }
+  });
 }
 
 function renderProviderCards(providers, models) {
@@ -4518,6 +4834,266 @@ function renderTaskDefaults(models, providers, taskDefaults) {
   </section>` : emptyModule("尚未配置平台模型", "请先在平台 AI 管理中添加并测试供应商模型。");
 }
 
+const relationshipIndexStatusLabels = Object.freeze({
+  queued: "等待同步",
+  building: "正在同步",
+  ready: "已索引",
+  failed: "同步失败"
+});
+
+const relationshipIndexSourceLabels = Object.freeze({
+  work: "作品资料",
+  chapter: "正文",
+  setting: "设定",
+  character: "人物",
+  race: "种族",
+  organization: "组织",
+  "timeline-track": "时间轴",
+  "timeline-event": "时间线事件",
+  relationship: "人物关系",
+  "chapter-outline": "章节大纲",
+  foreshadow: "伏笔",
+  review: "审核项"
+});
+
+function relationshipIndexStatusMarkup(status) {
+  const queuedSources = Array.isArray(status.queuedSources) ? status.queuedSources : [];
+  const statusName = relationshipIndexStatusLabels[status.status] ?? "状态未知";
+  const queueMarkup = queuedSources.length
+    ? queuedSources.map((item) => `<span class="relationship-index-queue-chip"><span>${esc(relationshipIndexSourceLabels[item.sourceType] ?? item.sourceType)}</span><strong>${esc(String(item.count))}</strong></span>`).join("")
+    : '<span class="relationship-index-queue-empty">队列为空</span>';
+  const updatedAt = formatDateTime(status.updatedAt) || "尚未构建";
+  const errorMarkup = status.error
+    ? `<p class="relationship-index-error">${esc(status.error)}</p>`
+    : "";
+  return `<div class="relationship-index-summary">
+    <div class="relationship-index-state-row"><span class="relationship-index-state is-${esc(String(status.status ?? "unknown"))}">${esc(statusName)}</span><span>索引代次 <strong>${esc(String(status.generation ?? 0))}</strong></span><span>最后更新 <strong>${esc(updatedAt)}</strong></span></div>
+    <dl class="relationship-index-metrics"><div><dt>待同步任务</dt><dd>${esc(String(status.queuedSourceCount ?? 0))}</dd></div><div><dt>已索引正文段落</dt><dd>${esc(String(status.indexedParagraphCount ?? 0))}</dd></div><div><dt>已索引设定来源</dt><dd>${esc(String(status.indexedSourceCount ?? 0))}</dd></div></dl>
+    <div class="relationship-index-queue"><div class="relationship-index-queue-heading"><strong>增量任务队列</strong><span>仅包含新增、修改或删除后待同步的来源</span></div><div class="relationship-index-queue-list">${queueMarkup}</div></div>
+    ${errorMarkup}
+  </div>`;
+}
+
+function updateBackgroundTaskCenterVisibility() {
+  const button = $("#background-task-button");
+  if (!button) return;
+  const visible = Boolean(state.work)
+    && (canReadModule("tasks") || canReadModule("ai-settings"));
+  button.classList.toggle("hidden", !visible);
+  if (!visible) {
+    $("#background-task-count")?.classList.add("hidden");
+    return;
+  }
+  const activityCount = backgroundTaskActivityCount(
+    backgroundTaskCenterSnapshot.taskPage,
+    backgroundTaskCenterSnapshot.relationshipIndex
+  );
+  const badge = $("#background-task-count");
+  badge.textContent = activityCount > 99 ? "99+" : String(activityCount);
+  badge.classList.toggle("hidden", activityCount === 0);
+  button.classList.toggle("is-active", activityCount > 0);
+  button.setAttribute("aria-label", activityCount > 0 ? `后台任务中心，${activityCount} 项进行中` : "后台任务中心");
+  button.setAttribute("title", activityCount > 0 ? `后台任务中心 · ${activityCount} 项进行中` : "后台任务中心");
+}
+
+function backgroundTaskTransitionMessage(transition) {
+  const label = analysisTaskTypeLabel(transition.task.taskType);
+  if (transition.status === "partial") return { message: `${label}部分失败，请打开任务详情查看`, type: "error" };
+  if (transition.status === "expired") return { message: `${label}已过期，正文可能已发生变化`, type: "error" };
+  if (transition.status === "cancelled") return { message: `${label}已取消`, type: "info" };
+  return { message: `${label}已完成`, type: "info" };
+}
+
+function backgroundTaskListMarkup(taskPage, error) {
+  if (!canReadModule("tasks")) {
+    return '<section class="background-task-section"><div class="background-task-section-heading"><div><strong>AI 分析任务</strong><small>当前账户无权查看此模块</small></div></div></section>';
+  }
+  if (!taskPage) {
+    return `<section class="background-task-section"><div class="background-task-section-heading"><div><strong>AI 分析任务</strong><small>${esc(error || "正在读取任务队列")}</small></div></div></section>`;
+  }
+  const tasks = Array.isArray(taskPage.items) ? taskPage.items.slice(0, 10) : [];
+  const pendingCount = Number(taskPage.stats?.pendingCount ?? 0);
+  const runningCount = Number(taskPage.stats?.runningCount ?? 0);
+  return `<section class="background-task-section">
+    <div class="background-task-section-heading"><div><strong>AI 分析任务</strong><small>待执行 ${pendingCount} 个 · 运行中 ${runningCount} 个 · 共 ${Number(taskPage.stats?.total ?? taskPage.total ?? tasks.length)} 个</small></div></div>
+    ${error ? `<p class="background-task-error">${esc(error)}</p>` : ""}
+    ${tasks.length ? `<div class="background-task-list">${tasks.map((item) => {
+      const status = normalizedAnalysisTaskStatus(item.status);
+      return `<article class="background-task-row">
+        <span class="task-status-badge is-${esc(status)}"><span class="task-status-indicator" aria-hidden="true"></span><span>${esc(analysisTaskStatusLabel(item.status))}</span></span>
+        <div><strong>${esc(analysisTaskTypeLabel(item.taskType))}</strong><small>${esc(item.scopeSummary || "未指定范围")} · ${esc(item.model?.displayName || "默认模型")}</small></div>
+        <span class="background-task-progress">${analysisTaskProgressValue(item.progress)}%</span>
+        <button class="ghost-button" type="button" data-background-task-detail="${esc(item.id)}">详情</button>
+      </article>`;
+    }).join("")}</div>` : '<p class="background-task-empty">还没有 AI 分析任务。</p>'}
+  </section>`;
+}
+
+function backgroundIndexMarkup(relationshipIndex, error) {
+  if (!canReadModule("ai-settings")) {
+    return '<section class="background-task-section"><div class="background-task-section-heading"><div><strong>人物关系拼音索引</strong><small>当前账户无权查看此模块</small></div></div></section>';
+  }
+  if (!relationshipIndex) {
+    return `<section class="background-task-section"><div class="background-task-section-heading"><div><strong>人物关系拼音索引</strong><small>${esc(error || "正在读取索引队列")}</small></div></div></section>`;
+  }
+  const editable = canEditModule("ai-settings");
+  return `<section class="background-task-section">
+    <div class="background-task-section-heading">
+      <div><strong>人物关系拼音索引</strong><small>可在任何模块查看增量同步状态</small></div>
+      <div class="background-index-actions ${editable ? "" : "hidden"}">
+        <button class="primary-button" type="button" data-background-index-action="sync">同步增量队列</button>
+        <button class="ghost-button" type="button" data-background-index-action="rebuild">完整重建</button>
+      </div>
+    </div>
+    ${error ? `<p class="background-task-error">${esc(error)}</p>` : ""}
+    ${relationshipIndexStatusMarkup(relationshipIndex)}
+  </section>`;
+}
+
+function renderBackgroundTaskCenter() {
+  updateBackgroundTaskCenterVisibility();
+  const content = $("#background-task-content");
+  if (!content) return;
+  content.innerHTML = `${backgroundTaskListMarkup(
+    backgroundTaskCenterSnapshot.taskPage,
+    backgroundTaskCenterSnapshot.errors.tasks
+  )}${backgroundIndexMarkup(
+    backgroundTaskCenterSnapshot.relationshipIndex,
+    backgroundTaskCenterSnapshot.errors.index
+  )}`;
+  $("#background-task-dialog-meta").textContent = state.work
+    ? `《${state.work.title}》的分析任务与索引队列`
+    : "当前作品的分析任务与索引队列";
+  $("#background-task-open-analysis").classList.toggle("hidden", !canReadModule("tasks"));
+  content.querySelectorAll("[data-background-task-detail]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const taskId = encodeURIComponent(button.dataset.backgroundTaskDetail);
+      const [task, trace] = await Promise.all([
+        api(`/api/tasks/${taskId}/detail`),
+        api(`/api/tasks/${taskId}/trace`).catch((error) => {
+          if (error.code === "WORK_MODULE_READ_DENIED") return { restricted: true, captured: false, calls: [] };
+          throw error;
+        })
+      ]);
+      $("#background-task-dialog").close();
+      openTaskDetailDialog(task, trace);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+  content.querySelectorAll("[data-background-index-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (!backgroundTaskCenterWorkId) return;
+    button.disabled = true;
+    const action = button.dataset.backgroundIndexAction;
+    try {
+      const status = await api(`/api/works/${encodeURIComponent(backgroundTaskCenterWorkId)}/ai-settings/relationship-search-index/${action}`, {
+        method: "POST"
+      });
+      backgroundTaskCenterSnapshot.relationshipIndex = status;
+      renderBackgroundTaskCenter();
+      toast(action === "rebuild"
+        ? `已将全部来源加入索引队列，共 ${status.queuedSourceCount} 项`
+        : Number(status.queuedSourceCount) > 0
+          ? `开始同步 ${status.queuedSourceCount} 项增量任务`
+          : "增量任务队列为空，索引已是最新状态");
+      scheduleBackgroundTaskCenterRefresh();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+}
+
+function scheduleBackgroundTaskCenterRefresh() {
+  if (backgroundTaskCenterTimer !== null) window.clearTimeout(backgroundTaskCenterTimer);
+  backgroundTaskCenterTimer = null;
+  if (!backgroundTaskCenterWorkId) return;
+  const activityCount = backgroundTaskActivityCount(
+    backgroundTaskCenterSnapshot.taskPage,
+    backgroundTaskCenterSnapshot.relationshipIndex
+  );
+  const delay = backgroundTaskPollDelay(activityCount, Boolean($("#background-task-dialog")?.open));
+  backgroundTaskCenterTimer = window.setTimeout(() => {
+    backgroundTaskCenterTimer = null;
+    void refreshBackgroundTaskCenter();
+  }, delay);
+}
+
+async function refreshBackgroundTaskCenter({ announce = true } = {}) {
+  const workId = backgroundTaskCenterWorkId;
+  if (!workId || state.work?.id !== workId) return;
+  if (backgroundTaskCenterTimer !== null) window.clearTimeout(backgroundTaskCenterTimer);
+  backgroundTaskCenterTimer = null;
+  const requestId = ++backgroundTaskCenterRequest;
+  const readTasks = canReadModule("tasks");
+  const readIndex = canReadModule("ai-settings");
+  const [taskResult, indexResult] = await Promise.all([
+    readTasks
+      ? api(`/api/works/${encodeURIComponent(workId)}/tasks?page=1&limit=30`)
+        .then((value) => ({ value }))
+        .catch((error) => ({ error }))
+      : Promise.resolve(null),
+    readIndex
+      ? api(`/api/works/${encodeURIComponent(workId)}/ai-settings/relationship-search-index`)
+        .then((value) => ({ value }))
+        .catch((error) => ({ error }))
+      : Promise.resolve(null)
+  ]);
+  if (requestId !== backgroundTaskCenterRequest || backgroundTaskCenterWorkId !== workId || state.work?.id !== workId) return;
+  const errors = {};
+  if (taskResult?.value) {
+    const transitionResult = collectBackgroundTaskTransitions(
+      backgroundTaskCenterTaskSnapshots,
+      taskResult.value.items,
+      backgroundTaskCenterTasksInitialized
+    );
+    backgroundTaskCenterTaskSnapshots = transitionResult.snapshots;
+    backgroundTaskCenterSnapshot.taskPage = taskResult.value;
+    if (backgroundTaskCenterTasksInitialized && announce && state.module !== "tasks") {
+      for (const transition of transitionResult.transitions) {
+        const notification = backgroundTaskTransitionMessage(transition);
+        toast(notification.message, notification.type);
+      }
+    }
+    backgroundTaskCenterTasksInitialized = true;
+  } else if (taskResult?.error) {
+    errors.tasks = taskResult.error.message;
+    console.error("Failed to refresh background analysis tasks", taskResult.error);
+  }
+  if (indexResult?.value) {
+    backgroundTaskCenterSnapshot.relationshipIndex = indexResult.value;
+  } else if (indexResult?.error) {
+    errors.index = indexResult.error.message;
+    console.error("Failed to refresh relationship search index status", indexResult.error);
+  }
+  backgroundTaskCenterSnapshot.errors = errors;
+  renderBackgroundTaskCenter();
+  scheduleBackgroundTaskCenterRefresh();
+}
+
+function stopBackgroundTaskCenter() {
+  if (backgroundTaskCenterTimer !== null) window.clearTimeout(backgroundTaskCenterTimer);
+  backgroundTaskCenterTimer = null;
+  backgroundTaskCenterRequest += 1;
+  backgroundTaskCenterWorkId = null;
+  backgroundTaskCenterTasksInitialized = false;
+  backgroundTaskCenterTaskSnapshots = new Map();
+  backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
+  const dialog = $("#background-task-dialog");
+  if (dialog?.open) dialog.close();
+  $("#background-task-button")?.classList.add("hidden");
+  $("#background-task-count")?.classList.add("hidden");
+}
+
+function startBackgroundTaskCenter(workId) {
+  stopBackgroundTaskCenter();
+  backgroundTaskCenterWorkId = String(workId);
+  renderBackgroundTaskCenter();
+  void refreshBackgroundTaskCenter();
+}
+
 async function renderPlatformAiConfig() {
   const [providers, models, settings] = await Promise.all([
     api("/api/platform/ai/providers"),
@@ -4541,16 +5117,116 @@ async function renderPlatformAiConfig() {
   bindPlatformProviderActions(host, providers, models);
 }
 
+function tokenUsageDateLabel(date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    weekday: "short"
+  }).format(new Date(`${date}T00:00:00`));
+}
+
+function tokenUsageCalendarMarkup(daily) {
+  const calendar = buildUsageCalendar(daily);
+  const cells = calendar.cells.map((cell) => {
+    const label = `${tokenUsageDateLabel(cell.date)}：${Number(cell.totalTokens).toLocaleString("zh-CN")} Token`;
+    return `<span class="usage-calendar-cell${cell.future ? " is-future" : ""}" data-level="${cell.level}" role="gridcell" aria-label="${esc(label)}" title="${esc(label)}" ${cell.future ? 'aria-disabled="true"' : 'tabindex="0"'}></span>`;
+  }).join("");
+  const months = calendar.months.map((month) => `<span style="grid-column:${month.week + 1}">${esc(month.label)}</span>`).join("");
+  return `<div class="usage-calendar-scroll" tabindex="0" aria-label="每日 Token 用量日历，可横向滚动">
+    <div class="usage-calendar-frame" style="--usage-week-count:${calendar.weekCount}">
+      <div class="usage-calendar-months" aria-hidden="true">${months}</div>
+      <div class="usage-calendar-body">
+        <div class="usage-calendar-weekdays" aria-hidden="true"><span>一</span><span>三</span><span>五</span></div>
+        <div class="usage-calendar-grid" role="grid" aria-label="过去 53 周每日 Token 用量">${cells}</div>
+      </div>
+    </div>
+  </div>
+  <div class="usage-calendar-legend"><span>少</span>${[0, 1, 2, 3, 4].map((level) => `<i data-level="${level}" aria-hidden="true"></i>`).join("")}<span>多</span></div>`;
+}
+
+function scrollUsageCalendarsToLatest(root) {
+  window.requestAnimationFrame(() => {
+    root.querySelectorAll(".usage-calendar-scroll").forEach((calendar) => {
+      calendar.scrollLeft = calendar.scrollWidth;
+    });
+  });
+}
+
+function tokenUsageOverviewMarkup(usage, { title, description, showWorks = false } = {}) {
+  const summary = usage?.summary ?? {};
+  const totalTokens = Number(summary.totalTokens) || 0;
+  const exactTotal = totalTokens.toLocaleString("zh-CN");
+  const estimatedRequests = Number(summary.estimatedRequestCount) || 0;
+  const requestCount = Number(summary.requestCount) || 0;
+  const cachedInputTokens = Number(summary.cachedInputTokens) || 0;
+  const cacheEligibleInputTokens = Number(summary.cacheEligibleInputTokens) || 0;
+  const cacheDescription = summary.cacheHitRate === null || summary.cacheHitRate === undefined
+    ? "供应商尚未返回可计算的缓存明细"
+    : `${cachedInputTokens.toLocaleString("zh-CN")} / ${cacheEligibleInputTokens.toLocaleString("zh-CN")} 个可统计输入 Token 命中缓存`;
+  const estimateNote = estimatedRequests > 0
+    ? `其中 ${estimatedRequests.toLocaleString("zh-CN")} 次调用包含历史或供应商缺失用量时的估算。`
+    : "全部用量均来自供应商返回的 Token 统计。";
+  const works = Array.isArray(usage?.works) ? usage.works : [];
+  const workRows = works.map((work) => `<tr>
+    <th scope="row">${esc(work.workTitle)}</th>
+    <td title="${esc(Number(work.totalTokens || 0).toLocaleString("zh-CN"))} Token">${esc(formatTokenCount(work.totalTokens))}</td>
+    <td>${esc(formatTokenCount(work.inputTokens))}</td>
+    <td>${esc(formatTokenCount(work.outputTokens))}</td>
+    <td>${esc(formatCacheHitRate(work.cacheHitRate))}</td>
+    <td>${Number(work.requestCount || 0).toLocaleString("zh-CN")}</td>
+  </tr>`).join("");
+  return `<section class="usage-overview" aria-labelledby="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">
+    <div class="config-section-header"><div><h2 id="${showWorks ? "platform-usage-overview-title" : "work-usage-overview-title"}">${esc(title || "Token 用量")}</h2><p>${esc(description || "统计该范围内的全部 AI 调用。")}</p></div></div>
+    <div class="usage-stat-grid">
+      <article class="usage-stat is-primary"><span>总消耗</span><strong title="${esc(exactTotal)} Token">${esc(formatTokenCount(totalTokens))}</strong><small>${esc(exactTotal)} Token</small></article>
+      <article class="usage-stat"><span>输入 Token</span><strong>${esc(formatTokenCount(summary.inputTokens))}</strong><small>${Number(summary.inputTokens || 0).toLocaleString("zh-CN")}</small></article>
+      <article class="usage-stat"><span>输出 Token</span><strong>${esc(formatTokenCount(summary.outputTokens))}</strong><small>${Number(summary.outputTokens || 0).toLocaleString("zh-CN")}</small></article>
+      <article class="usage-stat"><span>缓存命中率</span><strong>${esc(formatCacheHitRate(summary.cacheHitRate))}</strong><small>${esc(cacheDescription)}</small></article>
+    </div>
+    <p class="usage-measurement-note">${requestCount.toLocaleString("zh-CN")} 次有用量记录的调用。${esc(estimateNote)}</p>
+    <section class="usage-calendar-section" aria-labelledby="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">
+      <header><div><h3 id="${showWorks ? "platform-usage-calendar-title" : "work-usage-calendar-title"}">每日用量</h3><p>GitHub 风格网格展示过去 53 周；颜色越深，当天消耗越高。</p></div></header>
+      ${tokenUsageCalendarMarkup(usage?.daily)}
+    </section>
+    ${showWorks ? `<section class="usage-work-section" aria-labelledby="usage-work-title"><header><div><h3 id="usage-work-title">各作品用量</h3><p>按 Token 总消耗从高到低排列，包含尚未使用 AI 的作品。</p></div></header><div class="usage-work-table-scroll"><table class="usage-work-table"><thead><tr><th>作品</th><th>总消耗</th><th>输入</th><th>输出</th><th>缓存命中率</th><th>调用</th></tr></thead><tbody>${workRows || '<tr><td colspan="6">还没有作品用量记录。</td></tr>'}</tbody></table></div></section>` : ""}
+  </section>`;
+}
+
+async function renderPlatformTokenUsage() {
+  const host = $("#platform-usage-content");
+  host.innerHTML = '<div class="empty-state">正在汇总 Token 用量……</div>';
+  const timezoneOffset = -new Date().getTimezoneOffset();
+  const usage = await api(`/api/platform/ai/usage?timezoneOffset=${timezoneOffset}`);
+  host.innerHTML = tokenUsageOverviewMarkup(usage, {
+    title: "项目累计用量",
+    description: "汇总所有作品迄今产生的输入与输出 Token；缓存命中率仅基于供应商返回了缓存明细的调用。",
+    showWorks: true
+  });
+  scrollUsageCalendarsToLatest(host);
+}
+
 async function renderBookAiSettings() {
-  const [settings, providers, models, taskDefaults] = await Promise.all([
+  if (relationshipSearchIndexRefreshTimer) {
+    clearTimeout(relationshipSearchIndexRefreshTimer);
+    relationshipSearchIndexRefreshTimer = null;
+  }
+  const [settings, providers, models, taskDefaults, relationshipIndex, usage] = await Promise.all([
     api(`/api/works/${state.work.id}/ai-settings`),
     api("/api/platform/ai/providers"),
     api(`/api/works/${state.work.id}/models`),
-    api(`/api/works/${state.work.id}/task-defaults`)
+    api(`/api/works/${state.work.id}/task-defaults`),
+    api(`/api/works/${state.work.id}/ai-settings/relationship-search-index`),
+    api(`/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`)
   ]);
   const host = $("#module-content");
+  const workId = String(state.work.id);
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
+    title: "本书 Token 用量",
+    description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
     `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
@@ -4563,6 +5239,33 @@ async function renderBookAiSettings() {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
     host.querySelectorAll(".config-save-button").forEach((button) => button.classList.add("permission-hidden"));
   }
+  const isCurrentRelationshipIndexPanel = () => state.module === "ai-settings"
+    && String(state.work?.id ?? "") === workId
+    && Boolean($("#relationship-search-index-status"));
+  const updateRelationshipIndexStatus = (status) => {
+    const statusHost = $("#relationship-search-index-status");
+    if (!statusHost) return;
+    statusHost.innerHTML = relationshipIndexStatusMarkup(status);
+    if (relationshipSearchIndexRefreshTimer) clearTimeout(relationshipSearchIndexRefreshTimer);
+    relationshipSearchIndexRefreshTimer = null;
+    if (!["queued", "building"].includes(String(status.status))) return;
+    relationshipSearchIndexRefreshTimer = setTimeout(async () => {
+      relationshipSearchIndexRefreshTimer = null;
+      if (!isCurrentRelationshipIndexPanel()) return;
+      try {
+        const nextStatus = await api(`/api/works/${workId}/ai-settings/relationship-search-index`);
+        if (isCurrentRelationshipIndexPanel()) updateRelationshipIndexStatus(nextStatus);
+      } catch {
+        // 后台轮询失败时保留当前状态，用户仍可手动刷新。
+      }
+    }, 1_200);
+  };
+  const refreshRelationshipIndexStatus = async () => {
+    const status = await api(`/api/works/${workId}/ai-settings/relationship-search-index`);
+    updateRelationshipIndexStatus(status);
+    return status;
+  };
+  updateRelationshipIndexStatus(relationshipIndex);
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
@@ -4570,6 +5273,46 @@ async function renderBookAiSettings() {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { systemPrompt: $("#work-system-prompt").value } });
       toast("本书系统提示词已保存");
       scheduleAiContextUsage();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#sync-relationship-search-index").addEventListener("click", async () => {
+    const button = $("#sync-relationship-search-index");
+    button.disabled = true;
+    try {
+      const status = await api(`/api/works/${workId}/ai-settings/relationship-search-index/sync`, { method: "POST" });
+      updateRelationshipIndexStatus(status);
+      toast(Number(status.queuedSourceCount) > 0
+        ? `开始同步 ${status.queuedSourceCount} 项增量任务`
+        : "增量任务队列为空，索引已是最新状态");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#refresh-relationship-search-index").addEventListener("click", async () => {
+    const button = $("#refresh-relationship-search-index");
+    button.disabled = true;
+    try {
+      await refreshRelationshipIndexStatus();
+      toast("索引状态已刷新", "info");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#rebuild-relationship-search-index").addEventListener("click", async () => {
+    const button = $("#rebuild-relationship-search-index");
+    button.disabled = true;
+    try {
+      const status = await api(`/api/works/${workId}/ai-settings/relationship-search-index/rebuild`, { method: "POST" });
+      updateRelationshipIndexStatus(status);
+      toast(`已将全部来源加入索引队列，共 ${status.queuedSourceCount} 项`);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6040,9 +6783,10 @@ async function showCharacterHistory() {
 
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
-  [state.races, state.organizations] = await Promise.all([
+  [state.races, state.organizations, state.characters] = await Promise.all([
     canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
+    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
@@ -6391,6 +7135,7 @@ async function openRelationshipDialog(item, options = {}) {
     <div><strong>关系操作</strong><small>删除操作会记录到版本历史和审计日志。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-relationship-delete>删除关系</button></div>
   </section>` : "";
+  setRelationshipPresence(item?.id ?? null);
   openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false) + management, async (form) => {
     const keywords = uniqueRelationshipKeywords(form.getAll("keywords").map(String));
     await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed", ...(item ? { expectedVersionNo: item.versionNo } : {}) } });
@@ -6398,15 +7143,19 @@ async function openRelationshipDialog(item, options = {}) {
   }, item ? "关系档案" : "人工确认关系");
   $("#dialog-fields").querySelector("[data-dialog-relationship-delete]")?.addEventListener("click", async () => {
     const dialog = $("#form-dialog");
+    const reopenDialog = () => {
+      setRelationshipPresence(item.id);
+      dialog.showModal();
+    };
     dialog.close();
-    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return dialog.showModal();
-    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return dialog.showModal();
+    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return reopenDialog();
+    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return reopenDialog();
     try {
       await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
       await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
       toast(`已删除人物关系“${relationshipName}”`);
     } catch (error) {
-      dialog.showModal();
+      reopenDialog();
       toast(error.message, "error");
     }
   });
@@ -6471,30 +7220,76 @@ async function openTaskDialog() {
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
     <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。默认仅追加不存在的关系，不修改或删除已有关系。</span></p>
-    <div class="relationship-overwrite-card hidden">
+    <div class="relationship-overwrite-card relationship-prefilter-card">
+      <label class="checkbox-field"><input name="preFilterRelationshipSources" type="checkbox" checked disabled><span>分析前按人物名称和拼音过滤来源</span></label>
+      <p>仅对定向人物分析生效。取消勾选后，将跳过前置过滤，无差别发送所选范围内的全部章节和设定来源。</p>
+    </div>
+    <div class="relationship-overwrite-card relationship-change-preview-card">
+      <label class="checkbox-field"><input name="previewRelationshipChanges" type="checkbox" checked><span>分析完成后先预览关系变更</span></label>
+      <p>建议保持开启。分析只生成新增、更新和删除清单，确认应用前不会修改人物关系库；取消勾选则沿用直接写入逻辑。</p>
+    </div>
+    <section class="relationship-source-preview-card" aria-labelledby="relationship-source-preview-title">
+      <div class="relationship-source-preview-header">
+        <div><strong id="relationship-source-preview-title">发送来源预检</strong><p>创建任务前查看将发送的章节与设定，并可取消误命中的来源。疑似拼音写法可能调用当前任务模型确认身份。</p></div>
+        <button type="button" class="ghost-button" data-relationship-source-preview disabled>预览来源</button>
+      </div>
+      <div class="relationship-source-preview-content" data-relationship-source-preview-content role="status" aria-live="polite">选择至少一个被分析角色后即可预览。</div>
+    </section>
+    <div class="relationship-overwrite-card relationship-existing-overwrite-card hidden">
       <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
       <p>勾选后，任务成功时会先删除所有涉及所选角色的旧关系，再写入本次分析结果；不勾选则只追加新关系。</p>
     </div>
     <label>额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将同时追加到证据收集和全局关系归纳提示词，仅影响本次任务。</small></label>
   </div>`;
-  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
+  let relationshipSourcePreview = null;
+  let relationshipSourcePreviewConfigKey = "";
+  const buildRelationshipScope = (form) => {
     const taskType = String(form.get("taskType"));
-    const modelId = String(form.get("modelId"));
     const scopeType = String(form.get("scopeType"));
     const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
     const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
     const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
+    const preFilterRelationshipSources = characterIds.length > 0 && form.get("preFilterRelationshipSources") === "on";
+    const previewRelationshipChanges = taskType === "relationship-analysis" && form.get("previewRelationshipChanges") === "on";
     const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
     const scope = settingsOnly
-      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
-      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
-      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+    return scope;
+  };
+  const relationshipPreviewKey = (scope, modelId) => JSON.stringify({
+    type: scope.type,
+    chapterId: scope.chapterId ?? null,
+    includeAllSettings: scope.includeAllSettings === true,
+    characterIds: scope.characterIds ?? [],
+    preFilterRelationshipSources: scope.preFilterRelationshipSources !== false,
+    modelId
+  });
+  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
+    const taskType = String(form.get("taskType"));
+    const modelId = String(form.get("modelId"));
+    const scope = buildRelationshipScope(form);
+    if (taskType === "relationship-analysis" && relationshipSourcePreview
+      && relationshipSourcePreviewConfigKey === relationshipPreviewKey(scope, modelId)) {
+      scope.relationshipSourceRefs = [...$("#dialog-fields").querySelectorAll("[data-relationship-source-selected]:checked")]
+        .map((input) => ({
+          sourceType: input.dataset.sourceType,
+          sourceId: input.dataset.sourceId,
+          sourceVersion: input.dataset.sourceVersion
+        }));
+    }
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
+    await refreshBackgroundTaskCenter({ announce: false });
     taskListPage = 1;
-    toast("分析任务已创建，已进入任务队列");
-    void renderTasks(1).catch((error) => toast(`任务已创建，但列表刷新失败：${error.message}`, "error"));
+    try {
+      await renderTasks(1);
+      toast("分析任务已创建，已进入任务队列");
+    } catch (error) {
+      toast(`任务已创建，但列表刷新失败：${error.message}`, "error");
+    }
   }, "AI 分析", {
     submitLabel: "创建任务",
     pendingLabel: "创建中…",
@@ -6518,8 +7313,11 @@ async function openTaskDialog() {
   const relationshipCharacterCount = relationshipOptions.querySelector("[data-relationship-character-count]");
   const relationshipCharacterClear = relationshipOptions.querySelector("[data-relationship-character-clear]");
   const relationshipCharacterEmpty = relationshipOptions.querySelector("[data-relationship-character-empty]");
+  const preFilterRelationships = relationshipOptions.querySelector('input[name="preFilterRelationshipSources"]');
+  const relationshipSourcePreviewButton = relationshipOptions.querySelector("[data-relationship-source-preview]");
+  const relationshipSourcePreviewContent = relationshipOptions.querySelector("[data-relationship-source-preview-content]");
   const replaceRelationships = relationshipOptions.querySelector('input[name="replaceExistingRelationships"]');
-  const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-overwrite-card");
+  const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-existing-overwrite-card");
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
   allSettingsOption.textContent = "全书 + 设定集";
@@ -6546,6 +7344,41 @@ async function openTaskDialog() {
     relationshipCharacterCount.textContent = selected.length ? `已选 ${selected.length}` : "未选择";
     relationshipCharacterClear.disabled = selected.length === 0;
     relationshipCharacterTrigger.setAttribute("aria-label", `筛选被分析角色，已选择 ${selected.length} 个`);
+  };
+  const invalidateRelationshipSourcePreview = () => {
+    relationshipSourcePreview = null;
+    relationshipSourcePreviewConfigKey = "";
+    relationshipSourcePreviewContent.classList.remove("is-loading");
+    relationshipSourcePreviewContent.textContent = relationshipCharacterInputs.some((input) => input.checked)
+      ? "分析配置已变化，请重新预览将发送的来源。"
+      : "选择至少一个被分析角色后即可预览。";
+  };
+  const relationshipSourceTypeLabel = (sourceType) => ({
+    chapter: "章节",
+    work: "作品资料",
+    setting: "设定",
+    character: "人物档案",
+    race: "种族",
+    organization: "组织",
+    "timeline-track": "时间轴",
+    "timeline-event": "时间线事件",
+    relationship: "已有关系",
+    "chapter-outline": "章节大纲",
+    foreshadow: "伏笔",
+    review: "审核项"
+  }[sourceType] ?? sourceType);
+  const renderRelationshipSourcePreview = (preview) => {
+    const summary = `<div class="relationship-source-preview-summary"><strong>${preview.sourceCount} 条来源</strong><span>${preview.chapterCount} 章</span><span>${preview.settingCount} 条设定资料</span><span>约 ${Number(preview.totalCharacters).toLocaleString("zh-CN")} 字符</span><span>预计 ${preview.estimatedBatchCount} 个批次</span></div>`;
+    if (!preview.sources.length) {
+      relationshipSourcePreviewContent.innerHTML = `${summary}<p class="relationship-source-preview-empty">当前配置没有命中任何来源。仍可创建任务，但任务不会向模型发送正文或设定。</p>`;
+      return;
+    }
+    const rows = preview.sources.map((source) => `<label class="relationship-source-preview-row">
+      <input type="checkbox" data-relationship-source-selected data-source-type="${esc(source.sourceType)}" data-source-id="${esc(source.sourceId)}" data-source-version="${esc(source.version)}" checked>
+      <span class="relationship-source-preview-main"><strong>${esc(source.title)}</strong><small>${esc(relationshipSourceTypeLabel(source.sourceType))} · ${Number(source.characterCount).toLocaleString("zh-CN")} 字符</small></span>
+      <span class="relationship-source-preview-match ${source.matchType === "fuzzy" ? "is-fuzzy" : ""}">${source.matchType === "exact" ? "名称命中" : source.matchType === "fuzzy" ? "疑似写法确认" : "范围内来源"}</span>
+    </label>`).join("");
+    relationshipSourcePreviewContent.innerHTML = `${summary}<div class="relationship-source-preview-list" role="group" aria-label="选择要发送的来源">${rows}</div>`;
   };
   const filterRelationshipCharacters = () => {
     const query = relationshipCharacterSearch.value.trim().toLocaleLowerCase();
@@ -6577,6 +7410,8 @@ async function openTaskDialog() {
     for (const input of relationshipCharacterInputs) input.disabled = !enabled;
     if (!enabled) setRelationshipCharacterBubbleOpen(false);
     const hasSelectedCharacters = enabled && relationshipCharacterInputs.some((input) => input.checked);
+    preFilterRelationships.disabled = !hasSelectedCharacters;
+    relationshipSourcePreviewButton.disabled = !hasSelectedCharacters || !taskModelSelect.value;
     replaceRelationships.disabled = !hasSelectedCharacters;
     relationshipOverwriteCard.classList.toggle("hidden", !hasSelectedCharacters);
     if (!hasSelectedCharacters) replaceRelationships.checked = false;
@@ -6591,16 +7426,55 @@ async function openTaskDialog() {
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
     syncTaskModelDefault();
+    invalidateRelationshipSourcePreview();
+    syncRelationshipOptions();
+  });
+  taskModelSelect.addEventListener("change", () => {
+    invalidateRelationshipSourcePreview();
     syncRelationshipOptions();
   });
   relationshipCharacterTrigger.addEventListener("click", () => {
     setRelationshipCharacterBubbleOpen(relationshipCharacterTrigger.getAttribute("aria-expanded") !== "true");
   });
   relationshipCharacterSearch.addEventListener("input", filterRelationshipCharacters);
-  for (const input of relationshipCharacterInputs) input.addEventListener("change", syncRelationshipOptions);
+  for (const input of relationshipCharacterInputs) input.addEventListener("change", () => {
+    invalidateRelationshipSourcePreview();
+    syncRelationshipOptions();
+  });
   relationshipCharacterClear.addEventListener("click", () => {
     for (const input of relationshipCharacterInputs) input.checked = false;
+    invalidateRelationshipSourcePreview();
     syncRelationshipOptions();
+  });
+  preFilterRelationships.addEventListener("change", invalidateRelationshipSourcePreview);
+  relationshipSourcePreviewButton.addEventListener("click", async () => {
+    const form = new FormData($("#dynamic-form"));
+    const scope = buildRelationshipScope(form);
+    const modelId = String(form.get("modelId") ?? "");
+    if (!scope.characterIds?.length) return toast("请先选择至少一个被分析角色", "error");
+    relationshipSourcePreviewButton.disabled = true;
+    relationshipSourcePreviewButton.textContent = "预检中…";
+    relationshipSourcePreviewContent.classList.add("is-loading");
+    relationshipSourcePreviewContent.textContent = "正在构建索引并核对来源，请稍候。";
+    try {
+      const preview = await api(`/api/works/${state.work.id}/tasks/relationship-source-preview`, {
+        method: "POST",
+        body: { scope, modelId }
+      });
+      relationshipSourcePreview = preview;
+      relationshipSourcePreviewConfigKey = relationshipPreviewKey(scope, modelId);
+      relationshipSourcePreviewContent.classList.remove("is-loading");
+      renderRelationshipSourcePreview(preview);
+    } catch (error) {
+      relationshipSourcePreview = null;
+      relationshipSourcePreviewConfigKey = "";
+      relationshipSourcePreviewContent.classList.remove("is-loading");
+      relationshipSourcePreviewContent.textContent = `来源预检失败：${error.message}`;
+      toast(`来源预检失败：${error.message}`, "error");
+    } finally {
+      relationshipSourcePreviewButton.textContent = "重新预览";
+      syncRelationshipOptions();
+    }
   });
   $("#dynamic-form").onclick = (event) => {
     if (!relationshipCharacterPickerElement.contains(event.target)) setRelationshipCharacterBubbleOpen(false);
@@ -6611,7 +7485,11 @@ async function openTaskDialog() {
     setRelationshipCharacterBubbleOpen(false);
     relationshipCharacterTrigger.focus();
   };
-  scopeTypeSelect.addEventListener("change", syncChapterField);
+  scopeTypeSelect.addEventListener("change", () => {
+    invalidateRelationshipSourcePreview();
+    syncChapterField();
+  });
+  chapterSelect.addEventListener("change", invalidateRelationshipSourcePreview);
   syncRelationshipOptions();
 }
 
@@ -7049,17 +7927,72 @@ async function openImportHistory() {
 
 async function showChapterInsight() {
   if (!state.chapter) return;
-  const panel = $("#chapter-insight");
-  const insights = await api(`/api/chapters/${state.chapter.id}/insights`);
+  const chapterId = state.chapter.id;
+  dismissChapterInsightToast();
+  const requestId = ++chapterInsightRequestId;
+  const insights = await api(`/api/chapters/${chapterId}/insights`);
+  if (requestId !== chapterInsightRequestId || state.chapter?.id !== chapterId || $("#editor-view").classList.contains("hidden")) return;
   const insight = insights.find((item) => item.chapterVersion === state.chapter.versionNo) ?? insights[0];
-  panel.classList.remove("hidden");
-  if (!insight) {
-    panel.innerHTML = "<strong>尚无章节概览</strong>请在“AI 分析”中运行章节理解，完成后可在此查看结果。";
-    return;
+  const region = $("#toast-region");
+  const element = document.createElement("section");
+  element.id = "chapter-insight-toast";
+  element.className = "toast chapter-insight-toast";
+  element.setAttribute("role", "region");
+  element.setAttribute("aria-label", "章节概览");
+  const header = document.createElement("header");
+  header.className = "chapter-insight-toast-header";
+  const heading = document.createElement("div");
+  heading.className = "chapter-insight-toast-heading";
+  const title = document.createElement("strong");
+  title.textContent = "章节概览";
+  heading.append(title);
+  if (insight && insight.chapterVersion !== state.chapter.versionNo) {
+    const stale = document.createElement("span");
+    stale.textContent = `基于旧版本 v${insight.chapterVersion}`;
+    heading.append(stale);
   }
-  const eventNames = insight.events.map((event) => typeof event === "string" ? event : (event.name ?? event.description ?? "未命名事件"));
-  const stale = insight.chapterVersion !== state.chapter.versionNo ? `；基于旧版本 v${insight.chapterVersion}` : "";
-  panel.innerHTML = `<strong>章节概览${esc(stale)}</strong>${esc(insight.summary || "暂无梗概")}${eventNames.length ? `<br><strong>事件</strong>${esc(eventNames.join("；"))}` : ""}${insight.uncertainties.length ? `<br><strong>待确认</strong>${esc(insight.uncertainties.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("；"))}` : ""}`;
+  const close = document.createElement("button");
+  close.className = "ghost-button chapter-insight-toast-close";
+  close.type = "button";
+  close.textContent = "关闭";
+  close.setAttribute("aria-label", "关闭章节概览");
+  header.append(heading, close);
+  const body = document.createElement("div");
+  body.className = "chapter-insight-toast-body";
+  if (!insight) {
+    const empty = document.createElement("p");
+    empty.className = "chapter-insight-toast-empty";
+    empty.textContent = "尚无章节概览。请在“AI 分析”中运行章节理解，完成后可在此查看结果。";
+    body.append(empty);
+  } else {
+    const summary = document.createElement("p");
+    summary.textContent = insight.summary || "暂无梗概";
+    body.append(summary);
+    const eventNames = insight.events.map((event) => typeof event === "string" ? event : (event.name ?? event.description ?? "未命名事件"));
+    const uncertainties = insight.uncertainties.map((item) => typeof item === "string" ? item : JSON.stringify(item));
+    [["事件", eventNames], ["待确认", uncertainties]].forEach(([label, items]) => {
+      if (!items.length) return;
+      const detail = document.createElement("div");
+      detail.className = "chapter-insight-toast-detail";
+      const detailLabel = document.createElement("strong");
+      detailLabel.textContent = label;
+      const detailContent = document.createElement("p");
+      detailContent.textContent = items.join("；");
+      detail.append(detailLabel, detailContent);
+      body.append(detail);
+    });
+  }
+  element.append(header, body);
+  close.addEventListener("click", dismissChapterInsightToast, { once: true });
+  element.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    dismissChapterInsightToast();
+    $("#insight-button").focus();
+  });
+  region.append(element);
+  $("#insight-button").setAttribute("aria-expanded", "true");
+  raiseToastRegion();
 }
 
 $("#home-button").addEventListener("click", async () => {
@@ -7606,6 +8539,20 @@ $("#register-form").addEventListener("submit", async (event) => {
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
 $("#platform-ai-return").addEventListener("click", () => returnToSettingsHub("#platform-ai-button").catch((error) => toast(error.message, "error")));
+$("#platform-usage-button").addEventListener("click", () => showPlatformUsage().catch((error) => toast(error.message, "error")));
+$("#platform-usage-return").addEventListener("click", () => returnToSettingsHub("#platform-usage-button").catch((error) => toast(error.message, "error")));
+$("#platform-usage-refresh").addEventListener("click", async () => {
+  const button = $("#platform-usage-refresh");
+  button.disabled = true;
+  try {
+    await renderPlatformTokenUsage();
+    toast("Token 用量已刷新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 $("#user-management-button").addEventListener("click", openUsersDialog);
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
@@ -7629,7 +8576,14 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
       body: {
         toastPosition: $("#toast-position").value,
         pageSizes: {
+          settings: Number($("#page-size-settings").value),
           characters: Number($("#page-size-characters").value),
+          races: Number($("#page-size-races").value),
+          organizations: Number($("#page-size-organizations").value),
+          timeline: Number($("#page-size-timeline").value),
+          outlines: Number($("#page-size-outlines").value),
+          relationships: Number($("#page-size-relationships").value),
+          reviews: Number($("#page-size-reviews").value),
           analysisTasks: Number($("#page-size-analysis-tasks").value),
           fileVersions: Number($("#page-size-file-versions").value)
         }
@@ -7638,6 +8592,7 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
     applyPlatformUiSettings(settings);
     characterListPage = 1;
     taskListPage = 1;
+    Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
     $("#platform-ui-settings-dialog").close();
     toast("界面与分页设置已保存");
   } catch (error) {
@@ -7652,6 +8607,9 @@ $("#members-dialog").addEventListener("close", () => {
   memberDialogWork = null;
   memberDialogMembers = [];
   memberDialogDirectory = [];
+});
+$("#form-dialog").addEventListener("close", () => {
+  if (relationshipPresenceId && !$("#form-dialog").open) setRelationshipPresence(null);
 });
 $("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));
 $("#member-permission-form").querySelectorAll("[data-permission-preset]").forEach((button) => button.addEventListener("click", () => {
@@ -8058,6 +9016,26 @@ $(".quick-actions").addEventListener("click", (event) => {
 });
 $("#top-search-button").addEventListener("click", () => {
   openSearchDialog().catch((error) => toast(error.message, "error"));
+});
+$("#background-task-button").addEventListener("click", () => {
+  renderBackgroundTaskCenter();
+  const dialog = $("#background-task-dialog");
+  if (!dialog.open) dialog.showModal();
+  void refreshBackgroundTaskCenter();
+});
+$("#background-task-dialog").addEventListener("close", scheduleBackgroundTaskCenterRefresh);
+$("#background-task-refresh").addEventListener("click", async () => {
+  const button = $("#background-task-refresh");
+  button.disabled = true;
+  try {
+    await refreshBackgroundTaskCenter();
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#background-task-open-analysis").addEventListener("click", () => {
+  $("#background-task-dialog").close();
+  showModule("tasks").catch((error) => toast(error.message, "error"));
 });
 $("#search-dialog-close").addEventListener("click", () => $("#search-dialog").close());
 $("#search-form").addEventListener("submit", async (event) => {

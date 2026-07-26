@@ -37,8 +37,8 @@ describe("作品工作台按需加载", () => {
   it("种族列表不预加载角色，编辑器按需加载成员选项", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
     const renderRacesSource = application.slice(
-      application.indexOf("async function renderRaces()"),
-      application.indexOf("async function renderOrganizations()")
+      application.indexOf("async function renderRaces("),
+      application.indexOf("async function renderOrganizations(")
     );
     const openKnowledgeEditorSource = application.slice(
       application.indexOf("async function openKnowledgeEditor(kind, item"),
@@ -48,5 +48,22 @@ describe("作品工作台按需加载", () => {
     expect(renderRacesSource).toContain('state.races = await apiAllPages(`/api/works/${state.work.id}/races`)');
     expect(renderRacesSource).not.toContain('/characters');
     expect(openKnowledgeEditorSource).toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
+  });
+
+  it("角色分页不覆盖跨模块全量引用缓存", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderCharactersSource = application.slice(
+      application.indexOf("async function renderCharacters("),
+      application.indexOf("async function renderRaces(")
+    );
+    const openCharacterEditorSource = application.slice(
+      application.indexOf("async function openCharacterEditor("),
+      application.indexOf("async function openRaceDialog(")
+    );
+
+    expect(renderCharactersSource).toContain("const pageCharacters = characterPage.items;");
+    expect(renderCharactersSource).not.toContain("state.characters = characterPage.items");
+    expect(renderCharactersSource).toContain('openCharacterEditor(pageCharacters.find((item) => item.id === id)');
+    expect(openCharacterEditorSource).toContain('canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`)');
   });
 });

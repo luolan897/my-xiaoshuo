@@ -764,6 +764,112 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(cancel.body.error.code).toBe("TASK_NOT_CANCELLABLE");
   });
 
+  it("按原配置重跑终态任务并刷新人物快照与来源版本", async () => {
+    runtime = createTestRuntime();
+    const { workId, chapters } = await seedWork(runtime);
+    const modelId = await configureAi(runtime, workId);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "银月基多拉"
+    }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: {
+        type: "book",
+        characterIds: [character.body.data.id],
+        additionalPrompt: "只分析可靠证据",
+        preFilterRelationshipSources: false,
+        replaceExistingRelationships: true
+      }
+    }).expect(201);
+    const pendingRerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(409);
+    expect(pendingRerun.body.error.code).toBe("TASK_NOT_RERUNNABLE");
+
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "银月基多拉在北港上空现身。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/characters/${character.body.data.id}`).send({
+      name: "月影基多拉"
+    }).expect(200);
+    const expired = await request(runtime.app).get(`/api/tasks/${original.body.data.id}`).expect(200);
+    expect(expired.body.data.status).toBe("expired");
+
+    const rerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(201);
+    expect(rerun.body.data).toMatchObject({
+      taskType: "relationship-analysis",
+      status: "pending",
+      progress: 0,
+      rerunOfTaskId: original.body.data.id,
+      model: { id: modelId },
+      scope: {
+        type: "book",
+        characterIds: [character.body.data.id],
+        targetCharacters: [{ id: character.body.data.id, name: "月影基多拉" }],
+        additionalPrompt: "只分析可靠证据",
+        preFilterRelationshipSources: false,
+        replaceExistingRelationships: true
+      }
+    });
+    expect(rerun.body.data.id).not.toBe(original.body.data.id);
+    expect(rerun.body.data.sourceVersions[chapters[0].id]).toBe(2);
+    const originalAfter = await request(runtime.app).get(`/api/tasks/${original.body.data.id}`).expect(200);
+    expect(originalAfter.body.data.status).toBe("expired");
+    const audit = runtime.database.get(
+      "SELECT detail_json FROM audit_logs WHERE entity_id = ? AND action = 'task.created'",
+      rerun.body.data.id
+    );
+    expect(JSON.parse(String(audit?.detail_json))).toMatchObject({ rerunOfTaskId: original.body.data.id });
+
+    const invalidBody = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({
+      modelId: "model_override"
+    }).expect(400);
+    expect(invalidBody.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("重跑关系任务时重新筛选已经变化的预检来源", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    const modelId = await configureAi(runtime, workId);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "林舟"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: {
+        type: "book",
+        characterIds: [target.body.data.id],
+        preFilterRelationshipSources: true,
+        relationshipSourceRefs: [{
+          sourceType: "chapter",
+          sourceId: chapters[0].id,
+          sourceVersion: String(chapters[0].versionNo)
+        }]
+      }
+    }).expect(201);
+    runtime.store.updateTask(original.body.data.id, { status: "completed", progress: 100, result: {} });
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "林舟与沈星在北港重新订立盟约。"
+    }).expect(200);
+
+    const rerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(201);
+    expect(rerun.body.data.scope).not.toHaveProperty("relationshipSourceRefs");
+    expect(rerun.body.data.sourceVersions[chapters[0].id]).toBe(2);
+    const completed = await request(runtime.app).post(`/api/tasks/${rerun.body.data.id}/run`).send({}).expect(200);
+    expect(completed.body.data.status).toBe("review");
+    expect(userPrompts.join("\n")).toContain("林舟与沈星在北港重新订立盟约。");
+  });
+
   it("续写前自动装载相关人物、大纲和伏笔，续写后返回冲突卡并绑定文本哈希", async () => {
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens: number };
@@ -1230,7 +1336,9 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({
       coveredChapterCount: 1,
-      targetedCharacterIds: [target.body.data.id]
+      targetedCharacterIds: [target.body.data.id],
+      preFilterRelationshipSources: true,
+      analysisTarget: { preFilterRelationshipSources: true }
     });
     const sent = userPrompts.join("\n");
     expect(sent).toContain("阿宁在旧港查看完整航海日志。");
@@ -1241,6 +1349,294 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).not.toContain("绝密旁观者自动注入标记");
     expect(sent).not.toContain("无关组织自动注入标记");
     expect(sent).toContain('title="组织设定：守望会"');
+  });
+
+  it("预检人物关系来源并按用户保留的来源创建任务", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在旧港查看完整航海日志。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "这是一章完全无关的正文。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "纪宁",
+      aliases: ["阿宁"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾川" }).expect(201);
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "旧港盟约",
+      category: "人物关系",
+      content: "阿宁与顾川订立了长期守望盟约。"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const scope = {
+      type: "book",
+      includeAllSettings: true,
+      characterIds: [target.body.data.id],
+      preFilterRelationshipSources: true
+    };
+
+    const preview = await request(runtime.app)
+      .post(`/api/works/${workId}/tasks/relationship-source-preview`)
+      .send({ scope, modelId })
+      .expect(200);
+    expect(preview.body.data).toMatchObject({
+      preFilterRelationshipSources: true,
+      chapterCount: 1,
+      sourceCount: expect.any(Number),
+      totalCharacters: expect.any(Number),
+      estimatedBatchCount: expect.any(Number)
+    });
+    expect(preview.body.data.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceType: "chapter",
+        sourceId: chapters[0].id,
+        title: chapters[0].title,
+        matchType: "exact"
+      }),
+      expect.objectContaining({
+        sourceType: "setting",
+        sourceId: setting.body.data.id,
+        title: "旧港盟约",
+        matchType: "exact"
+      })
+    ]));
+    expect(preview.body.data.sources).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: "chapter", sourceId: chapters[1].id })
+    ]));
+
+    const previewedChapter = preview.body.data.sources.find((source: { sourceType: string }) => source.sourceType === "chapter");
+    const previewedSetting = preview.body.data.sources.find((source: { sourceType: string }) => source.sourceType === "setting");
+    const chapterRef = {
+      sourceType: previewedChapter.sourceType,
+      sourceId: previewedChapter.sourceId,
+      sourceVersion: previewedChapter.version
+    };
+    const settingRef = {
+      sourceType: previewedSetting.sourceType,
+      sourceId: previewedSetting.sourceId,
+      sourceVersion: previewedSetting.version
+    };
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { ...scope, relationshipSourceRefs: [chapterRef] }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toContain("已预检 1 条来源");
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({}).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      sourcePreviewApplied: true,
+      coveredChapterCount: 1,
+      coveredSettingCount: 0
+    });
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("阿宁在旧港查看完整航海日志。");
+    expect(sent).not.toContain("阿宁与顾川订立了长期守望盟约。");
+    expect(sent).not.toContain("这是一章完全无关的正文。");
+
+    const queuedTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { ...scope, additionalPrompt: "验证排队期间的来源版本变化", relationshipSourceRefs: [settingRef] }
+    }).expect(201);
+    expect(queuedTask.body.data.status).toBe("pending");
+    await request(runtime.app).patch(`/api/settings/${setting.body.data.id}`).send({
+      content: "阿宁与顾川在预检后修改了盟约。"
+    }).expect(200);
+    const staleRun = await request(runtime.app).post(`/api/tasks/${queuedTask.body.data.id}/run`).send({}).expect(409);
+    expect(staleRun.body.error).toMatchObject({ code: "RELATIONSHIP_SOURCE_PREVIEW_STALE" });
+
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在预检后改写了航海日志。"
+    }).expect(200);
+    const staleTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { ...scope, relationshipSourceRefs: [chapterRef] }
+    }).expect(409);
+    expect(staleTask.body.error).toMatchObject({ code: "RELATIONSHIP_SOURCE_PREVIEW_STALE" });
+  });
+
+  it("关闭前置过滤时定向人物关系分析发送范围内全部章节和设定", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在旧港查看完整航海日志。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "无关正文甲也必须发送。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[2].id}`).send({
+      content: "无关正文乙也必须发送。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "纪宁", aliases: ["阿宁"] }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾川" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "旧港盟约",
+      category: "人物关系",
+      content: "阿宁与顾川在旧港订立了长期守望盟约。"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "无关天文规则",
+      category: "世界规则",
+      content: "无关设定也必须发送。"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        characterIds: [target.body.data.id],
+        preFilterRelationshipSources: false
+      }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toBe("全书 + 设定集 · 定向 1 人：纪宁 · 未前置过滤");
+
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      coveredChapterCount: 3,
+      targetedCharacterIds: [target.body.data.id],
+      preFilterRelationshipSources: false,
+      analysisTarget: { preFilterRelationshipSources: false }
+    });
+    expect(result.body.data.result.sourceSelection).toBeUndefined();
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("阿宁在旧港查看完整航海日志。");
+    expect(sent).toContain("无关正文甲也必须发送。");
+    expect(sent).toContain("无关正文乙也必须发送。");
+    expect(sent).toContain("阿宁与顾川在旧港订立了长期守望盟约。");
+    expect(sent).toContain("无关设定也必须发送。");
+    expect(sent).not.toContain("人物名称变体确认器");
+  });
+
+  it("拉丁字母别名只参与精确来源匹配", async () => {
+    runtime = createTestRuntime();
+    const { workId } = await seedWork(runtime);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "雅典娜",
+      aliases: ["Athena", "Mega"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "赫拉" }).expect(201);
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "人工智能记录",
+      category: "人物",
+      content: "Athena 负责管理空间站。"
+    }).expect(201);
+    const aiInternals = runtime.ai as unknown as {
+      relationshipFuzzyIndexMatches: (...args: unknown[]) => Set<string>;
+      ensureRelationshipSearchIndex: (targetWorkId: string) => Promise<number>;
+      localRelationshipSourceSelection: (
+        targetWorkId: string,
+        scope: Record<string, unknown>,
+        characters: Record<string, unknown>[],
+        selectedCharacterIds: Set<string>,
+        generation: number
+      ) => Promise<{ exactKeys: string[] }>;
+    };
+    const originalFuzzyIndexMatches = aiInternals.relationshipFuzzyIndexMatches.bind(aiInternals);
+    const fuzzyReferences: string[] = [];
+    aiInternals.relationshipFuzzyIndexMatches = (...args: unknown[]) => {
+      fuzzyReferences.push(String(args[1]));
+      return originalFuzzyIndexMatches(...args);
+    };
+
+    const generation = await aiInternals.ensureRelationshipSearchIndex(workId);
+    const selection = await aiInternals.localRelationshipSourceSelection(
+      workId,
+      { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      runtime.store.listCharacters(workId),
+      new Set([String(target.body.data.id)]),
+      generation
+    );
+
+    expect(fuzzyReferences).toEqual(["雅典娜"]);
+    expect(selection.exactKeys).toContain(`setting:${setting.body.data.id}`);
+  });
+
+  it("来源候选超限时保存结构化诊断并可通过身份资料修复", async () => {
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "[]" } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId } = await seedWork(runtime);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    (runtime.ai as unknown as { relationshipFuzzyIndexMatches: () => Set<string> }).relationshipFuzzyIndexMatches = () =>
+      new Set(Array.from({ length: 201 }, (_, index) => `setting:diagnostic_${index}`));
+
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      modelId
+    }).expect(201);
+    const failed = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({}).expect(409);
+    expect(failed.body.error).toMatchObject({
+      code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
+      details: {
+        characterId: target.body.data.id,
+        reason: "candidate-sources",
+        candidateCount: 201,
+        maximum: 200,
+        identityAnchorCount: 0
+      }
+    });
+    const detail = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/detail`).expect(200);
+    expect(detail.body.data.failures).toEqual([expect.objectContaining({
+      code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
+      message: "“魔斯拉”的拼音疑似来源仍然过多；请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览",
+      details: expect.objectContaining({
+        characterId: target.body.data.id,
+        targetName: "魔斯拉",
+        reference: "魔斯拉",
+        reason: "candidate-sources",
+        candidateCount: 201,
+        identityAnchorCount: 0
+      })
+    })]);
+
+    const repaired = await request(runtime.app).patch(`/api/characters/${target.body.data.id}`).send({
+      aliases: ["摩斯拉"],
+      code: "TITAN-M01",
+      attributes: { identity: "生态守护泰坦" },
+      expectedVersionNo: target.body.data.versionNo,
+      changeNote: "修复人物关系来源匹配"
+    }).expect(200);
+    expect(repaired.body.data).toMatchObject({
+      aliases: ["摩斯拉"],
+      code: "TITAN-M01",
+      attributes: { identity: "生态守护泰坦" }
+    });
+
+    const retry = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      modelId
+    }).expect(201);
+    const completed = await request(runtime.app).post(`/api/tasks/${retry.body.data.id}/run`).send({}).expect(200);
+    expect(completed.body.data.result).toMatchObject({
+      preFilterRelationshipSources: true,
+      sourceSelection: expect.objectContaining({ exactSourceCount: expect.any(Number) })
+    });
+    expect(completed.body.data.result.sourceSelection.exactSourceCount).toBeGreaterThan(0);
   });
 
   it("通过拼音疑似写法确认来源并并发安全地去重审核项", async () => {
@@ -1597,6 +1993,121 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     await request(runtime.app).post(`/api/tasks/${failureTask.body.data.id}/run`).send({ modelId }).expect(502);
     const afterFailure = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(afterFailure.body.data).toEqual(replaced.body.data);
+
+    failAggregation = false;
+    const previewTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        characterIds: [linId],
+        replaceExistingRelationships: true,
+        previewRelationshipChanges: true
+      }
+    }).expect(201);
+    const previewResult = await request(runtime.app).post(`/api/tasks/${previewTask.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(previewResult.body.data.result).toMatchObject({
+      relationshipIds: [],
+      createdCount: 1,
+      updatedCount: 0,
+      deletedCount: 1,
+      relationshipChangePreview: {
+        status: "pending",
+        totalCount: 2,
+        createdCount: 1,
+        updatedCount: 0,
+        deletedCount: 1
+      }
+    });
+    expect(previewResult.body.data.result.relationshipResults.map((item: { action: string }) => item.action).sort())
+      .toEqual(["created", "deleted"]);
+    const beforeApply = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(beforeApply.body.data).toEqual(replaced.body.data);
+    const previewDetail = await request(runtime.app).get(`/api/tasks/${previewTask.body.data.id}/detail`).expect(200);
+    expect(previewDetail.body.data.resultSummary).toMatchObject({
+      relationshipChangePreview: { status: "pending", totalCount: 2, createdCount: 1, deletedCount: 1 }
+    });
+    expect(previewDetail.body.data.resultSummary.summary).toContain("尚未写入人物关系库");
+
+    const applied = await request(runtime.app).post(`/api/tasks/${previewTask.body.data.id}/relationship-changes/apply`).send({}).expect(200);
+    expect(applied.body.data.result.relationshipChangePreview.status).toBe("applied");
+    expect(applied.body.data.result.relationshipIds).toHaveLength(1);
+    const afterApply = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    const appliedTargetRelationships = afterApply.body.data.filter((relationship: { fromCharacterId: string; toCharacterId: string }) =>
+      relationship.fromCharacterId === linId || relationship.toCharacterId === linId
+    );
+    expect(appliedTargetRelationships).toHaveLength(1);
+    expect(appliedTargetRelationships[0]).toMatchObject({ subtype: "朋友", confirmationStatus: "pending" });
+    expect(appliedTargetRelationships[0].id).not.toBe(currentTargetRelationships[0].id);
+    const repeatedApply = await request(runtime.app).post(`/api/tasks/${previewTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
+    expect(repeatedApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_NOT_PENDING");
+
+    const staleTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        characterIds: [linId],
+        replaceExistingRelationships: true,
+        previewRelationshipChanges: true
+      }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/run`).send({ modelId }).expect(200);
+    const manuallyUpdated = await request(runtime.app).patch(`/api/relationships/${appliedTargetRelationships[0].id}`).send({
+      currentStatus: "作者刚刚修改"
+    }).expect(200);
+    const staleApply = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
+    expect(staleApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_SOURCE_CHANGED");
+    const afterStaleApply = await request(runtime.app).get(`/api/relationships/${appliedTargetRelationships[0].id}`).expect(200);
+    expect(afterStaleApply.body.data).toMatchObject({
+      currentStatus: "作者刚刚修改",
+      versionNo: manuallyUpdated.body.data.versionNo
+    });
+    const discarded = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/discard`).send({}).expect(200);
+    expect(discarded.body.data.result.relationshipChangePreview.status).toBe("discarded");
+    const applyDiscarded = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
+    expect(applyDiscarded.body.error.code).toBe("RELATIONSHIP_PREVIEW_NOT_PENDING");
+
+    const rosterPreviewTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        characterIds: [linId],
+        replaceExistingRelationships: true,
+        previewRelationshipChanges: true
+      }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${rosterPreviewTask.body.data.id}/run`).send({ modelId }).expect(200);
+    await request(runtime.app).patch(`/api/characters/${linId}`).send({ aliases: ["小舟"] }).expect(200);
+    const staleRosterApply = await request(runtime.app)
+      .post(`/api/tasks/${rosterPreviewTask.body.data.id}/relationship-changes/apply`)
+      .send({})
+      .expect(409);
+    expect(staleRosterApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_SOURCE_CHANGED");
+
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "林舟关系补充",
+      category: "人物关系",
+      content: "林舟与沈星曾长期并肩行动。"
+    }).expect(201);
+    const settingsPreviewTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        characterIds: [linId],
+        replaceExistingRelationships: true,
+        previewRelationshipChanges: true,
+        additionalPrompt: "验证设定来源过期保护"
+      }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${settingsPreviewTask.body.data.id}/run`).send({ modelId }).expect(200);
+    await request(runtime.app).patch(`/api/settings/${setting.body.data.id}`).send({
+      content: "林舟与沈星的关系设定已由作者修改。"
+    }).expect(200);
+    const staleSettingsApply = await request(runtime.app)
+      .post(`/api/tasks/${settingsPreviewTask.body.data.id}/relationship-changes/apply`)
+      .send({})
+      .expect(409);
+    expect(staleSettingsApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_SOURCE_CHANGED");
   });
 
   it("拒绝不适用于当前任务或缺少角色前提的关系分析选项", async () => {
@@ -1619,8 +2130,20 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       scope: { type: "book", replaceExistingRelationships: true }
     }).expect(400);
     await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", preFilterRelationshipSources: false }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "timeline-analysis",
       scope: { type: "book", characterIds: ["character_not_allowed"] }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", preFilterRelationshipSources: false }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", previewRelationshipChanges: true }
     }).expect(400);
   });
 

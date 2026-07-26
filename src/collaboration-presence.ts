@@ -52,6 +52,7 @@ type PresenceEntry = PresenceParticipant & {
 type ChangeEntry = CollaborativeChange & {
   workId: string;
   savedAtMs: number;
+  recipientClientIds: string[];
 };
 
 const moduleLabels: Record<string, string> = {
@@ -71,7 +72,8 @@ const entityLabels: Record<string, string> = {
   setting: "设定编辑",
   character: "角色编辑",
   race: "种族编辑",
-  organization: "组织编辑"
+  organization: "组织编辑",
+  relationship: "人物关系编辑"
 };
 
 function normalizedPage(page: PresencePage): PresenceParticipant["page"] {
@@ -88,7 +90,7 @@ export function editorPageKey(chapterId: string): string {
   return `editor:${chapterId}`;
 }
 
-export function entityEditorPageKey(module: "setting" | "character" | "race" | "organization", resourceId: string): string {
+export function entityEditorPageKey(module: "setting" | "character" | "race" | "organization" | "relationship", resourceId: string): string {
   return `entity-editor:${module}:${resourceId}`;
 }
 
@@ -136,7 +138,7 @@ export class CollaborationPresence {
     });
     return {
       participants: this.list(workId, now),
-      recentChanges: this.listChanges(workId, now)
+      recentChanges: this.listChanges(workId, normalized.key, clientId, now)
     };
   }
 
@@ -145,9 +147,17 @@ export class CollaborationPresence {
     pageKey: string,
     actor: { userId: string; displayName: string },
     label = pageLabelForKey(pageKey)
-  ): CollaborativeChange {
+  ): CollaborativeChange | null {
     const now = this.now();
-    this.pruneChanges(now);
+    this.prune(now);
+    const recipientClientIds = [...new Set([...this.entries.values()]
+      .filter((entry) => (
+        entry.workId === workId
+        && entry.page.key === pageKey
+        && entry.userId !== actor.userId
+      ))
+      .map((entry) => entry.clientId))];
+    if (recipientClientIds.length === 0) return null;
     this.changeSequence += 1;
     const change: ChangeEntry = {
       id: `change-${now}-${this.changeSequence}`,
@@ -157,7 +167,8 @@ export class CollaborationPresence {
       actorUserId: actor.userId,
       actorDisplayName: actor.displayName,
       savedAt: new Date(now).toISOString(),
-      savedAtMs: now
+      savedAtMs: now,
+      recipientClientIds
     };
     this.changes.push(change);
     while (this.changes.length > this.maxChanges) this.changes.shift();
@@ -171,12 +182,16 @@ export class CollaborationPresence {
     };
   }
 
-  listChanges(workId: string, now = this.now()): CollaborativeChange[] {
+  listChanges(workId: string, pageKey: string, receiverClientId: string, now = this.now()): CollaborativeChange[] {
     this.pruneChanges(now);
     return this.changes
-      .filter((change) => change.workId === workId)
+      .filter((change) => (
+        change.workId === workId
+        && change.pageKey === pageKey
+        && change.recipientClientIds.includes(receiverClientId)
+      ))
       .sort((left, right) => right.savedAtMs - left.savedAtMs)
-      .map(({ workId: _workId, savedAtMs: _savedAtMs, ...change }) => change);
+      .map(({ workId: _workId, savedAtMs: _savedAtMs, recipientClientIds: _recipientClientIds, ...change }) => change);
   }
 
   private list(workId: string, now: number): PresenceParticipant[] {

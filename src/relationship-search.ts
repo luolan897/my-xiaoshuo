@@ -1,9 +1,16 @@
 import { pinyin } from "pinyin-pro";
 
-export const RELATIONSHIP_SEARCH_POLICY_VERSION = 1;
+export const RELATIONSHIP_SEARCH_POLICY_VERSION = 2;
 
 export function normalizeRelationshipSearchText(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN");
+}
+
+export function isRelationshipPhoneticReference(value: string): boolean {
+  const normalized = normalizeRelationshipSearchText(value).trim();
+  const hanCharacters = [...normalized].filter((character) => /\p{Script=Han}/u.test(character));
+  if (hanCharacters.length < 2) return false;
+  return [...normalized].every((character) => /[\p{Script=Han}\p{White_Space}·・\-—]/u.test(character));
 }
 
 function encodedCodePoint(value: string): string {
