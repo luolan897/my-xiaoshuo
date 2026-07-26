@@ -40,6 +40,7 @@ import {
   createCliApiScopeMiddleware,
   createUserSessionMiddleware,
   createWorkAuthorizationMiddleware,
+  relationshipAnalysisReadModules,
   setSessionCookie,
   UserAuthService,
   type AuthUser
@@ -1561,6 +1562,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, ai.getTaskTraceCall(request.params.taskId, request.params.callId)));
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
+    const task = store.getTask(request.params.taskId);
+    if (task.taskType === "relationship-analysis") {
+      const permissions = requestPermissions(request, String(task.workId));
+      const deniedModules = relationshipAnalysisReadModules(task.scope).filter((module) => permissions[module] === "none");
+      if (deniedModules.length > 0) {
+        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取本次定向人物关系分析所需资料模块的权限", {
+          modules: deniedModules
+        });
+      }
+    }
     data(response, redactTaskCharacterNames(
       await ai.runTask(request.params.taskId, input.modelId),
       requestPermissions(request)
