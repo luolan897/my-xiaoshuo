@@ -867,6 +867,13 @@ export class Store {
       entityId: entityType === "user" && entityId ? accountReference(entityId) : entityId,
       detailKeys
     });
+    if (workId) {
+      try {
+        this.relationshipIndexQueuedHandler?.(workId);
+      } catch {
+        // 索引调度失败不影响主写入路径
+      }
+    }
   }
 
   createWork(input: WorkInput): Record<string, unknown> {
@@ -994,9 +1001,14 @@ export class Store {
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
+  private relationshipIndexQueuedHandler: ((workId: string) => void) | null = null;
 
   setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
     this.analysisTaskQueuedHandler = handler;
+  }
+
+  setRelationshipIndexQueuedHandler(handler: ((workId: string) => void) | null): void {
+    this.relationshipIndexQueuedHandler = handler;
   }
 
   private notifyAnalysisTaskQueued(workId: string): void {
