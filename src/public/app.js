@@ -41,6 +41,7 @@ import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canW
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
+import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import {
   clampCropRect,
   containImageRect,
@@ -814,6 +815,8 @@ let chapterEditorReadOnly = true;
 let characterListPage = 1;
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
+const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
+let relationshipFiltersPanelOpen = false;
 let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
@@ -2808,6 +2811,8 @@ function resetWorkScopedUiCaches() {
   state.characters = [];
   state.settings = [];
   characterListPage = 1;
+  relationshipFilters.fromCharacterIds = [];
+  relationshipFilters.toCharacterIds = [];
   state.collapsedVolumeIds.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
@@ -3355,6 +3360,15 @@ function mountCharacterFilterToggle() {
   });
 }
 
+function mountRelationshipFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="relationship-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="relationship-filter-toggle" aria-label="筛选关系" aria-controls="relationship-filter-panel" aria-expanded="${relationshipFiltersPanelOpen}" title="筛选关系"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").querySelector('[data-module-header-action="relationship-filter-toggle"]')?.addEventListener("click", async () => {
+    relationshipFiltersPanelOpen = !relationshipFiltersPanelOpen;
+    await renderRelationships();
+  });
+}
+
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
     const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization ?? card.dataset.openReview;
@@ -3784,17 +3798,34 @@ async function renderOutlines() {
 async function renderRelationships() {
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const relationships = await apiAllPages(`/api/works/${state.work.id}/relationships`);
+  const filteredRelationships = filterRelationships(relationships, relationshipFilters);
+  const hasRelationshipFilters = relationshipFilters.fromCharacterIds.length > 0 || relationshipFilters.toCharacterIds.length > 0;
   const canEditRelationships = canEditModule("relationships");
-  mountModuleCount(relationships.length);
+  mountModuleCount(filteredRelationships.length);
   const nameOf = (id) => state.characters.find((item) => item.id === id)?.name ?? "未知角色";
+  const selectedFromCharacterIds = new Set(relationshipFilters.fromCharacterIds);
+  const selectedToCharacterIds = new Set(relationshipFilters.toCharacterIds);
+  const selectedFromCharacterNames = state.characters.filter((character) => selectedFromCharacterIds.has(String(character.id))).map((character) => character.name);
+  const selectedToCharacterNames = state.characters.filter((character) => selectedToCharacterIds.has(String(character.id))).map((character) => character.name);
+  const filterOptionList = (selectedIds) => state.characters.map((character) => {
+    const value = String(character.id);
+    return `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedIds.has(value) ? "checked" : ""}><span>${esc(character.name)}</span></label>`;
+  }).join("");
+  const filterToolbar = `<section id="relationship-filter-panel" class="character-filter-toolbar${relationshipFiltersPanelOpen ? "" : " hidden"}" aria-label="关系筛选">
+    <details class="character-filter-dropdown"><summary><span>按起点角色筛选</span><strong>${selectedFromCharacterNames.length ? `已选 ${selectedFromCharacterNames.length} 项` : "全部起点"}</strong></summary><div id="relationship-from-character-filter" class="character-filter-options">${filterOptionList(selectedFromCharacterIds)}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按终点角色筛选</span><strong>${selectedToCharacterNames.length ? `已选 ${selectedToCharacterNames.length} 项` : "全部终点"}</strong></summary><div id="relationship-to-character-filter" class="character-filter-options">${filterOptionList(selectedToCharacterIds)}</div></details>
+    <div class="character-filter-toolbar-actions">${hasRelationshipFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${filteredRelationships.length} 条关系</span>` : ""}<button id="clear-relationship-filters" class="ghost-button" type="button" ${hasRelationshipFilters ? "" : "disabled"}>重置筛选</button></div>
+  </section>`;
+  mountRelationshipFilterToggle();
   state.galaxy?.destroy();
   state.relationshipExpandedMap?.destroy?.();
   if ($("#relationship-map-dialog").open) $("#relationship-map-dialog").close();
   const graph = buildRelationshipGraph(state.characters, relationships);
   state.relationshipGraph = graph;
-  $("#module-content").innerHTML = `<div id="relationship-map-host"></div>${relationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${relationships.map((item) => `
+  const relationshipList = filteredRelationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${filteredRelationships.map((item) => `
     <tr><td>${esc(nameOf(item.fromCharacterId))} ${item.directed ? "→" : "—"} ${esc(nameOf(item.toCharacterId))}</td>
-    <td>${esc(relationshipCategoryLabel(item.category))} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(relationshipConfirmationLabel(item.confirmationStatus))}</td><td class="relationship-actions">${canEditRelationships ? `<button data-edit-relationship="${esc(item.id)}">编辑</button>` : ""}<button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
+    <td>${esc(relationshipCategoryLabel(item.category))} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(relationshipConfirmationLabel(item.confirmationStatus))}</td><td class="relationship-actions">${canEditRelationships ? `<button data-edit-relationship="${esc(item.id)}">编辑</button>` : ""}<button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : relationships.length ? '<div class="relationship-empty-note">没有符合当前筛选条件的关系。</div>' : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>';
+  $("#module-content").innerHTML = `${filterToolbar}<div id="relationship-map-host"></div>${relationshipList}`;
   const openGalaxy = () => {
     state.galaxy?.destroy();
     state.galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, { workId: state.work.id });
@@ -3810,7 +3841,24 @@ async function renderRelationships() {
   };
   state.relationshipMindMap?.destroy?.();
   state.relationshipMindMap = renderRelationshipMindMap($("#relationship-map-host"), graph, { onOpenGalaxy: openGalaxy, onOpenExpanded: openExpanded });
-  $("#module-content").querySelectorAll("[data-edit-relationship]").forEach((button) => button.addEventListener("click", () => openRelationshipDialog(relationships.find((item) => item.id === button.dataset.editRelationship))));
+  const readSelectedValues = (selector) => [...$(selector).querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+  $("#relationship-from-character-filter").addEventListener("change", async () => {
+    relationshipFiltersPanelOpen = true;
+    relationshipFilters.fromCharacterIds = readSelectedValues("#relationship-from-character-filter");
+    await renderRelationships();
+  });
+  $("#relationship-to-character-filter").addEventListener("change", async () => {
+    relationshipFiltersPanelOpen = true;
+    relationshipFilters.toCharacterIds = readSelectedValues("#relationship-to-character-filter");
+    await renderRelationships();
+  });
+  $("#clear-relationship-filters")?.addEventListener("click", async () => {
+    relationshipFiltersPanelOpen = true;
+    relationshipFilters.fromCharacterIds = [];
+    relationshipFilters.toCharacterIds = [];
+    await renderRelationships();
+  });
+  $("#module-content").querySelectorAll("[data-edit-relationship]").forEach((button) => button.addEventListener("click", () => openRelationshipDialog(filteredRelationships.find((item) => item.id === button.dataset.editRelationship))));
   bindEntityHistoryButtons(async () => { await renderRelationships(); await loadAiReferences(); });
 }
 
