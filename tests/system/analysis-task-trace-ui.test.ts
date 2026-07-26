@@ -59,6 +59,7 @@ describe("AI 分析全流程追踪界面", () => {
     expect(styles).toContain(".task-result-readable {");
     expect(styles).toContain(".task-result-storage-list {");
     expect(styles).toContain(".task-result-item {");
+    expect(styles).toContain(".task-result-item > header > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;");
     expect(styles).toContain(".task-result-json-loader {");
     expect(styles).toContain(".task-result-json-content textarea {");
     expect(styles).toContain(".task-result-metrics {");
