@@ -3,6 +3,7 @@ import {
   RelationshipApproximateMatchLimitError,
   damerauLevenshteinDistance,
   findApproximateNameMatches,
+  findApproximateNameMatchesChunked,
   relationshipCharacterTokens,
   relationshipPinyinSyllables,
   relationshipPinyinTokens
@@ -40,5 +41,11 @@ describe("人物关系来源搜索", () => {
   it("疑似窗口超过预算时显式失败", () => {
     expect(() => findApproximateNameMatches("摩斯拉".repeat(5), "魔斯拉", 3, new Set(), 1))
       .toThrow(RelationshipApproximateMatchLimitError);
+  });
+
+  it("分块扫描可以识别跨块边界的疑似写法", async () => {
+    const prefix = "无".repeat(16_383);
+    const matches = await findApproximateNameMatchesChunked(`${prefix}摩斯拉苏醒`, "魔斯拉");
+    expect(matches[0]).toMatchObject({ observed: "摩斯拉", start: 16_383, pinyinDistance: 0 });
   });
 });

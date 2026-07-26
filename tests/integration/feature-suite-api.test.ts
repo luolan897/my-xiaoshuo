@@ -1271,6 +1271,32 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
     const modelId = await configureAi(runtime, workId);
+    const aiInternals = runtime.ai as unknown as {
+      relationshipFuzzyIndexMatches: (...args: unknown[]) => Set<string>;
+      ensureRelationshipSearchIndex: (targetWorkId: string) => Promise<number>;
+      localRelationshipSourceSelection: (
+        targetWorkId: string,
+        scope: Record<string, unknown>,
+        characters: Record<string, unknown>[],
+        selectedCharacterIds: Set<string>,
+        generation: number
+      ) => Promise<Record<string, unknown>>;
+    };
+    const originalFuzzyIndexMatches = aiInternals.relationshipFuzzyIndexMatches.bind(aiInternals);
+    let fuzzyIndexSelectionCount = 0;
+    aiInternals.relationshipFuzzyIndexMatches = (...args: unknown[]) => {
+      fuzzyIndexSelectionCount += 1;
+      return originalFuzzyIndexMatches(...args);
+    };
+    const generation = await aiInternals.ensureRelationshipSearchIndex(workId);
+    await Promise.all(Array.from({ length: 10 }, () => aiInternals.localRelationshipSourceSelection(
+      workId,
+      { type: "book", characterIds: [target.body.data.id] },
+      runtime.store.listCharacters(workId),
+      new Set([String(target.body.data.id)]),
+      generation
+    )));
+    expect(fuzzyIndexSelectionCount).toBe(1);
     const runTask = async () => {
       const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
         taskType: "relationship-analysis",

@@ -10,7 +10,7 @@ import { Store, type AiConversationContext } from "./store.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
-  findApproximateNameMatches,
+  findApproximateNameMatchesChunked,
   ftsPhrase,
   normalizeRelationshipSearchText,
   relationshipCharacterTokenText,
@@ -156,7 +156,6 @@ const RELATIONSHIP_MAX_FUZZY_SOURCES = 200;
 const RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS = 4_000_000;
 const RELATIONSHIP_MAX_FUZZY_MATCHES = 600;
 const RELATIONSHIP_MAX_SOURCE_MATCHES = 256;
-const RELATIONSHIP_FUZZY_SCAN_YIELD_INTERVAL = 8;
 
 function isGeminiProviderOrModel(provider: Row, model: Row): boolean {
   const endpoint = stringValue(provider, "base_url").toLowerCase();
@@ -1126,6 +1125,7 @@ export class AiManager {
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly relationshipIndexBuilds = new Map<string, Promise<number>>();
   private readonly relationshipSelectionCache = new Map<string, RelationshipLocalSourceSelection>();
+  private readonly relationshipSelectionBuilds = new Map<string, Promise<RelationshipLocalSourceSelection>>();
   private relationshipIndexSerial: Promise<void> = Promise.resolve();
   private relationshipIndexTimer: ReturnType<typeof setTimeout> | null = null;
   private relationshipIndexDisposed = false;
@@ -4050,7 +4050,7 @@ export class AiManager {
     ).map((row) => this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
   }
 
-  private relationshipFuzzyIndexMatches(workId: string, reference: string, includeSettings: boolean): Set<string> {
+  private relationshipFuzzyIndexMatches(workId: string, reference: string, includeSettings: boolean, scope: ContextScope): Set<string> {
     const result = new Set<string>();
     const characterTokens = [...new Set(relationshipCharacterTokens(reference))];
     const pinyinTokens = [...new Set(relationshipPinyinTokens(reference))];
@@ -4058,15 +4058,36 @@ export class AiManager {
     const add = (key: string): void => {
       score.set(key, (score.get(key) ?? 0) + 1);
     };
+    const chapterScope = scope.type === "chapter"
+      ? { sql: "AND paragraph.chapter_id = ?", params: [scope.chapterId ?? ""] }
+      : scope.type === "volume"
+        ? {
+            sql: `AND EXISTS (
+              SELECT 1 FROM chapters chapter WHERE chapter.id = paragraph.chapter_id
+                AND chapter.volume_id = ? AND chapter.excluded_from_analysis = 0 AND chapter.chapter_type <> '作者的话'
+            )`,
+            params: [scope.volumeId ?? ""]
+          }
+        : {
+            sql: `AND EXISTS (
+              SELECT 1 FROM chapters chapter WHERE chapter.id = paragraph.chapter_id
+                AND chapter.excluded_from_analysis = 0 AND chapter.chapter_type <> '作者的话'
+            )`,
+            params: []
+          };
+    const includeChapters = scope.type !== "settings";
     const pinyinPhrase = ftsPhrase(relationshipPinyinTokens(reference));
-    for (const row of this.store.db.all(
-      `SELECT DISTINCT paragraph.chapter_id FROM chapter_paragraph_pinyin_fts
-       JOIN chapter_paragraph_search paragraph ON paragraph.id = chapter_paragraph_pinyin_fts.rowid
-       WHERE paragraph.work_id = ? AND chapter_paragraph_pinyin_fts MATCH ?
-       LIMIT 201`,
-      workId,
-      pinyinPhrase
-    )) result.add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
+    if (includeChapters) {
+      for (const row of this.store.db.all(
+        `SELECT DISTINCT paragraph.chapter_id FROM chapter_paragraph_pinyin_fts
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = chapter_paragraph_pinyin_fts.rowid
+         WHERE paragraph.work_id = ? AND chapter_paragraph_pinyin_fts MATCH ? ${chapterScope.sql}
+         LIMIT 201`,
+        workId,
+        pinyinPhrase,
+        ...chapterScope.params
+      )) result.add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
+    }
     if (includeSettings) {
       for (const row of this.store.db.all(
         `SELECT source.source_type, source.source_id FROM relationship_source_pinyin_fts
@@ -4082,25 +4103,29 @@ export class AiManager {
       )) result.add(this.relationshipIndexedSourceKey(String(row.source_type), String(row.source_id)));
     }
     const normalizedCharacters = [...normalizeRelationshipSearchText(reference).trim()];
-    for (const character of [...new Set(normalizedCharacters)]) {
-      for (const row of this.store.db.all(
-        `SELECT DISTINCT paragraph.chapter_id FROM chapter_paragraph_short_terms term
-         JOIN chapter_paragraph_search paragraph ON paragraph.id = term.paragraph_id
-         WHERE paragraph.work_id = ? AND term.term = ?
-         LIMIT 201`,
-        workId,
-        character
-      )) add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
-    }
-    for (const token of pinyinTokens) {
-      for (const row of this.store.db.all(
-        `SELECT DISTINCT paragraph.chapter_id FROM chapter_paragraph_pinyin_fts
-         JOIN chapter_paragraph_search paragraph ON paragraph.id = chapter_paragraph_pinyin_fts.rowid
-         WHERE paragraph.work_id = ? AND chapter_paragraph_pinyin_fts MATCH ?
-         LIMIT 201`,
-        workId,
-        token
-      )) add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
+    if (includeChapters) {
+      for (const character of [...new Set(normalizedCharacters)]) {
+        for (const row of this.store.db.all(
+          `SELECT DISTINCT paragraph.chapter_id FROM chapter_paragraph_short_terms term
+           JOIN chapter_paragraph_search paragraph ON paragraph.id = term.paragraph_id
+           WHERE paragraph.work_id = ? AND term.term = ? ${chapterScope.sql}
+           LIMIT 201`,
+          workId,
+          character,
+          ...chapterScope.params
+        )) add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
+      }
+      for (const token of pinyinTokens) {
+        for (const row of this.store.db.all(
+          `SELECT DISTINCT paragraph.chapter_id FROM chapter_paragraph_pinyin_fts
+           JOIN chapter_paragraph_search paragraph ON paragraph.id = chapter_paragraph_pinyin_fts.rowid
+           WHERE paragraph.work_id = ? AND chapter_paragraph_pinyin_fts MATCH ? ${chapterScope.sql}
+           LIMIT 201`,
+          workId,
+          token,
+          ...chapterScope.params
+        )) add(this.relationshipIndexedSourceKey("chapter", String(row.chapter_id)));
+      }
     }
     if (includeSettings) {
       for (const token of characterTokens) {
@@ -4184,7 +4209,10 @@ export class AiManager {
     });
     const cached = this.relationshipSelectionCache.get(cacheKey);
     if (cached) return cached;
-    const allowedChapterIds = this.relationshipScopeChapterIds(workId, scope);
+    const existingBuild = this.relationshipSelectionBuilds.get(cacheKey);
+    if (existingBuild) return existingBuild;
+    const build = (async (): Promise<RelationshipLocalSourceSelection> => {
+      const allowedChapterIds = this.relationshipScopeChapterIds(workId, scope);
     const includeSettings = scope.type === "settings" || scope.includeAllSettings === true;
     const exactKeys = new Set<string>();
     const candidates: RelationshipVariantCandidate[] = [];
@@ -4218,7 +4246,6 @@ export class AiManager {
       const targetIndexCandidateKeys = new Set<string>();
       const targetFuzzySourceKeys = new Set<string>();
       let fuzzyScanCharacters = 0;
-      let fuzzyScanOperations = 0;
       let fuzzyMatchCount = 0;
       for (const reference of exactReferences) {
         for (const chapterId of this.relationshipChapterExactMatches(workId, reference)) {
@@ -4227,11 +4254,13 @@ export class AiManager {
         if (includeSettings) for (const key of this.relationshipSettingExactMatches(workId, reference)) exactKeys.add(key);
         const referenceLength = [...normalizeRelationshipSearchText(reference).trim()].length;
         if (referenceLength < 2) continue;
-        for (const key of this.relationshipFuzzyIndexMatches(workId, reference, includeSettings)) {
+        const fuzzyIndexKeys = referenceLength === 2
+          ? anchorKeys
+          : this.relationshipFuzzyIndexMatches(workId, reference, includeSettings, scope);
+        for (const key of fuzzyIndexKeys) {
           const ref = this.relationshipIndexedSourceRef(key);
           if (ref.sourceType === "chapter" && !allowedChapterIds.has(ref.sourceId)) continue;
           if (ref.sourceType !== "chapter" && !includeSettings) continue;
-          if (referenceLength === 2 && !anchorKeys.has(key)) continue;
           targetIndexCandidateKeys.add(key);
           if (targetIndexCandidateKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) {
             throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名来源过多，请补充人物别名或身份资料后重试", {
@@ -4250,9 +4279,7 @@ export class AiManager {
           if (indexed.sourceType === "review" && indexed.content.includes('"itemType": "character-name-variant"')) continue;
           const searchable = `${indexed.title}\n${indexed.content}`;
           const normalizedSearchable = normalizeRelationshipSearchText(searchable);
-          const searchableCharacters = [...normalizedSearchable];
-          fuzzyScanCharacters += searchableCharacters.length;
-          fuzzyScanOperations += 1;
+          fuzzyScanCharacters += normalizedSearchable.length;
           if (fuzzyScanCharacters > RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS) {
             throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名待核对文本过多，请缩小分析范围或补充人物别名", {
               characterId: targetCharacterId,
@@ -4261,15 +4288,9 @@ export class AiManager {
             });
           }
           const referenceCharacters = [...normalizeRelationshipSearchText(reference).trim()];
-          const exactSpans: Array<[number, number]> = [];
-          for (let start = 0; start + referenceCharacters.length <= searchableCharacters.length; start += 1) {
-            if (referenceCharacters.every((character, index) => searchableCharacters[start + index] === character)) {
-              exactSpans.push([start, start + referenceCharacters.length]);
-            }
-          }
-          let approximateMatches: ReturnType<typeof findApproximateNameMatches>;
+          let approximateMatches: Awaited<ReturnType<typeof findApproximateNameMatchesChunked>>;
           try {
-            approximateMatches = findApproximateNameMatches(
+            approximateMatches = await findApproximateNameMatchesChunked(
               searchable,
               reference,
               24,
@@ -4286,7 +4307,6 @@ export class AiManager {
             });
           }
           for (const match of approximateMatches) {
-            if (exactSpans.some(([start, end]) => match.start < end && match.end > start)) continue;
             if (normalizedExactReferences.has(normalizeRelationshipSearchText(match.observed).trim())) continue;
             if (referenceLength === 2
               && !anchors.some((anchor) => normalizedSearchable.includes(anchor))) continue;
@@ -4323,9 +4343,6 @@ export class AiManager {
               pinyinDistance: match.pinyinDistance
             });
           }
-          if (fuzzyScanOperations % RELATIONSHIP_FUZZY_SCAN_YIELD_INTERVAL === 0) {
-            await new Promise<void>((resolve) => setImmediate(resolve));
-          }
         }
       }
       if (targetFuzzySourceKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) {
@@ -4336,13 +4353,20 @@ export class AiManager {
         });
       }
     }
-    const result = { generation, exactKeys: [...exactKeys], candidates };
-    this.relationshipSelectionCache.set(cacheKey, result);
-    if (this.relationshipSelectionCache.size > 128) {
-      const oldest = this.relationshipSelectionCache.keys().next().value;
-      if (typeof oldest === "string") this.relationshipSelectionCache.delete(oldest);
+      const result = { generation, exactKeys: [...exactKeys], candidates };
+      this.relationshipSelectionCache.set(cacheKey, result);
+      if (this.relationshipSelectionCache.size > 128) {
+        const oldest = this.relationshipSelectionCache.keys().next().value;
+        if (typeof oldest === "string") this.relationshipSelectionCache.delete(oldest);
+      }
+      return result;
+    })();
+    this.relationshipSelectionBuilds.set(cacheKey, build);
+    try {
+      return await build;
+    } finally {
+      if (this.relationshipSelectionBuilds.get(cacheKey) === build) this.relationshipSelectionBuilds.delete(cacheKey);
     }
-    return result;
   }
 
   private async verifyRelationshipVariantCandidates(
