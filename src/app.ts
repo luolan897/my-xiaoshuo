@@ -315,6 +315,7 @@ const providerSchema = z.object({
   name: nonEmpty.max(200),
   baseUrl: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "接口地址必须使用 HTTP 或 HTTPS"),
   apiKey: nonEmpty.max(10_000),
+  protocol: z.enum(["openai-chat-completions", "anthropic-messages"]).optional(),
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),
   concurrencyLimit: z.number().int().min(1).max(100).optional(),
@@ -702,6 +703,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       status: "ok",
       version: APP_VERSION,
       protocol: "openai-chat-completions",
+      protocols: ["openai-chat-completions", "anthropic-messages"],
       development: options.developmentServer === true
     });
   });
