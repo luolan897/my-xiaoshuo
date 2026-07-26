@@ -1939,8 +1939,26 @@ export class Database {
           END;
           CREATE TRIGGER IF NOT EXISTS relationship_index_race_dependencies_au AFTER UPDATE ON races BEGIN
             INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT race.work_id, 'race', race.id, datetime('now') FROM races race
+            WHERE race.id IN (
+              WITH RECURSIVE descendants(id) AS (
+                SELECT new.id
+                UNION ALL
+                SELECT child.id FROM races child JOIN descendants parent ON child.parent_race_id = parent.id
+              )
+              SELECT id FROM descendants
+            )
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
             SELECT character.work_id, 'character', character.id, datetime('now') FROM characters character
-            WHERE character.race_id = new.id
+            WHERE character.race_id IN (
+              WITH RECURSIVE descendants(id) AS (
+                SELECT new.id
+                UNION ALL
+                SELECT child.id FROM races child JOIN descendants parent ON child.parent_race_id = parent.id
+              )
+              SELECT id FROM descendants
+            )
             ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
           END;
           CREATE TRIGGER IF NOT EXISTS relationship_index_organization_dependencies_au AFTER UPDATE ON organizations BEGIN

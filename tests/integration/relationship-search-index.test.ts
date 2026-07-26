@@ -65,4 +65,29 @@ describe("人物关系来源增量索引", () => {
       setting.id as string
     )).toBeUndefined();
   });
+
+  it("父种族更新会重建后代种族和成员的人物关系索引", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "无关正文。");
+    const workId = String(seeded.work.id);
+    const parent = runtime.store.createRace(workId, { name: "泰坦", settings: ["拥有星髓印记"] });
+    const child = runtime.store.createRace(workId, { name: "守望泰坦", parentRaceId: String(parent.id) });
+    const character = runtime.store.createCharacter(workId, { name: "魔斯拉", raceId: String(child.id) });
+    const ai = runtime.ai as unknown as { ensureRelationshipSearchIndex(workId: string): Promise<number> };
+    await ai.ensureRelationshipSearchIndex(workId);
+
+    const matchingSourceIds = (): string[] => runtime!.database.all(
+      `SELECT source.source_id FROM relationship_source_exact_fts
+       JOIN relationship_source_search source ON source.id = relationship_source_exact_fts.rowid
+       WHERE relationship_source_exact_fts MATCH ?`,
+      ftsPhrase(relationshipCharacterTokens("星髓印记"))
+    ).map((row) => String(row.source_id));
+    expect(matchingSourceIds()).toEqual(expect.arrayContaining([String(parent.id), String(child.id), String(character.id)]));
+
+    runtime.store.updateRace(String(parent.id), { settings: ["拥有生态感知"] });
+    await ai.ensureRelationshipSearchIndex(workId);
+    expect(matchingSourceIds()).not.toEqual(expect.arrayContaining([String(parent.id), String(child.id), String(character.id)]));
+    expect(runtime.database.get("PRAGMA integrity_check")?.integrity_check).toBe("ok");
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
 });
