@@ -4399,6 +4399,30 @@ function renderTaskResultItem(item) {
     </article>`;
 }
 
+function renderRelationshipChangePreview(task, result) {
+  const preview = result.relationshipChangePreview && typeof result.relationshipChangePreview === "object"
+    ? result.relationshipChangePreview
+    : null;
+  if (!preview) return "";
+  const totalCount = Number(preview.totalCount ?? 0);
+  const counts = `新增 ${Number(preview.createdCount ?? 0)} 项 · 更新 ${Number(preview.updatedCount ?? 0)} 项 · 删除 ${Number(preview.deletedCount ?? 0)} 项`;
+  if (preview.status === "pending") {
+    return `<section class="relationship-change-preview is-pending" aria-label="人物关系变更待确认">
+      <div><small>写入前预览</small><h4>人物关系库尚未修改</h4><p>${esc(counts)}。请先核对下方关系和原文证据，再决定是否应用。</p></div>
+      ${Number(preview.deletedCount ?? 0) > 0 ? `<p class="relationship-change-preview-warning">确认应用后将删除 ${Number(preview.deletedCount)} 条已有关系；若资料已被他人修改，系统会阻止过期预览覆盖新版本。</p>` : ""}
+      <div class="relationship-change-preview-actions">
+        ${totalCount > 0 && canEditModule("relationships") ? `<button class="primary-button" type="button" data-apply-relationship-changes="${esc(task.id)}">确认并应用 ${totalCount} 项变更</button>` : ""}
+        <button class="ghost-button" type="button" data-discard-relationship-changes="${esc(task.id)}">${totalCount > 0 ? "放弃本次变更" : "结束无变更预览"}</button>
+        ${!canEditModule("relationships") && totalCount > 0 ? "<small>当前账号没有编辑人物关系的权限，只能查看或放弃本次变更。</small>" : ""}
+      </div>
+    </section>`;
+  }
+  const applied = preview.status === "applied";
+  return `<section class="relationship-change-preview ${applied ? "is-applied" : "is-discarded"}" aria-label="人物关系变更状态">
+    <div><small>写入前预览</small><h4>${applied ? "变更已应用" : "本次变更已放弃"}</h4><p>${esc(counts)}。${applied ? "人物关系库已按确认结果更新。" : "人物关系库未因本次预览发生修改。"}</p></div>
+  </section>`;
+}
+
 function renderTaskResult(task) {
   const result = task.resultSummary && typeof task.resultSummary === "object" ? task.resultSummary : {};
   const metrics = Array.isArray(result.metrics) ? result.metrics : [];
@@ -4411,6 +4435,7 @@ function renderTaskResult(task) {
       <p class="task-result-summary">${esc(result.summary || "任务尚未产生分析结果。")}</p>
       ${result.restricted ? '<p class="task-result-warning">部分结果因当前账号权限受限而隐藏。</p>' : ""}
     </section>
+    ${renderRelationshipChangePreview(task, result)}
     <section class="task-result-section">
       <h4>结果保存位置</h4>
       <p><strong>作品</strong> ${esc(state.work?.title || "当前作品")}</p>
@@ -4450,6 +4475,24 @@ function bindTaskResultActions(container) {
       toast(error.message, "error");
       button.disabled = false;
       button.textContent = "重新加载完整 JSON";
+    }
+  }));
+  container.querySelectorAll("[data-apply-relationship-changes], [data-discard-relationship-changes]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const taskId = button.dataset.applyRelationshipChanges || button.dataset.discardRelationshipChanges;
+    const action = button.dataset.applyRelationshipChanges ? "apply" : "discard";
+    const controls = button.closest(".relationship-change-preview")?.querySelectorAll("button") ?? [];
+    controls.forEach((control) => { control.disabled = true; });
+    button.textContent = action === "apply" ? "正在应用变更" : "正在放弃变更";
+    try {
+      await api(`/api/tasks/${encodeURIComponent(taskId)}/relationship-changes/${action}`, { method: "POST", body: {} });
+      $("#form-dialog").close();
+      toast(action === "apply" ? "人物关系变更已应用" : "本次人物关系变更已放弃");
+      if (state.module === "tasks") await renderTasks();
+    } catch (error) {
+      toast(error.message, "error");
+      controls.forEach((control) => { control.disabled = false; });
+      button.textContent = action === "apply" ? "重新确认并应用" : "重新放弃本次变更";
     }
   }));
 }
@@ -6724,6 +6767,10 @@ async function openTaskDialog() {
       <label class="checkbox-field"><input name="preFilterRelationshipSources" type="checkbox" checked disabled><span>分析前按人物名称和拼音过滤来源</span></label>
       <p>仅对定向人物分析生效。取消勾选后，将跳过前置过滤，无差别发送所选范围内的全部章节和设定来源。</p>
     </div>
+    <div class="relationship-overwrite-card relationship-change-preview-card">
+      <label class="checkbox-field"><input name="previewRelationshipChanges" type="checkbox" checked><span>分析完成后先预览关系变更</span></label>
+      <p>建议保持开启。分析只生成新增、更新和删除清单，确认应用前不会修改人物关系库；取消勾选则沿用直接写入逻辑。</p>
+    </div>
     <section class="relationship-source-preview-card" aria-labelledby="relationship-source-preview-title">
       <div class="relationship-source-preview-header">
         <div><strong id="relationship-source-preview-title">发送来源预检</strong><p>创建任务前查看将发送的章节与设定，并可取消误命中的来源。疑似拼音写法可能调用当前任务模型确认身份。</p></div>
@@ -6747,12 +6794,14 @@ async function openTaskDialog() {
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
     const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
     const preFilterRelationshipSources = characterIds.length > 0 && form.get("preFilterRelationshipSources") === "on";
+    const previewRelationshipChanges = taskType === "relationship-analysis" && form.get("previewRelationshipChanges") === "on";
     const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
-    return settingsOnly
-      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+    const scope = settingsOnly
+      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
-      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
-      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+      ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+    return scope;
   };
   const relationshipPreviewKey = (scope, modelId) => JSON.stringify({
     type: scope.type,

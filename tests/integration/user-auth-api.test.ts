@@ -1145,6 +1145,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(JSON.stringify(protectedReadableTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
     const protectedFullTaskResult = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}/result`).expect(403);
     expect(protectedFullTaskResult.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const protectedRelationshipApply = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/relationship-changes/apply`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({})
+      .expect(403);
+    expect(["WORK_MODULE_WRITE_DENIED", "WORK_EDIT_DENIED"]).toContain(protectedRelationshipApply.body.error.code);
     const protectedTimelineDetail = await analysisOnly.agent.get(`/api/tasks/${timelineTask.body.data.id}/detail`).expect(200);
     expect(protectedTimelineDetail.body.data.resultSummary.restricted).toBe(true);
     expect(protectedTimelineDetail.body.data.resultSummary.sections).toEqual([]);

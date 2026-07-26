@@ -421,6 +421,7 @@ const relationshipAnalysisScopeSchema = z.object({
   additionalPrompt: z.string().trim().max(10_000).optional(),
   characterIds: z.array(identifier).max(20).optional(),
   preFilterRelationshipSources: z.boolean().optional(),
+  previewRelationshipChanges: z.boolean().optional(),
   relationshipSourceRefs: z.array(relationshipSourceRefSchema).max(5_000).optional(),
   replaceExistingRelationships: z.boolean().optional()
 }).strict().superRefine((scope, context) => {
@@ -460,6 +461,9 @@ const analysisTaskSchema = z.union([
     }
     if (input.scope?.preFilterRelationshipSources !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "preFilterRelationshipSources"], message: "来源前置过滤仅支持人物关系分析" });
+    }
+    if (input.scope?.previewRelationshipChanges !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "previewRelationshipChanges"], message: "变更预览仅支持人物关系分析" });
     }
     if (input.scope?.relationshipSourceRefs !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "relationshipSourceRefs"], message: "预检来源仅支持人物关系分析" });
@@ -606,12 +610,25 @@ function redactTaskCharacterNames(record: Record<string, unknown>, permissions: 
           return redactedRelationship;
         });
       }
+      const changePreview = recordValue(taskResult.relationshipChangePreview);
+      if (changePreview) {
+        const { operations: _operations, ...redactedChangePreview } = changePreview;
+        redactedTaskResult.relationshipChangePreview = redactedChangePreview;
+      }
       const analysisTarget = recordValue(taskResult.analysisTarget);
       if (analysisTarget) {
         const { characterNames: _characterNames, ...redactedAnalysisTarget } = analysisTarget;
         redactedTaskResult.analysisTarget = redactedAnalysisTarget;
       }
       result.result = redactedTaskResult;
+    }
+  }
+  if (permissions.relationships === "none") {
+    const taskResult = recordValue(result.result);
+    const changePreview = recordValue(taskResult?.relationshipChangePreview);
+    if (taskResult && changePreview) {
+      const { operations: _operations, ...redactedChangePreview } = changePreview;
+      result.result = { ...taskResult, relationshipChangePreview: redactedChangePreview };
     }
   }
   const resultSummary = recordValue(result.resultSummary);
@@ -1675,6 +1692,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response,
     redactTaskCharacterNames(ai.cancelTask(request.params.taskId), requestPermissions(request))
   ));
+  app.post("/api/tasks/:taskId/relationship-changes/apply", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    const task = store.getTask(request.params.taskId);
+    const applied = ai.applyRelationshipChangePreview(request.params.taskId);
+    publishCollaborativeChange(String(task.workId), modulePageKey("relationships"));
+    data(response, redactTaskCharacterNames(applied, requestPermissions(request)));
+  });
+  app.post("/api/tasks/:taskId/relationship-changes/discard", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, redactTaskCharacterNames(
+      ai.discardRelationshipChangePreview(request.params.taskId),
+      requestPermissions(request)
+    ));
+  });
 
   app.get("/api/platform/ai/providers", (request, response) => {
     const pagination = parsePagination(request.query);
