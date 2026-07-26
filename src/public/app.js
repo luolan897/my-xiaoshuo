@@ -40,6 +40,7 @@ import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
+import { resolveGlobalSearchTarget } from "/global-search.js?v=20260726-search-result-details";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import {
   clampCropRect,
@@ -2681,36 +2682,22 @@ async function runWorkSearch() {
 }
 
 async function openSearchResult(result) {
+  const target = resolveGlobalSearchTarget(result);
+  if (!target) throw new Error("无法打开该搜索结果");
   $("#search-dialog").close();
   const inSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
   if (inSettings) await returnFromSettings();
-  if (result.type === "chapter") {
-    await selectChapter(result.id);
+  if (target.kind === "chapter") {
+    await selectChapter(target.id);
     return;
   }
-  if (result.type === "character") {
-    await showModule("characters");
-    const character = state.characters.find((item) => item.id === result.id);
-    if (character) openCharacterEditor(character);
-    return;
-  }
-  if (result.type === "setting") {
-    await showModule("settings");
-    const setting = await api(`/api/settings/${encodeURIComponent(result.id)}`);
-    openSettingEditor(setting);
-    return;
-  }
-  if (result.type === "race") {
-    await showModule("races");
-    const race = state.races.find((item) => item.id === result.id);
-    if (race) openRaceDialog(race);
-    return;
-  }
-  if (result.type === "organization") {
-    await showModule("organizations");
-    const organization = state.organizations.find((item) => item.id === result.id);
-    if (organization) openOrganizationDialog(organization);
-  }
+  await showModule(target.module);
+  if (state.module !== target.module) return;
+  const item = await api(target.apiPath);
+  if (target.entity === "setting") openSettingEditor(item, { readOnly: true });
+  if (target.entity === "character") await openCharacterEditor(item, { readOnly: true });
+  if (target.entity === "race") await openRaceDialog(item, { readOnly: true });
+  if (target.entity === "organization") await openOrganizationDialog(item, { readOnly: true });
 }
 
 async function showSettingsHub() {
