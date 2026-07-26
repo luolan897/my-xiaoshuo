@@ -4714,7 +4714,7 @@ function renderTaskDefaults(models, providers, taskDefaults) {
 const relationshipIndexStatusLabels = Object.freeze({
   queued: "等待同步",
   building: "正在同步",
-  ready: "已就绪",
+  ready: "已索引",
   failed: "同步失败"
 });
 
@@ -4745,7 +4745,7 @@ function relationshipIndexStatusMarkup(status) {
     : "";
   return `<div class="relationship-index-summary">
     <div class="relationship-index-state-row"><span class="relationship-index-state is-${esc(String(status.status ?? "unknown"))}">${esc(statusName)}</span><span>索引代次 <strong>${esc(String(status.generation ?? 0))}</strong></span><span>最后更新 <strong>${esc(updatedAt)}</strong></span></div>
-    <dl class="relationship-index-metrics"><div><dt>待同步任务</dt><dd>${esc(String(status.queuedSourceCount ?? 0))}</dd></div><div><dt>正文段落</dt><dd>${esc(String(status.indexedParagraphCount ?? 0))}</dd></div><div><dt>设定来源</dt><dd>${esc(String(status.indexedSourceCount ?? 0))}</dd></div></dl>
+    <dl class="relationship-index-metrics"><div><dt>待同步任务</dt><dd>${esc(String(status.queuedSourceCount ?? 0))}</dd></div><div><dt>已索引正文段落</dt><dd>${esc(String(status.indexedParagraphCount ?? 0))}</dd></div><div><dt>已索引设定来源</dt><dd>${esc(String(status.indexedSourceCount ?? 0))}</dd></div></dl>
     <div class="relationship-index-queue"><div class="relationship-index-queue-heading"><strong>增量任务队列</strong><span>仅包含新增、修改或删除后待同步的来源</span></div><div class="relationship-index-queue-list">${queueMarkup}</div></div>
     ${errorMarkup}
   </div>`;
