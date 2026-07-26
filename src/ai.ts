@@ -185,6 +185,20 @@ type AiCallTraceRound = {
   toolExecutions: AgentToolCallResult[];
 };
 
+type RelationshipSettingSource = {
+  id: string;
+  title: string;
+  sourceType: string;
+  content: string;
+};
+
+type RelationshipAnalysisChunk = {
+  sourceKind: "chapter" | "setting";
+  text: string;
+  chapterIds?: string[];
+  settingIds?: string[];
+};
+
 const TASK_TRACE_PREVIEW_CHARACTER_LIMIT = 3_000;
 
 function traceRecord(value: unknown): Record<string, unknown> {
@@ -847,6 +861,8 @@ export class ContextBuilder {
           contentSections.push(`[# ${String(volume.title)} / ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`);
         }
       }
+    } else if (scope.type === "settings" && scope.selection) {
+      contentSections.push(`待分析设定：\n${scope.selection}`);
     }
 
     if (scope.includeBookSummary || scope.type === "book" || scope.type === "volume") {
@@ -916,7 +932,7 @@ export class ContextBuilder {
       });
     }
     const sections: ContextSection[] = contentSections.map((text, order) => {
-      const required = /^(?:当前选中文本|当前章节|所在章节|作者主动引用的章节)/u.test(text);
+      const required = /^(?:当前选中文本|当前章节|所在章节|作者主动引用的章节|待分析设定)/u.test(text);
       const summary = /章节概要（/u.test(text);
       return {
         id: `context-${order}`,
@@ -3689,6 +3705,133 @@ export class AiManager {
     };
   }
 
+  private relationshipSettingSources(workId: string, characters: Record<string, unknown>[]): RelationshipSettingSource[] {
+    const characterNameById = new Map(characters.map((character) => [String(character.id), String(character.name)]));
+    const serialize = (value: Record<string, unknown>): string => JSON.stringify(value, null, 2);
+    const source = (sourceType: string, sourceId: unknown, title: string, value: Record<string, unknown>): RelationshipSettingSource => ({
+      id: sourceType === "setting" ? String(sourceId) : `${sourceType}:${String(sourceId)}`,
+      title,
+      sourceType,
+      content: serialize(value)
+    });
+    const work = this.store.getWork(workId);
+    const settings = this.store.listSettings(workId).map((item) => source("setting", item.id, String(item.title), {
+      category: item.category,
+      content: item.content,
+      tags: item.tags,
+      status: item.status,
+      authorNote: item.authorNote
+    }));
+    const characterSources = this.store.listCharacters(workId, true).map((item) => source("character", item.id, `人物档案：${String(item.name)}`, {
+      name: item.name,
+      aliases: item.aliases,
+      code: item.code,
+      species: item.species,
+      race: item.race,
+      organizations: item.organizations,
+      attributes: item.attributes,
+      profile: item.profile,
+      currentState: item.currentState,
+      lockedFields: item.lockedFields
+    }));
+    const races = this.store.listRaces(workId).map((item) => source("race", item.id, `种族设定：${String(item.name)}`, {
+      name: item.name,
+      description: item.description,
+      lineage: item.lineage,
+      settings: item.settings,
+      effectiveSettings: item.effectiveSettings,
+      members: item.members
+    }));
+    const organizations = this.store.listOrganizations(workId).map((item) => source("organization", item.id, `组织设定：${String(item.name)}`, {
+      name: item.name,
+      description: item.description,
+      settings: item.settings,
+      members: item.members
+    }));
+    const tracks = this.store.listTimelineTracks(workId).map((item) => source("timeline-track", item.id, `时间轴：${String(item.name)}`, {
+      name: item.name,
+      description: item.description
+    }));
+    const timeline = this.store.listTimelineEvents(workId).map((item) => source("timeline-event", item.id, `时间线事件：${String(item.name)}`, {
+      name: item.name,
+      description: item.description,
+      eventType: item.eventType,
+      timeLabel: item.timeLabel,
+      participants: (Array.isArray(item.participantIds) ? item.participantIds : []).map((characterId) => ({
+        characterId,
+        name: characterNameById.get(String(characterId)) ?? "已删除角色"
+      })),
+      location: item.location,
+      causes: item.causes,
+      impactScope: item.impactScope,
+      evidence: item.evidence,
+      status: item.status
+    }));
+    const relationships = this.store.listRelationships(workId).map((item) => source("relationship", item.id,
+      `人物关系：${characterNameById.get(String(item.fromCharacterId)) ?? "已删除角色"} / ${characterNameById.get(String(item.toCharacterId)) ?? "已删除角色"}`,
+      {
+        fromCharacter: { id: item.fromCharacterId, name: characterNameById.get(String(item.fromCharacterId)) ?? "已删除角色" },
+        toCharacter: { id: item.toCharacterId, name: characterNameById.get(String(item.toCharacterId)) ?? "已删除角色" },
+        category: item.category,
+        subtype: item.subtype,
+        keywords: item.keywords,
+        directed: item.directed,
+        currentStatus: item.currentStatus,
+        timeRange: item.timeRange,
+        confidence: item.confidence,
+        evidence: item.evidence,
+        confirmationStatus: item.confirmationStatus,
+        locked: item.locked
+      }
+    ));
+    const outlines = this.store.listChapterOutlines(workId).map((item) => source("chapter-outline", item.chapterId, `章节大纲：${String(item.volumeTitle)} / ${String(item.chapterTitle)}`, {
+      chapterTitle: item.chapterTitle,
+      volumeTitle: item.volumeTitle,
+      goal: item.goal,
+      conflict: item.conflict,
+      turningPoint: item.turningPoint,
+      notes: item.notes,
+      status: item.status
+    }));
+    const foreshadows = this.store.listForeshadows(workId).map((item) => source("foreshadow", item.id, `伏笔：${String(item.title)}`, {
+      title: item.title,
+      description: item.description,
+      status: item.status,
+      importance: item.importance,
+      resolutionNote: item.resolutionNote,
+      occurrences: item.occurrences
+    }));
+    const reviews = this.store.listReviewItems(workId).map((item) => source("review", item.id, `审核项：${String(item.title)}`, {
+      itemType: item.itemType,
+      severity: item.severity,
+      title: item.title,
+      description: item.description,
+      evidence: item.evidence,
+      suggestion: item.suggestion,
+      status: item.status,
+      resolutionNote: item.resolutionNote
+    }));
+    return [source("work", work.id, `作品资料：${String(work.title)}`, {
+      title: work.title,
+      author: work.author,
+      description: work.description,
+      language: work.language
+    }), ...settings, ...characterSources, ...races, ...organizations, ...tracks, ...timeline, ...relationships, ...outlines, ...foreshadows, ...reviews];
+  }
+
+  private relationshipSearchKeywords(characters: Record<string, unknown>[], selectedCharacterIds: Set<string>): string[] {
+    return [...new Set(characters
+      .filter((character) => selectedCharacterIds.has(String(character.id)))
+      .flatMap((character) => [String(character.name), ...(character.aliases as unknown[] ?? []).map(String)])
+      .map((keyword) => keyword.normalize("NFKC").trim().toLocaleLowerCase("zh-CN"))
+      .filter(Boolean))];
+  }
+
+  private relationshipSourceContainsKeyword(source: { title?: unknown; content?: unknown }, keywords: string[]): boolean {
+    const searchable = `${String(source.title ?? "")}\n${String(source.content ?? "")}`.normalize("NFKC").toLocaleLowerCase("zh-CN");
+    return keywords.some((keyword) => searchable.includes(keyword));
+  }
+
   private async runRelationshipAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const characters = this.store.listCharacters(workId);
     if (characters.length < 2) throw new AppError(409, "CHARACTERS_REQUIRED", "人物关系分析至少需要两个角色档案");
@@ -3703,27 +3846,59 @@ export class AiManager {
       .filter((character) => selectedCharacterIds.has(String(character.id)))
       .map((character) => `${String(character.id)} | ${String(character.name)}`)
       .join("\n");
-    const chapters = settingsOnly ? [] : this.getScopeChapters(workId, scope);
-    const settings = settingsOnly ? this.store.listSettings(workId) : [];
-    if (settingsOnly && settings.length === 0) throw new AppError(409, "SETTINGS_REQUIRED", "人物关系分析范围内没有设定集条目");
-    if (!settingsOnly && chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "人物关系分析范围内没有章节");
-    const chunks: Array<{ text: string; chapterIds?: string[]; settingIds?: string[] }> = settingsOnly
-      ? this.buildSettingChunks(settings, 12_000)
-      : this.buildChapterChunks(chapters, 12_000);
+    const searchKeywords = targeted ? this.relationshipSearchKeywords(characters, selectedCharacterIds) : [];
+    const scopedChapters = settingsOnly ? [] : this.getScopeChapters(workId, scope);
+    const chapters = targeted
+      ? scopedChapters.filter((chapter) => this.relationshipSourceContainsKeyword(chapter, searchKeywords))
+      : scopedChapters;
+    const availableSettings = settingsOnly || scope.includeAllSettings === true
+      ? this.relationshipSettingSources(workId, characters)
+      : [];
+    const settings = targeted
+      ? availableSettings.filter((setting) => this.relationshipSourceContainsKeyword(setting, searchKeywords))
+      : availableSettings;
+    if (settingsOnly && availableSettings.length === 0) throw new AppError(409, "SETTINGS_REQUIRED", "人物关系分析范围内没有设定数据");
+    if (!settingsOnly && scopedChapters.length === 0 && availableSettings.length === 0) {
+      throw new AppError(409, "RELATIONSHIP_SOURCES_REQUIRED", "人物关系分析范围内没有章节或设定数据");
+    }
+    const chunks: RelationshipAnalysisChunk[] = [
+      ...this.buildChapterChunks(chapters, 12_000).map((chunk) => ({ ...chunk, sourceKind: "chapter" as const })),
+      ...this.buildSettingChunks(settings, 12_000).map((chunk) => ({ ...chunk, sourceKind: "setting" as const }))
+    ];
+    if (targeted && chunks.length === 0) {
+      return {
+        relationshipIds: [],
+        candidateCount: 0,
+        rawCandidateCount: 0,
+        skipped: [{ index: -1, reason: "没有章节或设定数据命中被分析角色的名称或别名" }],
+        batchCount: 0,
+        coveredChapterCount: 0,
+        coveredSettingCount: 0,
+        fallbackSegmentCount: 0,
+        policyOmittedSegmentCount: 0,
+        targetedCharacterIds: [...selectedCharacterIds],
+        targetedEvidenceCount: 0,
+        aggregationBatchCount: 0,
+        replacedRelationshipCount: 0,
+        callIds: []
+      };
+    }
     const concurrency = this.configuredConcurrency(workId, "relationship-analysis", modelId);
     const roster = characters.map((character) => {
       const aliases = (character.aliases as string[]).filter((alias) => this.isSafeGlobalAlias(alias));
       return `${String(character.id)} | ${String(character.name)}${aliases.length ? ` | 别名：${aliases.join("、")}` : ""}`;
     }).join("\n");
     const rawCandidates: Array<Record<string, unknown>> = [];
+    const chapterEvidenceCandidates: Array<Record<string, unknown>> = [];
+    const settingCandidates: Array<Record<string, unknown>> = [];
     const callIds: string[] = [];
     const settingsInstruction = [
-      "你是小说人物关系设定抽取器，不是续写者。只根据本批设定集条目抽取角色规范表中人物之间被明确写出的长期关系。",
+      "你是小说人物关系设定抽取器，不是续写者。只根据本批系统设定数据抽取角色规范表中人物之间被明确写出的长期关系。",
       ...(targeted ? ["被分析角色：", targetedRoster, "只输出至少一端属于被分析角色的关系。"] : []),
       "完整角色规范表：",
       roster,
       "硬规则：",
-      "1. 设定集是本次唯一事实来源，不得引用章节正文、已有关系、组织资料、角色档案或常识补全关系。",
+      "1. 本批 SETTING 条目是本次唯一事实来源；它可能来自作品设定、人物档案、种族、组织、时间线、已有关系、大纲、伏笔或审核项，不得引用未提供的数据或常识补全关系。",
       "2. 人名、别名、昵称和拼写变体必须归一到唯一 characterId，禁止创造角色或把相似名字强行合并。",
       "3. 只抽取条目明确陈述的长期亲属、社会、情感或冲突关系；同场出现、同属阵营、相似背景和推测性措辞不能生成关系。",
       "4. 父母→子女、君王→臣属、导师→学生、施害者→受害者、倾慕者→被倾慕者使用 directed=true；伴侣、朋友、手足、盟友、互为宿敌使用 directed=false。",
@@ -3734,24 +3909,23 @@ export class AiManager {
       "9. evidence 的 quote 和 supports 必须能共同识别关系双方及关系类型，不能只凭一方名字或模糊代词建立关系。",
       "10. 输出 JSON 数组。字段：fromCharacterId、toCharacterId、category、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。没有明确关系时输出 []。"
     ].join("\n");
-    const extractChunk = async (chunk: { text: string; settingIds?: string[] }, maxAttempts = 3): Promise<{ candidates: Array<Record<string, unknown>>; callId: string }> => {
+    const extractChunk = async (chunk: RelationshipAnalysisChunk, maxAttempts = 3): Promise<{ candidates: Array<Record<string, unknown>>; callId: string }> => {
       const generated = await this.generateTaggedJson({
         workId,
         taskId,
         taskType: "relationship-analysis",
         signal: this.taskSignal(taskId),
         maxAttempts,
-        scope: settingsOnly
-          ? { type: "settings", settingIds: chunk.settingIds }
+        scope: chunk.sourceKind === "setting"
+          ? { type: "settings", selection: chunk.text }
           : {
               type: "selection",
               selection: chunk.text,
-              includeAllSettings: scope.includeAllSettings,
               ...(targeted ? { characterIds: [...selectedCharacterIds], excludeRelationshipConstraints: scope.replaceExistingRelationships === true } : {})
             },
         ...(modelId ? { modelId } : {}),
         parameters: { temperature: 0.1 },
-        instruction: settingsOnly ? settingsInstruction : targeted ? [
+        instruction: chunk.sourceKind === "setting" ? settingsInstruction : targeted ? [
           "你是定向人物关系证据收集器。本阶段只建立跨章节证据账本，不下最终关系结论。",
           "被分析角色：",
           targetedRoster,
@@ -3796,8 +3970,8 @@ export class AiManager {
           "24. 共同执行一次任务、同属一个组织、在同一集体场景中被感谢或落泪、替第三人转发消息，都不能单独证明同事、朋友或盟友。此类关系必须有原文明示身份，或至少两个不同章节的持续互动证据。"
         ].join("\n"),
         extraSystemPrompt: [
-          settingsOnly
-            ? "本次只允许使用提供的设定集条目。每条结论都必须能回溯到对应 settingId 的原文引文。"
+          chunk.sourceKind === "setting"
+            ? "本次只允许使用提供的系统设定条目。每条结论都必须能回溯到对应 settingId 的原文引文。"
             : targeted
             ? "你正在为指定角色收集可审计的跨章节关系线索。不得在证据收集阶段把单次互动直接判定为长期关系。"
             : "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。",
@@ -3813,15 +3987,22 @@ export class AiManager {
     };
     const chunkResults = await this.processChunks(chunks, concurrency, async (chunk) => {
       if (taskId && this.store.getTask(taskId).status !== "running") {
-        return { candidates: [], callIds: [], fallbackSegmentCount: 0, policyOmittedSegmentCount: 0 };
+        return { sourceKind: chunk.sourceKind, candidates: [], callIds: [], fallbackSegmentCount: 0, policyOmittedSegmentCount: 0 };
       }
       try {
         const extracted = await extractChunk(chunk, 1);
-        return { candidates: extracted.candidates, callIds: [extracted.callId], fallbackSegmentCount: 0, policyOmittedSegmentCount: 0 };
+        return { sourceKind: chunk.sourceKind, candidates: extracted.candidates, callIds: [extracted.callId], fallbackSegmentCount: 0, policyOmittedSegmentCount: 0 };
       } catch {
-        if (settingsOnly) throw new AppError(502, "AI_SETTINGS_BATCH_FAILED", "设定集人物关系分析批次失败");
+        if (chunk.sourceKind === "setting") throw new AppError(502, "AI_SETTINGS_BATCH_FAILED", "设定数据人物关系分析批次失败");
         const segments = this.splitMarkedChapters(chunk.text);
-        return this.runChapterSegmentFallback(segments, taskId, async (text, maxAttempts) => extractChunk({ text }, maxAttempts), undefined, concurrency);
+        const fallback = await this.runChapterSegmentFallback(
+          segments,
+          taskId,
+          async (text, maxAttempts) => extractChunk({ sourceKind: "chapter", text }, maxAttempts),
+          undefined,
+          concurrency
+        );
+        return { sourceKind: chunk.sourceKind, ...fallback };
       }
     }, (completed) => {
       if (taskId && this.store.getTask(taskId).status === "running") {
@@ -3832,7 +4013,8 @@ export class AiManager {
     let fallbackSegmentCount = 0;
     let policyOmittedSegmentCount = 0;
     for (const result of chunkResults) {
-      rawCandidates.push(...result.candidates);
+      if (result.sourceKind === "setting") settingCandidates.push(...result.candidates);
+      else chapterEvidenceCandidates.push(...result.candidates);
       callIds.push(...result.callIds);
       fallbackSegmentCount += result.fallbackSegmentCount;
       policyOmittedSegmentCount += result.policyOmittedSegmentCount;
@@ -3847,11 +4029,12 @@ export class AiManager {
       });
     }
 
-    const targetedEvidenceCount = targeted ? rawCandidates.length : 0;
+    if (!targeted) rawCandidates.push(...chapterEvidenceCandidates, ...settingCandidates);
+    const targetedEvidenceCount = targeted ? chapterEvidenceCandidates.length + settingCandidates.length : 0;
     let aggregationBatchCount = 0;
-    if (targeted && !settingsOnly && rawCandidates.length > 0) {
+    if (targeted && !settingsOnly && chapterEvidenceCandidates.length > 0) {
       const evidenceGroups = new Map<string, Array<Record<string, unknown>>>();
-      for (const evidence of rawCandidates) {
+      for (const evidence of chapterEvidenceCandidates) {
         const target = String(evidence.targetCharacterId ?? "");
         const related = String(evidence.relatedCharacterId ?? evidence.relatedReference ?? "unknown");
         const key = `${target}|${related}`;
@@ -3883,7 +4066,6 @@ export class AiManager {
           maxAttempts: 2,
           scope: {
             type: "entities",
-            includeAllSettings: scope.includeAllSettings,
             characterIds: [...selectedCharacterIds],
             excludeRelationshipConstraints: scope.replaceExistingRelationships === true
           },
@@ -3924,9 +4106,10 @@ export class AiManager {
           this.store.updateTask(taskId, { status: "running", progress: Math.min(92, 72 + Math.round(completed / evidenceBatches.length * 20)) });
         }
       });
-      rawCandidates.splice(0, rawCandidates.length, ...aggregationResults.flatMap((result) => result.candidates));
+      rawCandidates.push(...aggregationResults.flatMap((result) => result.candidates));
       callIds.push(...aggregationResults.map((result) => result.callId));
     }
+    if (targeted) rawCandidates.push(...settingCandidates);
 
     const chapterById = new Map(chapters.map((chapter) => [String(chapter.id), chapter]));
     const settingById = new Map(settings.map((setting) => [String(setting.id), setting]));
@@ -3991,8 +4174,7 @@ export class AiManager {
         .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
         .flatMap<Record<string, unknown>>((item) => {
           if (typeof item.quote !== "string" || item.quote.trim().length > 80) return [];
-          if (settingsOnly) {
-            if (typeof item.settingId !== "string") return [];
+          if (typeof item.settingId === "string") {
             const setting = settingById.get(item.settingId);
             if (!setting || !this.quoteExists(String(setting.content), item.quote)) return [];
             return [{
@@ -4015,7 +4197,7 @@ export class AiManager {
           }];
         });
       if (evidence.length === 0) {
-        skipped.push({ index, reason: settingsOnly ? "证据引文未在对应设定条目命中" : "证据引文未在对应章节原文命中" });
+        skipped.push({ index, reason: "证据引文未在对应章节或设定条目命中" });
         return;
       }
       const evidenceText = evidence.map((item) => String(item.quote)).join("\n");
@@ -4075,7 +4257,7 @@ export class AiManager {
       const evidenceText = candidate.evidence.map((item) => String(item.quote)).join("\n");
       const explicitlyLongRunning = /同事|同僚|共事|搭档|伙伴|朋友|好友|挚友|老友|旧友|老朋友|战友|盟友|同盟|联盟|结盟|缔盟|盟约|旧识|好久不见|多年|长期|几十年|经常|往日|一直.{0,16}(?:合作|支援|互助|并肩)/u.test(evidenceText);
       if (evidenceSources.size >= 2 || explicitlyLongRunning) continue;
-      skipped.push({ index: -1, reason: settingsOnly
+      skipped.push({ index: -1, reason: candidate.evidence.every((item) => item.contextType === "setting")
         ? `“${candidate.subtype}”缺少设定集中的明确长期关系表述`
         : `“${candidate.subtype}”缺少明确身份或跨章长期互动证据` });
       merged.delete(key);
@@ -4389,7 +4571,7 @@ export class AiManager {
     return chunks;
   }
 
-  private buildSettingChunks(settings: Record<string, unknown>[], maximumChars = 10_000): Array<{ text: string; settingIds: string[] }> {
+  private buildSettingChunks(settings: RelationshipSettingSource[], maximumChars = 10_000): Array<{ text: string; settingIds: string[] }> {
     const chunks: Array<{ text: string; settingIds: string[] }> = [];
     let text = "";
     let settingIds: string[] = [];

@@ -930,9 +930,11 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(task.body.data.scopeSummary).toBe("全书 + 设定集");
     await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(userPrompts.length).toBeGreaterThan(0);
-    expect(userPrompts.every((prompt) => prompt.includes("全部作品设定（关系分析参考）"))).toBe(true);
-    expect(userPrompts.every((prompt) => prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
-    expect(userPrompts.every((prompt) => prompt.includes("王位只能由正式继承人承接"))).toBe(true);
+    const settingPrompts = userPrompts.filter((prompt) => prompt.includes("<SETTING"));
+    expect(settingPrompts.length).toBeGreaterThan(0);
+    expect(settingPrompts.some((prompt) => prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
+    expect(settingPrompts.some((prompt) => prompt.includes("王位只能由正式继承人承接"))).toBe(true);
+    expect(userPrompts.filter((prompt) => prompt.includes("<CHAPTER")).every((prompt) => !prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
     expect(systemPrompts.every((prompt) => prompt.includes("作者追加的关系分析提示") && prompt.includes("重点检查退位者与继承人的师承变化"))).toBe(true);
   });
 
@@ -987,7 +989,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(result.body.data.result).toMatchObject({
       candidateCount: 1,
       coveredChapterCount: 0,
-      coveredSettingCount: 1
+      coveredSettingCount: 4
     });
     expect(userPrompts).toHaveLength(1);
     expect(userPrompts[0]).toContain(`<SETTING id="${settingId}" title="北港旧友">`);
@@ -1024,6 +1026,9 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
           timeRange: { stages: ["北港重逢"] },
           evidence: [{ chapterId: userPrompt.match(/"chapterId":"([^"]+)"/u)?.[1], chapterTitle: "第一章 埋线", quote: "我们一直是朋友", contextType: "current", supports: "原文直接说明长期关系" }]
         }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (userPrompt.includes("<SETTING")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       const chapterId = userPrompt.match(/<CHAPTER id="([^"]+)"/u)?.[1] ?? "";
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
@@ -1082,11 +1087,11 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       aggregationBatchCount: 1,
       replacedRelationshipCount: 0
     });
-    expect(userPrompts).toHaveLength(2);
+    expect(userPrompts).toHaveLength(3);
     expect(userPrompts[0]).toContain("定向人物关系证据收集器");
-    expect(userPrompts[1]).toContain("小说人物关系全局归纳器");
-    expect(userPrompts[1]).toContain("沈星直接说明两人一直是朋友");
-    expect(userPrompts.every((prompt) => prompt.includes("北港旧约只认可长期互信"))).toBe(true);
+    expect(userPrompts.some((prompt) => prompt.includes("小说人物关系全局归纳器"))).toBe(true);
+    expect(userPrompts.some((prompt) => prompt.includes("沈星直接说明两人一直是朋友"))).toBe(true);
+    expect(userPrompts.every((prompt) => !prompt.includes("北港旧约只认可长期互信"))).toBe(true);
     expect(userPrompts.every((prompt) => prompt.includes("林舟") && prompt.includes("调查员"))).toBe(true);
     expect(systemPrompts.every((prompt) => prompt.includes("重点检查失联前后的关系连续性"))).toBe(true);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
@@ -1094,6 +1099,60 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data.some((relationship: { fromCharacterId: string; toCharacterId: string; subtype: string }) =>
       new Set([relationship.fromCharacterId, relationship.toCharacterId]).has(linId) && relationship.subtype === "朋友"
     )).toBe(true);
+  });
+
+  it("定向人物关系分析只发送命中人物名称或别名的章节与设定", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在旧港查看完整航海日志。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "这是一章完全无关的正文，不应发送。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[2].id}`).send({
+      content: "另一章也没有目标人物，不应发送。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "纪宁", aliases: ["阿宁"] }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾川" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "旧港盟约",
+      category: "人物关系",
+      content: "阿宁与顾川在旧港订立了长期守望盟约。"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "无关天文规则",
+      category: "世界规则",
+      content: "双月每隔百年重合一次，不含目标人物。"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "守望会",
+      description: "负责旧港航线。",
+      memberIds: [target.body.data.id]
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      coveredChapterCount: 1,
+      targetedCharacterIds: [target.body.data.id]
+    });
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("阿宁在旧港查看完整航海日志。");
+    expect(sent).not.toContain("这是一章完全无关的正文，不应发送。");
+    expect(sent).not.toContain("另一章也没有目标人物，不应发送。");
+    expect(sent).toContain("阿宁与顾川在旧港订立了长期守望盟约。");
+    expect(sent).not.toContain("双月每隔百年重合一次，不含目标人物。");
+    expect(sent).toContain('title="组织设定：守望会"');
   });
 
   it("未勾选覆盖时保留已有关系且只追加不存在的关系", async () => {
