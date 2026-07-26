@@ -74,6 +74,8 @@ export type ApproximateNameMatch = {
   observed: string;
   start: number;
   end: number;
+  utf16Start: number;
+  utf16End: number;
   characterDistance: number;
   pinyinDistance: number;
 };
@@ -114,6 +116,10 @@ export function findApproximateNameMatches(
   const normalizedContent = normalizeRelationshipSearchText(content);
   const normalizedReference = normalizeRelationshipSearchText(reference).trim();
   const sourceCharacters = [...normalizedContent];
+  const utf16Offsets = new Array<number>(sourceCharacters.length + 1).fill(0);
+  for (let index = 0; index < sourceCharacters.length; index += 1) {
+    utf16Offsets[index + 1] = utf16Offsets[index]! + sourceCharacters[index]!.length;
+  }
   const referenceCharacters = [...normalizedReference];
   if (referenceCharacters.length < 2 || sourceCharacters.length === 0) return [];
   const hanReference = referenceCharacters.every((character) => /\p{Script=Han}/u.test(character));
@@ -143,7 +149,15 @@ export function findApproximateNameMatches(
       const key = `${start}:${observed}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      matches.push({ observed, start, end: start + windowLength, characterDistance, pinyinDistance });
+      matches.push({
+        observed,
+        start,
+        end: start + windowLength,
+        utf16Start: utf16Offsets[start]!,
+        utf16End: utf16Offsets[start + windowLength]!,
+        characterDistance,
+        pinyinDistance
+      });
       if (matches.length > maximumCandidates) throw new RelationshipApproximateMatchLimitError(maximumCandidates);
     }
   }
@@ -165,13 +179,16 @@ export async function findApproximateNameMatchesChunked(
   const matches: ApproximateNameMatch[] = [];
   const seen = new Set<string>();
   let processedCharacters = 0;
+  let processedCodeUnits = 0;
   let tail: string[] = [];
   let chunk: string[] = [];
   const processChunk = async (): Promise<void> => {
     if (chunk.length === 0) return;
     const prefixLength = tail.length;
+    const prefixCodeUnits = tail.reduce((total, character) => total + character.length, 0);
     const combined = [...tail, ...chunk];
     const baseOffset = processedCharacters - prefixLength;
+    const baseCodeUnitOffset = processedCodeUnits - prefixCodeUnits;
     const chunkMatches = findApproximateNameMatches(
       combined.join(""),
       reference,
@@ -181,7 +198,13 @@ export async function findApproximateNameMatchesChunked(
     );
     for (const match of chunkMatches) {
       if (match.end <= prefixLength) continue;
-      const adjusted = { ...match, start: match.start + baseOffset, end: match.end + baseOffset };
+      const adjusted = {
+        ...match,
+        start: match.start + baseOffset,
+        end: match.end + baseOffset,
+        utf16Start: match.utf16Start + baseCodeUnitOffset,
+        utf16End: match.utf16End + baseCodeUnitOffset
+      };
       const key = `${adjusted.start}:${adjusted.observed}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -189,6 +212,7 @@ export async function findApproximateNameMatchesChunked(
       if (matches.length > maximumCandidates) throw new RelationshipApproximateMatchLimitError(maximumCandidates);
     }
     processedCharacters += chunk.length;
+    processedCodeUnits += chunk.reduce((total, character) => total + character.length, 0);
     tail = combined.slice(-overlapSize);
     chunk = [];
     await new Promise<void>((resolve) => setImmediate(resolve));

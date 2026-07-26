@@ -48,4 +48,11 @@ describe("人物关系来源搜索", () => {
     const matches = await findApproximateNameMatchesChunked(`${prefix}摩斯拉苏醒`, "魔斯拉");
     expect(matches[0]).toMatchObject({ observed: "摩斯拉", start: 16_383, pinyinDistance: 0 });
   });
+
+  it("同时返回可安全切割 UTF-16 文本的偏移量", async () => {
+    const content = `${"𠮷".repeat(300)}摩斯拉苏醒`;
+    const match = (await findApproximateNameMatchesChunked(content, "魔斯拉"))[0];
+    expect(match).toMatchObject({ observed: "摩斯拉", start: 300, utf16Start: 600, utf16End: 603 });
+    expect(content.slice(match!.utf16Start, match!.utf16End)).toBe("摩斯拉");
+  });
 });

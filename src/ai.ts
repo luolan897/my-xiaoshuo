@@ -4333,8 +4333,8 @@ export class AiManager {
               });
             }
             targetFuzzySourceKeys.add(key);
-            const snippetStart = Math.max(0, match.start - 240);
-            const snippetEnd = Math.min(normalizedSearchable.length, match.end + 240);
+            const snippetStart = Math.max(0, match.utf16Start - 240);
+            const snippetEnd = Math.min(normalizedSearchable.length, match.utf16End + 240);
             candidates.push({
               key: candidateKey,
               targetCharacterId,
