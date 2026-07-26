@@ -1324,6 +1324,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-trace-call > summary:hover, .task-trace-call > summary:focus-visible { background: var(--surface-soft); outline: none; }
 .task-trace-call > summary > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
 .task-trace-call > summary small { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.task-trace-call > summary .task-trace-call-sources { overflow: visible; color: var(--ink-soft); line-height: 1.45; text-overflow: clip; white-space: normal; }
 .task-trace-call-index, .task-trace-round-index { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--accent) 9%, var(--surface)); color: var(--accent-dark); font-family: var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 700; }
 .task-trace-status { padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 9px; }
 .task-trace-call.is-completed .task-trace-status { border-color: color-mix(in srgb, var(--green) 42%, var(--line)); color: var(--green); }
@@ -1334,7 +1335,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-trace-load-state.is-loaded { display: grid; align-items: stretch; }
 .task-trace-load-state > div:first-child { display: grid; gap: 4px; }
 .task-trace-load-state p { margin: 0; color: var(--muted); font-size: 9px; }
-.task-trace-round-summary > p { margin: 0 0 0 38px; color: var(--muted); font-size: 9px; }
 .task-trace-initial, .task-trace-prompt, .task-trace-response, .task-trace-tools > details, .task-trace-request-meta { border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
 .task-trace-initial > summary, .task-trace-prompt > summary, .task-trace-response > summary, .task-trace-tools > details > summary, .task-trace-request-meta > summary { padding: 9px 11px; color: var(--muted); cursor: pointer; font-size: 10px; font-weight: 600; }
 .task-trace-initial[open] > summary, .task-trace-prompt[open] > summary, .task-trace-response[open] > summary, .task-trace-tools > details[open] > summary, .task-trace-request-meta[open] > summary { border-bottom: 1px solid var(--line); color: var(--ink); }

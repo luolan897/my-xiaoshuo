@@ -199,70 +199,38 @@ type RelationshipAnalysisChunk = {
   settingIds?: string[];
 };
 
-const TASK_TRACE_PREVIEW_CHARACTER_LIMIT = 3_000;
-
 function traceRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function previewTaskTraceMessages(messages: unknown[]): {
-  messages: Record<string, unknown>[];
-  totalChars: number;
-  truncated: boolean;
-} {
-  const records = messages.map(traceRecord);
-  const contents = records.map((message) => message.content === null ? "" : String(message.content ?? ""));
-  const allocations = contents.map(() => 0);
-  let remaining = TASK_TRACE_PREVIEW_CHARACTER_LIMIT;
-  let active = contents.map((_, index) => index).filter((index) => contents[index]!.length > 0);
-  while (remaining > 0 && active.length > 0) {
-    const share = Math.max(1, Math.floor(remaining / active.length));
-    const next: number[] = [];
-    for (const index of active) {
-      if (remaining <= 0) break;
-      const available = contents[index]!.length - allocations[index]!;
-      const granted = Math.min(available, share, remaining);
-      allocations[index] = allocations[index]! + granted;
-      remaining -= granted;
-      if (allocations[index]! < contents[index]!.length) next.push(index);
+function taskTraceSourceRefs(initialMessages: unknown[], rounds: unknown[]): Array<{ type: "chapter" | "setting"; title: string }> {
+  const refs: Array<{ type: "chapter" | "setting"; title: string }> = [];
+  const seen = new Set<string>();
+  const add = (type: "chapter" | "setting", title: string): void => {
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) return;
+    const key = `${type}|${normalizedTitle}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    refs.push({ type, title: normalizedTitle });
+  };
+  const roundMessages = rounds.flatMap((value) => {
+    const request = traceRecord(traceRecord(value).request);
+    return Array.isArray(request.messages) ? request.messages : [];
+  });
+  for (const message of [...initialMessages, ...roundMessages]) {
+    const content = String(traceRecord(message).content ?? "");
+    for (const match of content.matchAll(/<CHAPTER\b[^>]*\btitle="([^"]+)"[^>]*>/gu)) add("chapter", match[1] ?? "");
+    for (const match of content.matchAll(/<SETTING\b[^>]*\btitle="([^"]+)"[^>]*>/gu)) add("setting", match[1] ?? "");
+    for (const match of content.matchAll(/\[(?:# )?([^\]\n]+?)\s*\|\s*版本\s+\d+\]/gu)) {
+      const title = (match[1] ?? "").split(/\s+\/\s+/u).at(-1) ?? "";
+      add("chapter", title);
     }
-    active = next;
+    for (const match of content.matchAll(/(?:当前章节|所在章节)：([^\n|]+?)\s*\|\s*版本\s+\d+/gu)) add("chapter", match[1] ?? "");
+    for (const match of content.matchAll(/"chapterTitle"\s*:\s*"([^"]+)"/gu)) add("chapter", match[1] ?? "");
+    for (const match of content.matchAll(/"chapterId"\s*:\s*"[^"]+"[\s\S]{0,240}?"title"\s*:\s*"([^"]+)"/gu)) add("chapter", match[1] ?? "");
   }
-  return {
-    messages: records.map((message, index) => {
-      const content = contents[index]!;
-      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-      return {
-        role: typeof message.role === "string" ? message.role : "user",
-        content: content.slice(0, allocations[index]),
-        contentChars: content.length,
-        contentTruncated: allocations[index]! < content.length,
-        toolCallCount: toolCalls.length,
-        ...(typeof message.tool_call_id === "string" ? { tool_call_id: message.tool_call_id } : {})
-      };
-    }),
-    totalChars: contents.reduce((total, content) => total + content.length, 0),
-    truncated: contents.some((content, index) => allocations[index]! < content.length)
-  };
-}
-
-function summarizeTaskTraceRound(value: unknown): Record<string, unknown> {
-  const round = traceRecord(value);
-  const request = traceRecord(round.request);
-  const messages = Array.isArray(request.messages) ? request.messages : [];
-  const attempts = Array.isArray(round.attempts) ? round.attempts : [];
-  const toolExecutions = Array.isArray(round.toolExecutions) ? round.toolExecutions : [];
-  return {
-    round: typeof round.round === "number" ? round.round : 1,
-    requestedAt: typeof round.requestedAt === "string" ? round.requestedAt : "",
-    messageCount: messages.length,
-    promptChars: messages.reduce((total, message) => {
-      const content = traceRecord(message).content;
-      return total + (content === null ? 0 : String(content ?? "").length);
-    }, 0),
-    attemptCount: attempts.length,
-    toolExecutionCount: toolExecutions.length
-  };
+  return refs;
 }
 
 function redactProviderSecret(value: string, apiKey: string): string {
@@ -1740,6 +1708,7 @@ export class AiManager {
     const rows = this.store.db.all(
       `SELECT call.id, call.task_type, call.provider_id, call.model_id, call.status, call.failure,
         call.input_chars, call.output_chars, call.created_at, call.completed_at, trace.call_id AS trace_call_id,
+        trace.initial_messages_json, trace.rounds_json,
         CASE WHEN trace.call_id IS NULL THEN 0 ELSE json_array_length(trace.initial_messages_json) END AS initial_message_count,
         CASE WHEN trace.call_id IS NULL THEN 0 ELSE json_array_length(trace.rounds_json) END AS round_count,
         CASE WHEN trace.call_id IS NULL THEN 0 ELSE length(trace.initial_messages_json) + length(trace.rounds_json) END AS trace_chars,
@@ -1756,6 +1725,12 @@ export class AiManager {
     const calls = rows.map((row) => {
       const hasTrace = row.trace_call_id !== null && row.trace_call_id !== undefined;
       const failure = row.failure === null ? null : stringValue(row, "failure");
+      const sourceRefs = hasTrace
+        ? taskTraceSourceRefs(
+            json<unknown[]>(stringValue(row, "initial_messages_json"), []),
+            json<unknown[]>(stringValue(row, "rounds_json"), [])
+          )
+        : [];
       return {
         id: stringValue(row, "id"),
         taskType: stringValue(row, "task_type"),
@@ -1777,6 +1752,7 @@ export class AiManager {
         outputChars: numberValue(row, "output_chars"),
         createdAt: stringValue(row, "created_at"),
         completedAt: row.completed_at === null ? null : stringValue(row, "completed_at"),
+        sourceRefs,
         trace: hasTrace ? {
           available: true,
           initialMessageCount: numberValue(row, "initial_message_count"),
@@ -1794,7 +1770,7 @@ export class AiManager {
     };
   }
 
-  getTaskTraceCall(taskId: string, callId: string, full = false): Record<string, unknown> {
+  getTaskTraceCall(taskId: string, callId: string): Record<string, unknown> {
     this.store.getTask(taskId);
     const row = this.store.db.get(
       `SELECT trace.initial_messages_json, trace.rounds_json, trace.created_at, trace.updated_at
@@ -1806,30 +1782,13 @@ export class AiManager {
     if (!row) throw notFound("AI 调用追踪");
     const initialMessages = json<unknown[]>(stringValue(row, "initial_messages_json"), []);
     const rounds = json<unknown[]>(stringValue(row, "rounds_json"), []);
-    if (full) {
-      return {
-        taskId,
-        callId,
-        mode: "full",
-        trace: {
-          initialMessages,
-          rounds,
-          createdAt: stringValue(row, "created_at"),
-          updatedAt: stringValue(row, "updated_at")
-        }
-      };
-    }
-    const preview = previewTaskTraceMessages(initialMessages);
     return {
       taskId,
       callId,
-      mode: "preview",
-      previewLimit: TASK_TRACE_PREVIEW_CHARACTER_LIMIT,
-      truncated: preview.truncated,
-      totalPromptChars: preview.totalChars,
+      mode: "full",
       trace: {
-        initialMessages: preview.messages,
-        rounds: rounds.map(summarizeTaskTraceRound),
+        initialMessages,
+        rounds,
         createdAt: stringValue(row, "created_at"),
         updatedAt: stringValue(row, "updated_at")
       }
