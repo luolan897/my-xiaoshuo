@@ -1176,12 +1176,22 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     await request(runtime.app).post(`/api/works/${workId}/settings`).send({
       title: "无关天文规则",
       category: "世界规则",
-      content: "双月每隔百年重合一次，不含目标人物。"
+      content: "双月每隔百年重合一次，不含目标人物。",
+      locked: true
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "旁观者",
+      attributes: { identity: "绝密旁观者自动注入标记" },
+      lockedFields: ["identity"]
     }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
       name: "守望会",
       description: "负责旧港航线。",
       memberIds: [target.body.data.id]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "星图局",
+      description: "无关组织自动注入标记。"
     }).expect(201);
     const modelId = await configureAi(runtime, workId);
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
@@ -1199,6 +1209,8 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).not.toContain("另一章也没有目标人物，不应发送。");
     expect(sent).toContain("阿宁与顾川在旧港订立了长期守望盟约。");
     expect(sent).not.toContain("双月每隔百年重合一次，不含目标人物。");
+    expect(sent).not.toContain("绝密旁观者自动注入标记");
+    expect(sent).not.toContain("无关组织自动注入标记");
     expect(sent).toContain('title="组织设定：守望会"');
   });
 

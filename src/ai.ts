@@ -742,20 +742,22 @@ export class ContextBuilder {
 
   buildPlan(workId: string, scope: ContextScope, maximumTokens = 60_000, bookSummaryMaximumTokens?: number, query = ""): ContextBuildPlan {
     const work = this.store.getWork(workId);
-    const includeAutomaticContext = scope.type !== "none";
+    const includeAutomaticContext = scope.type !== "none" && scope.suppressAutomaticContext !== true;
     const settingsOnly = scope.type === "settings";
     const constraints: string[] = includeAutomaticContext
       ? [`作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`]
       : [];
     const contentSections: string[] = [];
     const availableSettings = this.store.listSettings(workId);
-    const contextualSettings = settingsOnly ? [] : scope.includeAllSettings ? availableSettings : availableSettings.filter((item) => item.locked);
+    const contextualSettings = !includeAutomaticContext || settingsOnly
+      ? []
+      : scope.includeAllSettings ? availableSettings : availableSettings.filter((item) => item.locked);
     const allCharacters = this.store.listCharacters(workId);
     const lockedCharacters = allCharacters.filter(
       (item) => Array.isArray(item.lockedFields) && item.lockedFields.length > 0
     );
     const organizations = this.store.listOrganizations(workId);
-    const relationshipConstraints = settingsOnly || scope.excludeRelationshipConstraints
+    const relationshipConstraints = !includeAutomaticContext || settingsOnly || scope.excludeRelationshipConstraints
       ? []
       : selectRelationshipConstraints(this.store, workId, scope.characterIds ?? []);
 
@@ -3892,7 +3894,7 @@ export class AiManager {
           : {
               type: "selection",
               selection: chunk.text,
-              ...(targeted ? { characterIds: [...selectedCharacterIds], excludeRelationshipConstraints: scope.replaceExistingRelationships === true } : {})
+              ...(targeted ? { suppressAutomaticContext: true } : {})
             },
         ...(modelId ? { modelId } : {}),
         parameters: { temperature: 0.1 },
@@ -4037,8 +4039,7 @@ export class AiManager {
           maxAttempts: 2,
           scope: {
             type: "entities",
-            characterIds: [...selectedCharacterIds],
-            excludeRelationshipConstraints: scope.replaceExistingRelationships === true
+            suppressAutomaticContext: true
           },
           ...(modelId ? { modelId } : {}),
           parameters: { temperature: 0.1 },
