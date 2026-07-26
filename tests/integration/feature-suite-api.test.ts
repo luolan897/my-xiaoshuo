@@ -927,13 +927,77 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
         additionalPrompt: "重点检查退位者与继承人的师承变化。"
       }
     }).expect(201);
-    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定");
+    expect(task.body.data.scopeSummary).toBe("全书 + 设定集");
     await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(userPrompts.length).toBeGreaterThan(0);
     expect(userPrompts.every((prompt) => prompt.includes("全部作品设定（关系分析参考）"))).toBe(true);
     expect(userPrompts.every((prompt) => prompt.includes("摄政者退位后仍保留导师身份"))).toBe(true);
     expect(userPrompts.every((prompt) => prompt.includes("王位只能由正式继承人承接"))).toBe(true);
     expect(systemPrompts.every((prompt) => prompt.includes("作者追加的关系分析提示") && prompt.includes("重点检查退位者与继承人的师承变化"))).toBe(true);
+  });
+
+  it("可仅根据设定集分析人物关系且不要求章节", async () => {
+    let linId = "";
+    let shenId = "";
+    let settingId = "";
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+        fromCharacterId: linId,
+        toCharacterId: shenId,
+        category: "social",
+        subtype: "朋友",
+        keywords: ["自幼相识", "长期信任"],
+        directed: false,
+        currentStatus: "active",
+        confidence: 0.94,
+        timeRange: {},
+        evidence: [{
+          settingId,
+          settingTitle: "北港旧友",
+          quote: "林舟与沈星自幼相识，是彼此最信任的朋友。",
+          supports: "设定明确说明两人是长期朋友"
+        }]
+      }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const work = await request(runtime.app).post("/api/works").send({ title: "仅设定集关系分析" }).expect(201);
+    const workId = work.body.data.id as string;
+    const lin = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const shen = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    linId = lin.body.data.id as string;
+    shenId = shen.body.data.id as string;
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "北港旧友",
+      category: "人物关系",
+      content: "林舟与沈星自幼相识，是彼此最信任的朋友。",
+      locked: false
+    }).expect(201);
+    settingId = setting.body.data.id as string;
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "settings" }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toBe("仅设定集");
+    expect(task.body.data.sourceVersions).toEqual({ [`setting:${settingId}`]: 1 });
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      candidateCount: 1,
+      coveredChapterCount: 0,
+      coveredSettingCount: 1
+    });
+    expect(userPrompts).toHaveLength(1);
+    expect(userPrompts[0]).toContain(`<SETTING id="${settingId}" title="北港旧友">`);
+    expect(userPrompts[0]).not.toContain("<CHAPTER");
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(1);
+    expect(relationships.body.data[0]).toMatchObject({
+      subtype: "朋友",
+      evidence: [{ settingId, settingTitle: "北港旧友", quote: "林舟与沈星自幼相识，是彼此最信任的朋友。" }]
+    });
   });
 
   it("选择角色后先收集跨章节证据再进行全局关系归纳", async () => {
@@ -1004,12 +1068,12 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
         additionalPrompt: "重点检查失联前后的关系连续性。"
       }
     }).expect(201);
-    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定 · 定向 2 人：林舟、沈星");
+    expect(task.body.data.scopeSummary).toBe("全书 + 设定集 · 定向 2 人：林舟、沈星");
     expect(task.body.data.scope.targetCharacters).toEqual([{ id: linId, name: "林舟" }, { id: shenId, name: "沈星" }]);
     await request(runtime.app).patch(`/api/characters/${linId}`).send({ name: "林舟（调查员）" }).expect(200);
     const taskPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
     expect(taskPage.body.data.items.find((item: { id: string }) => item.id === task.body.data.id)?.scopeSummary)
-      .toBe("全书 + 所有设定 · 定向 2 人：林舟、沈星");
+      .toBe("全书 + 设定集 · 定向 2 人：林舟、沈星");
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({
       candidateCount: 1,

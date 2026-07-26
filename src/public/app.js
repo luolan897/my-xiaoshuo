@@ -6388,10 +6388,13 @@ async function openTaskDialog() {
     const taskType = String(form.get("taskType"));
     const scopeType = String(form.get("scopeType"));
     const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
+    const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
     const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
     const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
-    const scope = taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
+    const scope = settingsOnly
+      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
@@ -6424,7 +6427,10 @@ async function openTaskDialog() {
   const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-overwrite-card");
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
-  allSettingsOption.textContent = "全书 + 所有设定";
+  allSettingsOption.textContent = "全书 + 设定集";
+  const settingsOnlyOption = document.createElement("option");
+  settingsOnlyOption.value = "settings";
+  settingsOnlyOption.textContent = "仅设定集";
   const syncChapterField = () => {
     const disabled = scopeTypeSelect.value !== "chapter";
     chapterSelect.disabled = disabled;
@@ -6460,9 +6466,14 @@ async function openTaskDialog() {
   const syncRelationshipOptions = () => {
     const enabled = taskTypeSelect.value === "relationship-analysis";
     if (enabled && !allSettingsOption.isConnected) scopeTypeSelect.append(allSettingsOption);
+    if (enabled && !settingsOnlyOption.isConnected) scopeTypeSelect.append(settingsOnlyOption);
     if (!enabled && allSettingsOption.isConnected) {
       if (scopeTypeSelect.value === allSettingsOption.value) scopeTypeSelect.value = "book";
       allSettingsOption.remove();
+    }
+    if (!enabled && settingsOnlyOption.isConnected) {
+      if (scopeTypeSelect.value === settingsOnlyOption.value) scopeTypeSelect.value = "book";
+      settingsOnlyOption.remove();
     }
     relationshipOptions.classList.toggle("hidden", !enabled);
     relationshipPrompt.disabled = !enabled;

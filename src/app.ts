@@ -408,7 +408,7 @@ const contextSchema = z.object({
 
 const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
 const relationshipAnalysisScopeSchema = z.object({
-  type: z.enum(["chapter", "book"]),
+  type: z.enum(["chapter", "book", "settings"]),
   chapterId: identifier.optional(),
   includeAllSettings: z.boolean().optional(),
   additionalPrompt: z.string().trim().max(10_000).optional(),

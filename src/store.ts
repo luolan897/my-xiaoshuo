@@ -5320,6 +5320,10 @@ export class Store {
       for (const chapter of selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])) {
         sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
       }
+    } else if (scope.type === "settings") {
+      for (const setting of this.listSettings(workId)) {
+        sourceVersions[`setting:${String(setting.id)}`] = Number(setting.versionNo);
+      }
     }
     this.db.run(
       `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
@@ -5421,6 +5425,14 @@ export class Store {
     const task = this.getTask(taskId);
     const scope = task.scope as Record<string, unknown>;
     const expected = task.sourceVersions as Record<string, number>;
+    if (scope.type === "settings") {
+      const current = Object.fromEntries(this.listSettings(String(task.workId))
+        .map((setting) => [`setting:${String(setting.id)}`, Number(setting.versionNo)]));
+      const expectedIds = Object.keys(expected).sort();
+      const currentIds = Object.keys(current).sort();
+      return expectedIds.length === currentIds.length
+        && expectedIds.every((settingId, index) => settingId === currentIds[index] && expected[settingId] === current[settingId]);
+    }
     let chapters: Record<string, unknown>[] = [];
     if (typeof scope.chapterId === "string") {
       const row = this.db.get("SELECT id, work_id, version_no FROM chapters WHERE id = ?", scope.chapterId);
@@ -5531,7 +5543,8 @@ export class Store {
       const title = volumeTitles.get(scope.volumeId);
       return `${title ? `分卷 · ${title}` : "分卷已删除"}${targetedSuffix}`;
     }
-    if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 所有设定" : "全书"}${targetedSuffix}`;
+    if (scope.type === "settings") return `仅设定集${targetedSuffix}`;
+    if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 设定集" : "全书"}${targetedSuffix}`;
     return "未指定范围";
   }
 
@@ -5560,7 +5573,8 @@ export class Store {
       const volume = this.db.get("SELECT title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);
       return `${volume ? `分卷 · ${requiredString(volume, "title")}` : "分卷已删除"}${targetedSuffix}`;
     }
-    if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 所有设定" : "全书"}${targetedSuffix}`;
+    if (scope.type === "settings") return `仅设定集${targetedSuffix}`;
+    if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 设定集" : "全书"}${targetedSuffix}`;
     return "未指定范围";
   }
 
@@ -5658,6 +5672,9 @@ export class Store {
     }
     if (scope.type === "book" || Object.keys(scope).length === 0) {
       return [{ type: "book", title: "全书" }];
+    }
+    if (scope.type === "settings") {
+      return [{ type: "settings", title: "仅设定集" }];
     }
     return [{ type: "unknown", scope }];
   }

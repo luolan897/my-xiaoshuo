@@ -11,7 +11,10 @@ describe("AI 分析范围交互", () => {
       readFile(join(publicPath, "index.html"), "utf8")
     ]);
 
-    expect(application).toContain('allSettingsOption.textContent = "全书 + 所有设定"');
+    expect(application).toContain('allSettingsOption.textContent = "全书 + 设定集"');
+    expect(application).toContain('settingsOnlyOption.textContent = "仅设定集"');
+    expect(application).toContain('const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings"');
+    expect(application).toContain('{ type: "settings"');
     expect(application).toContain('const enabled = taskTypeSelect.value === "relationship-analysis"');
     expect(application).toContain('const disabled = scopeTypeSelect.value !== "chapter"');
     expect(application).toContain("chapterSelect.disabled = disabled");

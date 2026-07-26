@@ -52,7 +52,7 @@ export type AiMessage = {
 };
 
 export type ContextScope = {
-  type: "none" | "selection" | "chapter" | "volume" | "book" | "entities";
+  type: "none" | "selection" | "chapter" | "volume" | "book" | "settings" | "entities";
   chapterId?: string;
   volumeId?: string;
   selection?: string;
