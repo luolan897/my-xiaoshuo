@@ -36,13 +36,27 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
 
 type PlatformPageSizes = {
+  settings: number;
   characters: number;
+  races: number;
+  organizations: number;
+  timeline: number;
+  outlines: number;
+  relationships: number;
+  reviews: number;
   analysisTasks: number;
   fileVersions: number;
 };
 
 const defaultPlatformPageSizes: PlatformPageSizes = {
+  settings: 30,
   characters: 30,
+  races: 30,
+  organizations: 30,
+  timeline: 30,
+  outlines: 30,
+  relationships: 30,
+  reviews: 30,
   analysisTasks: 30,
   fileVersions: 30
 };
@@ -58,7 +72,14 @@ function platformPageSizes(value: unknown): PlatformPageSizes {
       : defaultPlatformPageSizes[key];
   };
   return {
+    settings: pageSize("settings"),
     characters: pageSize("characters"),
+    races: pageSize("races"),
+    organizations: pageSize("organizations"),
+    timeline: pageSize("timeline"),
+    outlines: pageSize("outlines"),
+    relationships: pageSize("relationships"),
+    reviews: pageSize("reviews"),
     analysisTasks: pageSize("analysisTasks"),
     fileVersions: pageSize("fileVersions")
   };

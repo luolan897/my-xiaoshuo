@@ -297,7 +297,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-task-rerun-detail-v1');
+    expect(page.text).toContain('/app.js?v=20260727-all-module-pagination-v1');
     expect(page.text).toContain('/styles.css?v=20260727-inline-save-spacing-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
@@ -382,7 +382,14 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("background: var(--toast-bg)");
     expect(page.text).toContain('id="platform-ui-settings-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="platform-ui-settings-dialog"');
+    expect(page.text).toContain('id="page-size-settings"');
     expect(page.text).toContain('id="page-size-characters"');
+    expect(page.text).toContain('id="page-size-races"');
+    expect(page.text).toContain('id="page-size-organizations"');
+    expect(page.text).toContain('id="page-size-timeline"');
+    expect(page.text).toContain('id="page-size-outlines"');
+    expect(page.text).toContain('id="page-size-relationships"');
+    expect(page.text).toContain('id="page-size-reviews"');
     expect(page.text).toContain('id="page-size-analysis-tasks"');
     expect(page.text).toContain('id="page-size-file-versions"');
     expect(page.text).toContain('默认均为 30 条');
@@ -390,6 +397,13 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('api("/api/ui-settings")');
     expect(application.text).toContain('api("/api/platform/ui-settings"');
     expect(application.text).toContain('pageSizes: {');
+    expect(application.text).toContain('function paginateModuleItems(items, page, sizeKey)');
+    expect(application.text).toContain('renderModulePagination(pageResult, "settings", "设定库")');
+    expect(application.text).toContain('renderModulePagination(pageResult, "races", "种族列表")');
+    expect(application.text).toContain('renderModulePagination(pageResult, "organizations", "组织列表")');
+    expect(application.text).toContain('renderModulePagination(pageResult, "timeline", "时间线事件")');
+    expect(application.text).toContain('renderModulePagination(pageResult, "relationships", "人物关系列表")');
+    expect(application.text).toContain('renderModulePagination(pageResult, "reviews", "审核列表")');
     expect(styles.text).toContain('.pagination-settings-grid { display: grid;');
     expect(styles.text).toContain('.toast-region[data-position="top-right"]');
     expect(styles.text).toContain('.toast-region[data-position="bottom-right"]');
@@ -564,7 +578,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('class="relationship-map-floating-close"');
     expect(page.text).not.toContain('id="relationship-map-dialog-title"');
     expect(page.text).toContain('data-testid="chapter-type-menu"');
-    expect(application.text).toContain("async function renderOutlines()");
+    expect(application.text).toContain("async function renderOutlines(");
     expect(application.text).toContain("function setModuleNavExpanded(expanded)");
     expect(application.text).toContain('data-testid="timeline-kanban"');
     expect(application.text).toContain("function openTimelineTrackDialog(item)");
@@ -635,7 +649,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("所属组织");
     expect(application.text).toContain('card.addEventListener("keydown"');
     expect(page.text).toContain('data-module="races"');
-    expect(application.text).toContain("async function renderRaces()");
+    expect(application.text).toContain("async function renderRaces(");
     expect(application.text).toContain("async function openRaceDialog(item, options)");
     expect(application.text).toContain('field("parentRaceId", "父种族", "select"');
     expect(application.text).toContain('class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"}');

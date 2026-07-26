@@ -342,7 +342,14 @@ const aiPromptSchema = z.object({
 });
 
 const platformPageSizesSchema = z.object({
+  settings: z.number().int().min(10).max(100).optional(),
   characters: z.number().int().min(10).max(100).optional(),
+  races: z.number().int().min(10).max(100).optional(),
+  organizations: z.number().int().min(10).max(100).optional(),
+  timeline: z.number().int().min(10).max(100).optional(),
+  outlines: z.number().int().min(10).max(100).optional(),
+  relationships: z.number().int().min(10).max(100).optional(),
+  reviews: z.number().int().min(10).max(100).optional(),
   analysisTasks: z.number().int().min(10).max(100).optional(),
   fileVersions: z.number().int().min(10).max(100).optional()
 }).strict();

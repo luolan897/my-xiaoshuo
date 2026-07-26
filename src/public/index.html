@@ -613,7 +613,14 @@
             <legend>各模块单页数量</legend>
             <small>每个模块独立设置，允许 10–100 条；默认均为 30 条。</small>
             <div class="pagination-settings-grid">
+              <label>设定库<input id="page-size-settings" name="pageSizeSettings" type="number" min="10" max="100" step="1" required aria-label="设定库单页数量"></label>
               <label>角色列表<input id="page-size-characters" name="pageSizeCharacters" type="number" min="10" max="100" step="1" required aria-label="角色列表单页数量"></label>
+              <label>种族列表<input id="page-size-races" name="pageSizeRaces" type="number" min="10" max="100" step="1" required aria-label="种族列表单页数量"></label>
+              <label>组织列表<input id="page-size-organizations" name="pageSizeOrganizations" type="number" min="10" max="100" step="1" required aria-label="组织列表单页数量"></label>
+              <label>时间线事件<input id="page-size-timeline" name="pageSizeTimeline" type="number" min="10" max="100" step="1" required aria-label="时间线事件单页数量"></label>
+              <label>大纲与伏笔<input id="page-size-outlines" name="pageSizeOutlines" type="number" min="10" max="100" step="1" required aria-label="大纲与伏笔单页数量"></label>
+              <label>人物关系列表<input id="page-size-relationships" name="pageSizeRelationships" type="number" min="10" max="100" step="1" required aria-label="人物关系列表单页数量"></label>
+              <label>审核列表<input id="page-size-reviews" name="pageSizeReviews" type="number" min="10" max="100" step="1" required aria-label="审核列表单页数量"></label>
               <label>AI 分析任务<input id="page-size-analysis-tasks" name="pageSizeAnalysisTasks" type="number" min="10" max="100" step="1" required aria-label="AI 分析任务单页数量"></label>
               <label>正文导入历史<input id="page-size-file-versions" name="pageSizeFileVersions" type="number" min="10" max="100" step="1" required aria-label="正文导入历史单页数量"></label>
             </div>
@@ -770,6 +777,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260727-task-rerun-detail-v1"></script>
+    <script type="module" src="/app.js?v=20260727-all-module-pagination-v1"></script>
   </body>
 </html>
