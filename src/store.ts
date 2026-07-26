@@ -5607,6 +5607,69 @@ export class Store {
     };
   }
 
+  private taskCharacterReferenceSummary(workId: string, reference: string): { name: string; summary: string } | null {
+    const separator = reference.lastIndexOf("@");
+    if (separator <= 0) return null;
+    const characterId = reference.slice(0, separator);
+    const versionNo = Number(reference.slice(separator + 1));
+    if (!Number.isInteger(versionNo) || versionNo <= 0) return null;
+    const version = this.db.get(
+      "SELECT work_id, snapshot_json FROM character_versions WHERE character_id = ? AND version_no = ?",
+      characterId,
+      versionNo
+    );
+    let character: Record<string, unknown> | null = null;
+    if (version && optionalString(version, "work_id") === workId) {
+      character = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
+    } else {
+      try {
+        const current = this.getCharacter(characterId);
+        if (current.workId === workId) character = current;
+      } catch {
+        return null;
+      }
+    }
+    if (!character) return null;
+    const name = typeof character.name === "string" && character.name.trim() ? character.name.trim() : "分析时角色";
+    const aliases = Array.isArray(character.aliases)
+      ? character.aliases.filter((alias): alias is string => typeof alias === "string" && Boolean(alias.trim())).map((alias) => alias.trim())
+      : [];
+    const attributes = character.attributes && typeof character.attributes === "object" && !Array.isArray(character.attributes)
+      ? character.attributes as Record<string, unknown>
+      : {};
+    const identity = typeof attributes.identity === "string" ? attributes.identity.trim() : "";
+    const species = typeof character.species === "string" ? character.species.trim() : "";
+    const basics = [
+      aliases.length ? `别名：${aliases.join("、")}` : "",
+      identity ? `身份：${identity}` : "",
+      species ? `种族：${species}` : ""
+    ].filter(Boolean);
+    return { name, summary: basics.length ? `${name}（${basics.join("；")}）` : name };
+  }
+
+  private taskSkippedIdentityCandidate(value: unknown, fallbackTitle: string, workId: string): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return this.taskResultItem(value, fallbackTitle);
+    const item = value as Record<string, unknown>;
+    const references = typeof item.pair === "string" ? item.pair.split("|") : [];
+    if (references.length !== 2) return this.taskResultItem(value, fallbackTitle);
+    const left = this.taskCharacterReferenceSummary(workId, references[0] ?? "");
+    const right = this.taskCharacterReferenceSummary(workId, references[1] ?? "");
+    if (!left || !right) return this.taskResultItem(value, fallbackTitle);
+    const reason = typeof item.reason === "string" && item.reason.trim() ? item.reason.trim() : "分析信息不足";
+    return {
+      title: `${left.name} ↔ ${right.name}`,
+      subtitle: "未生成查重建议",
+      description: `AI 未生成可提交审核的角色查重建议：${reason}`,
+      tags: [],
+      details: [
+        { label: "候选角色一", value: left.summary },
+        { label: "候选角色二", value: right.summary },
+        { label: "未生成原因", value: reason }
+      ],
+      evidence: []
+    };
+  }
+
   private buildTaskResultSummary(task: Record<string, unknown>, hasResult: boolean): Record<string, unknown> {
     const taskType = String(task.taskType);
     const workId = String(task.workId);
@@ -5858,7 +5921,16 @@ export class Store {
         ? [metric("角色档案", result.characterCount), metric("疑似重复", reviews.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("工具调用", result.toolCallCount)]
         : [metric("审核事项", reviews.length), metric("已不存在", Math.max(0, ids.length - reviews.length))];
       storageTargets.unshift({ label: "审核建议", entity: "审核中心", key: "reviews", count: reviews.length, note: "只生成待处理建议，不会自动修正文或合并角色。" });
-      sections = [section(taskType === "character-identity-audit" ? "角色查重建议" : "一致性问题", reviews, "没有发现需要审核的问题。"), ...(taskType === "character-identity-audit" ? [section("未生成建议的候选", result.skipped, "没有候选被跳过。")] : [])];
+      const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+      sections = [
+        section(taskType === "character-identity-audit" ? "角色查重建议" : "一致性问题", reviews, "没有发现需要审核的问题。"),
+        ...(taskType === "character-identity-audit" ? [{
+          title: "未生成建议的候选",
+          totalCount: skipped.length,
+          items: skipped.slice(0, 100).map((item, index) => this.taskSkippedIdentityCandidate(item, `未生成建议的候选 ${index + 1}`, workId)),
+          emptyMessage: "没有候选被跳过。"
+        }] : [])
+      ];
     } else if (taskType === "character-extraction" || taskType === "character-summary") {
       const ids = idList(result.characterIds);
       const characters = ids.flatMap((characterId) => {

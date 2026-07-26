@@ -131,12 +131,16 @@ describe("AI 分析任务可读结果", () => {
           characterCount: 2,
           candidateCount: 1,
           reviewIds: [duplicateReview.id],
-          skipped: [],
+          skipped: [{
+            pair: `${orochi.id}@${orochi.versionNo}|${susanoo.id}@${susanoo.versionNo}`,
+            reason: "结论或置信度不足"
+          }],
           toolCallCount: 3
         }),
         location: "当前作品 · 审核中心",
         sectionTitle: "角色查重建议",
-        itemTitle: "八岐大蛇与大蛇疑似重复"
+        itemTitle: "八岐大蛇与大蛇疑似重复",
+        skippedItemText: ["八岐大蛇 ↔ 须佐之男", "别名：大蛇", "身份：古代蛇神", "结论或置信度不足"]
       },
       {
         taskId: createCompletedTask("timeline-analysis", { eventIds: [timeline.id], candidateCount: 1 }),
@@ -230,6 +234,13 @@ describe("AI 分析任务可读结果", () => {
           expect(JSON.stringify(section.items)).toContain("持续中");
           expect(JSON.stringify(section.items)).toContain("待确认");
         }
+      }
+      if ("skippedItemText" in item && item.skippedItemText) {
+        const skippedSection = response.body.data.resultSummary.sections.find((candidate: { title: string }) => candidate.title === "未生成建议的候选");
+        expect(skippedSection).toBeTruthy();
+        for (const expectedText of item.skippedItemText) expect(JSON.stringify(skippedSection.items)).toContain(expectedText);
+        expect(JSON.stringify(skippedSection.items)).not.toContain(String(orochi.id));
+        expect(JSON.stringify(skippedSection.items)).not.toContain(String(susanoo.id));
       }
     }
   });
