@@ -4318,13 +4318,6 @@ export class AiManager {
         coveredChapterCount: chapters.length,
         includeAllSettings: scope.includeAllSettings === true
       },
-      storageTarget: {
-        database: "当前作品 SQLite 数据库",
-        entity: "人物关系",
-        table: "relationships",
-        taskResultTable: "analysis_tasks",
-        workId
-      },
       rawCandidateCount: rawCandidates.length,
       skipped,
       batchCount: chunks.length,

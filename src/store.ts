@@ -5493,7 +5493,7 @@ export class Store {
       workId: requiredString(row, "work_id"),
       taskType: requiredString(row, "task_type"),
       scope: json<Record<string, unknown>>(requiredString(row, "scope_json"), {}),
-      result: json<Record<string, unknown>>(requiredString(row, "result_json"), {})
+      result: this.taskResultForClient(json<Record<string, unknown>>(requiredString(row, "result_json"), {}))
     };
   }
 
@@ -5630,19 +5630,24 @@ export class Store {
     const analysisLabel = labelByType[taskType] ?? "AI 分析";
     const taskStorage = {
       label: "完整任务结果",
-      database: "当前作品 SQLite 数据库",
-      entity: "AI 分析任务",
-      table: "analysis_tasks",
+      entity: "AI 分析记录",
+      key: "analysis-record",
       count: hasResult ? 1 : 0,
-      note: "完整返回 JSON 保存在 result_json 字段中。"
+      note: "完整返回 JSON 保存在本次 AI 分析记录中，可按需查看。"
     };
+    const productStorageTargets = (targets: Record<string, unknown>[]): Record<string, unknown>[] => targets.map((target) => ({
+      label: String(target.label ?? target.entity ?? "分析结果"),
+      location: `当前作品 · ${String(target.entity ?? "AI 分析记录")}`,
+      count: Number(target.count ?? 0),
+      ...(typeof target.note === "string" && target.note.trim() ? { note: target.note.trim() } : {})
+    }));
     if (!hasResult) {
       return {
         title: `${analysisLabel}结果`,
         analysisContent: `${analysisLabel}；范围：${String(task.scopeSummary ?? "未指定")}`,
         summary: "任务尚未产生分析结果。",
         metrics: [],
-        storageTargets: [taskStorage],
+        storageTargets: productStorageTargets([taskStorage]),
         sections: []
       };
     }
@@ -5738,7 +5743,7 @@ export class Store {
     });
     const storageTargets: Record<string, unknown>[] = [taskStorage];
     const addStorageTarget = (target: Record<string, unknown>): void => {
-      if (!storageTargets.some((item) => item.table === target.table)) storageTargets.unshift(target);
+      if (!storageTargets.some((item) => item.key === target.key)) storageTargets.unshift(target);
     };
     let summary = "分析已完成。";
     let metrics: Record<string, unknown>[] = [];
@@ -5758,9 +5763,8 @@ export class Store {
       ];
       storageTargets.unshift({
         label: "章节理解记录",
-        database: "当前作品 SQLite 数据库",
         entity: chapterTitle,
-        table: "chapter_insights",
+        key: "chapter-insight",
         count: result.insightId ? 1 : 0,
         note: `对应章节版本 v${Number(result.chapterVersion ?? 0)}。`
       });
@@ -5781,7 +5785,7 @@ export class Store {
       });
       summary = `提取并写入 ${events.length} 个时间轴事件候选。`;
       metrics = [metric("写入事件", events.length), metric("已不存在", Math.max(0, ids.length - events.length))];
-      storageTargets.unshift({ label: "时间轴候选", database: "当前作品 SQLite 数据库", entity: "时间轴与事件", table: "timeline_events", count: events.length, note: "以候选状态写入，等待作者确认。" });
+      storageTargets.unshift({ label: "时间轴候选", entity: "时间轴与事件", key: "timeline", count: events.length, note: "以候选状态写入，等待作者确认。" });
       sections = [section("事件候选", events, "没有形成可写入的时间轴事件。")];
     } else if (taskType === "worldview-analysis") {
       summary = typeof result.summary === "string" && result.summary.trim() ? result.summary.trim() : "世界观分析已完成。";
@@ -5801,7 +5805,7 @@ export class Store {
       });
       summary = `识别 ${Number(result.rawCandidateCount ?? settings.length)} 个候选，写入 ${settings.length} 条设定。`;
       metrics = [metric("新建", result.createdCount), metric("更新", result.updatedCount), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("覆盖章节", result.coveredChapterCount)];
-      storageTargets.unshift({ label: "设定候选", database: "当前作品 SQLite 数据库", entity: "设定库", table: "settings", count: settings.length, note: "写入为待确认设定，不覆盖已确认或锁定内容。" });
+      storageTargets.unshift({ label: "设定候选", entity: "设定库", key: "settings", count: settings.length, note: "写入为待确认设定，不覆盖已确认或锁定内容。" });
       sections = [section("写入的设定", settings, "没有形成可写入的设定。"), section("未写入候选", result.skipped, "没有候选被跳过。")];
     } else if (taskType === "consistency-check" && !("reviewIds" in result)) {
       const relationshipCount = typeof result.relationships === "number" ? result.relationships : null;
@@ -5821,24 +5825,23 @@ export class Store {
       if (relationshipChanges > 0) {
         addStorageTarget({
           label: "人物关系修正",
-          database: "当前作品 SQLite 数据库",
           entity: "人物关系库",
-          table: "relationships",
+          key: "relationships",
           count: relationshipChanges,
           note: "数量按任务记录的合并、修正和语义校正项统计。"
         });
       }
       if (typeof result.mergedCharacterId === "string" || typeof result.removedDuplicateCharacterId === "string" || typeof result.ianAliasAdded === "string") {
-        addStorageTarget({ label: "角色档案修正", database: "当前作品 SQLite 数据库", entity: "角色库", table: "characters", count: 1, note: "包含角色合并、重复档案清理或别名补充。" });
+        addStorageTarget({ label: "角色档案修正", entity: "角色库", key: "characters", count: 1, note: "包含角色合并、重复档案清理或别名补充。" });
       }
       if (result.timelineTypoFixed === true) {
-        addStorageTarget({ label: "时间轴修正", database: "当前作品 SQLite 数据库", entity: "时间轴与事件", table: "timeline_events", count: 1, note: "任务记录已修正时间轴文本。" });
+        addStorageTarget({ label: "时间轴修正", entity: "时间轴与事件", key: "timeline", count: 1, note: "任务记录已修正时间轴文本。" });
       }
       if (typeof result.removedForeshadows === "number" && result.removedForeshadows > 0) {
-        addStorageTarget({ label: "伏笔清理", database: "当前作品 SQLite 数据库", entity: "伏笔库", table: "foreshadows", count: result.removedForeshadows, note: "任务记录已移除重复或无效伏笔。" });
+        addStorageTarget({ label: "伏笔清理", entity: "伏笔库", key: "foreshadows", count: result.removedForeshadows, note: "任务记录已移除重复或无效伏笔。" });
       }
       if (result.correctedRaceClassification === true) {
-        addStorageTarget({ label: "种族分类修正", database: "当前作品 SQLite 数据库", entity: "种族库", table: "races", count: 1, note: "任务记录已修正种族分类。" });
+        addStorageTarget({ label: "种族分类修正", entity: "种族库", key: "races", count: 1, note: "任务记录已修正种族分类。" });
       }
     } else if (taskType === "consistency-check" || taskType === "character-identity-audit") {
       const ids = idList(result.reviewIds);
@@ -5854,7 +5857,7 @@ export class Store {
       metrics = taskType === "character-identity-audit"
         ? [metric("角色档案", result.characterCount), metric("疑似重复", reviews.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("工具调用", result.toolCallCount)]
         : [metric("审核事项", reviews.length), metric("已不存在", Math.max(0, ids.length - reviews.length))];
-      storageTargets.unshift({ label: "审核建议", database: "当前作品 SQLite 数据库", entity: "审核中心", table: "review_items", count: reviews.length, note: "只生成待处理建议，不会自动修正文或合并角色。" });
+      storageTargets.unshift({ label: "审核建议", entity: "审核中心", key: "reviews", count: reviews.length, note: "只生成待处理建议，不会自动修正文或合并角色。" });
       sections = [section(taskType === "character-identity-audit" ? "角色查重建议" : "一致性问题", reviews, "没有发现需要审核的问题。"), ...(taskType === "character-identity-audit" ? [section("未生成建议的候选", result.skipped, "没有候选被跳过。")] : [])];
     } else if (taskType === "character-extraction" || taskType === "character-summary") {
       const ids = idList(result.characterIds);
@@ -5880,7 +5883,7 @@ export class Store {
         ? result.verification as Record<string, unknown>
         : {};
       metrics = [metric("保存角色", characters.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("覆盖章节", result.coveredChapterCount), metric("身份复核", verification.pairCount)];
-      storageTargets.unshift({ label: "角色档案", database: "当前作品 SQLite 数据库", entity: "角色库", table: "characters", count: characters.length, note: "新角色会创建档案，命中已有角色时会合并可靠信息。" });
+      storageTargets.unshift({ label: "角色档案", entity: "角色库", key: "characters", count: characters.length, note: "新角色会创建档案，命中已有角色时会合并可靠信息。" });
       sections = [section("保存的角色", characters, "没有形成可保存的角色档案。"), section("未写入候选", result.skipped, "没有候选被跳过。")];
     } else if (taskType === "book-analysis") {
       const timelineIds = [...new Set([...idList(result.eventIds), ...idList(result.timelineEventIds)])];
@@ -5904,7 +5907,7 @@ export class Store {
       const content = typeof result.content === "string" ? result.content.trim() : "";
       if (oneSentence) summary = oneSentence;
       else if (timelineIds.length > 0) {
-        summary = `分析 ${Number(result.sourceChapterCount ?? 0)} 章正文，重建并记录 ${timelineIds.length} 个时间轴事件；当前数据库可读取 ${timelineEvents.length} 个。`;
+        summary = `分析 ${Number(result.sourceChapterCount ?? 0)} 章正文，重建并记录 ${timelineIds.length} 个时间轴事件；当前作品中仍可查看 ${timelineEvents.length} 个。`;
       } else if (correctedCharacterIds.length > 0 || removedDuplicateCharacterIds.length > 0) {
         summary = `核验人物档案后修正 ${correctedCharacterIds.length} 个角色，并移除 ${removedDuplicateCharacterIds.length} 个重复角色档案。`;
       } else if (Array.isArray(result.chunkResults)) {
@@ -5913,29 +5916,28 @@ export class Store {
       else summary = "全书综合分析已完成，以下展示任务记录的统计、结论和写入数据。";
       metrics = genericMetrics(result);
       if (timelineIds.length > 0) {
-        addStorageTarget({ label: "时间轴事件", database: "当前作品 SQLite 数据库", entity: "时间轴与事件", table: "timeline_events", count: timelineIds.length, note: `任务记录 ${timelineIds.length} 个事件 ID，当前可读取 ${timelineEvents.length} 个。` });
+        addStorageTarget({ label: "时间轴事件", entity: "时间轴与事件", key: "timeline", count: timelineIds.length, note: `任务记录 ${timelineIds.length} 个事件，当前仍可查看 ${timelineEvents.length} 个。` });
       }
       if (settingIds.length > 0) {
-        addStorageTarget({ label: "世界设定", database: "当前作品 SQLite 数据库", entity: "设定库", table: "settings", count: settingIds.length, note: `任务记录 ${settingIds.length} 个设定 ID，当前可读取 ${settings.length} 个。` });
+        addStorageTarget({ label: "世界设定", entity: "设定库", key: "settings", count: settingIds.length, note: `任务记录 ${settingIds.length} 个设定，当前仍可查看 ${settings.length} 个。` });
       }
       if (raceIds.length > 0) {
-        addStorageTarget({ label: "种族资料", database: "当前作品 SQLite 数据库", entity: "种族库", table: "races", count: raceIds.length, note: `任务记录 ${raceIds.length} 个种族 ID，当前可读取 ${races.length} 个。` });
+        addStorageTarget({ label: "种族资料", entity: "种族库", key: "races", count: raceIds.length, note: `任务记录 ${raceIds.length} 个种族，当前仍可查看 ${races.length} 个。` });
       }
       if (organizationIds.length > 0) {
-        addStorageTarget({ label: "组织资料", database: "当前作品 SQLite 数据库", entity: "组织库", table: "organizations", count: organizationIds.length, note: `任务记录 ${organizationIds.length} 个组织 ID，当前可读取 ${organizations.length} 个。` });
+        addStorageTarget({ label: "组织资料", entity: "组织库", key: "organizations", count: organizationIds.length, note: `任务记录 ${organizationIds.length} 个组织，当前仍可查看 ${organizations.length} 个。` });
       }
       if (foreshadowIds.length > 0) {
-        addStorageTarget({ label: "伏笔资料", database: "当前作品 SQLite 数据库", entity: "伏笔库", table: "foreshadows", count: foreshadowIds.length, note: `任务记录 ${foreshadowIds.length} 个伏笔 ID，当前可读取 ${foreshadows.length} 个。` });
+        addStorageTarget({ label: "伏笔资料", entity: "伏笔库", key: "foreshadows", count: foreshadowIds.length, note: `任务记录 ${foreshadowIds.length} 个伏笔，当前仍可查看 ${foreshadows.length} 个。` });
       }
       if (typeof result.summarySuggestionId === "string") {
-        addStorageTarget({ label: "全书分析建议", database: "当前作品 SQLite 数据库", entity: "AI 建议", table: "ai_suggestions", count: 1, note: "保存全书概要对应的分析建议。" });
+        addStorageTarget({ label: "全书分析建议", entity: "AI 建议", key: "suggestions", count: 1, note: "保存全书概要对应的分析建议。" });
       }
       if (correctedCharacterIds.length > 0 || removedDuplicateCharacterIds.length > 0) {
         addStorageTarget({
           label: "角色档案核验",
-          database: "当前作品 SQLite 数据库",
           entity: "角色库",
-          table: "characters",
+          key: "characters",
           count: correctedCharacterIds.length + removedDuplicateCharacterIds.length,
           note: `修正 ${correctedCharacterIds.length} 个角色，移除 ${removedDuplicateCharacterIds.length} 个重复档案；当前可读取 ${correctedCharacters.length} 个修正后角色。`
         });
@@ -6009,7 +6011,7 @@ export class Store {
         ? `重点分析 ${targetNames.join("、")} 与其他已建档人物之间的关系`
         : "分析范围内已建档人物之间的长期关系";
       summary = missingRelationshipIds.length > 0
-        ? `${targetSummary}。任务结果记录 ${relationshipIds.length} 条关系，当前数据库保留 ${relationships.length} 条可展示关系，另有 ${missingRelationshipIds.length} 条已删除或合并。`
+        ? `${targetSummary}。任务结果记录 ${relationshipIds.length} 条关系，当前作品中保留 ${relationships.length} 条可展示关系，另有 ${missingRelationshipIds.length} 条已删除或合并。`
         : `${targetSummary}，共形成 ${relationships.length} 条可展示结果。`;
       const actionMetrics = [
         ["新建", result.createdCount],
@@ -6025,9 +6027,8 @@ export class Store {
       ];
       storageTargets.unshift({
         label: "人物关系",
-        database: "当前作品 SQLite 数据库",
         entity: "人物关系库",
-        table: "relationships",
+        key: "relationships",
         count: relationshipIds.length || relationships.length,
         note: `任务记录 ${relationshipIds.length || relationships.length} 条关系，当前可读取 ${relationships.length} 条；关系候选需由作者确认。`
       });
@@ -6046,9 +6047,20 @@ export class Store {
       analysisContent: `${analysisLabel}；范围：${String(task.scopeSummary ?? "未指定")}`,
       summary,
       metrics,
-      storageTargets,
+      storageTargets: productStorageTargets(storageTargets),
       sections
     };
+  }
+
+  private taskResultForClient(result: Record<string, unknown>): Record<string, unknown> {
+    const sanitize = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(sanitize);
+      if (!value || typeof value !== "object") return value;
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !["storageTarget", "database", "table", "taskResultTable"].includes(key))
+        .map(([key, nestedValue]) => [key, sanitize(nestedValue)]));
+    };
+    return sanitize(result) as Record<string, unknown>;
   }
 
   private enrichRelationshipTaskResult(
@@ -6108,7 +6120,7 @@ export class Store {
       ? scope.targetCharacters.filter((item): item is Record<string, unknown> =>
         Boolean(item) && typeof item === "object" && !Array.isArray(item))
       : [];
-    return {
+    return this.taskResultForClient({
       ...result,
       ...(relationshipResults === null ? {} : { relationshipResults }),
       ...(missingRelationshipIds.length > 0 ? { missingRelationshipIds } : {}),
@@ -6120,14 +6132,7 @@ export class Store {
         coveredChapterCount: Number(result.coveredChapterCount ?? 0),
         includeAllSettings: scope.includeAllSettings === true
       },
-      storageTarget: result.storageTarget ?? {
-        database: "当前作品 SQLite 数据库",
-        entity: "人物关系",
-        table: "relationships",
-        taskResultTable: "analysis_tasks",
-        workId
-      }
-    };
+    });
   }
 
   private mapTask(row: Row): Record<string, unknown> {

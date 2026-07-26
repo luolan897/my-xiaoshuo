@@ -38,7 +38,13 @@ describe("AI 分析全流程追踪界面", () => {
     expect(application).toContain("function renderTaskResult(task)");
     expect(application).toContain("function renderTaskResultItem(item)");
     expect(application).toContain("function bindTaskResultActions(container)");
-    expect(application).toContain("<h4>数据写入位置</h4>");
+    expect(application).toContain("<h4>结果保存位置</h4>");
+    expect(application).toContain('target.location || "当前作品 · AI 分析记录"');
+    expect(application).not.toContain("target.database");
+    expect(application).not.toContain("target.table");
+    expect(application).not.toContain("当前作品 SQLite 数据库");
+    expect(application).not.toContain("analysis_tasks");
+    expect(application).not.toContain("result_json");
     expect(application).toContain("完整返回 JSON");
     expect(application).toContain("不做字符截断");
     expect(application).toContain('if (item.type === "selection") return item.restricted');

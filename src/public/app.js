@@ -4392,9 +4392,9 @@ function renderTaskResult(task) {
       ${result.restricted ? '<p class="task-result-warning">部分结果因当前账号权限受限而隐藏。</p>' : ""}
     </section>
     <section class="task-result-section">
-      <h4>数据写入位置</h4>
-      <p><strong>作品</strong> ${esc(state.work?.title || "当前作品")}（<code>${esc(task.workId || state.work?.id || "未知作品")}</code>）</p>
-      <div class="task-result-storage-list">${storageTargets.map((target) => `<article><strong>${esc(target.label || target.entity || "数据记录")}</strong><p>${esc(target.database || "当前作品 SQLite 数据库")} → ${esc(target.entity || "分析结果")}（<code>${esc(target.table || "analysis_tasks")}</code> 表）</p><small>写入 ${Number(target.count || 0)} 条${target.note ? ` · ${esc(target.note)}` : ""}</small></article>`).join("") || "<p>没有可说明的数据写入位置。</p>"}</div>
+      <h4>结果保存位置</h4>
+      <p><strong>作品</strong> ${esc(state.work?.title || "当前作品")}</p>
+      <div class="task-result-storage-list">${storageTargets.map((target) => `<article><strong>${esc(target.label || "分析结果")}</strong><p>${esc(target.location || "当前作品 · AI 分析记录")}</p><small>保存 ${Number(target.count || 0)} 条${target.note ? ` · ${esc(target.note)}` : ""}</small></article>`).join("") || "<p>没有可说明的结果保存位置。</p>"}</div>
       ${metrics.length ? `<div class="task-result-metrics" aria-label="分析结果统计">${metrics.map((item) => `<span><strong>${esc(item.value ?? 0)}</strong>${esc(item.label || "数量")}</span>`).join("")}</div>` : ""}
     </section>
     ${sections.map((section) => {

@@ -3,6 +3,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
 
+function expectNoDatabaseMetadata(value: unknown): void {
+  const forbiddenKeys: string[] = [];
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      candidate.forEach(visit);
+      return;
+    }
+    if (!candidate || typeof candidate !== "object") return;
+    for (const [key, nestedValue] of Object.entries(candidate as Record<string, unknown>)) {
+      if (["storageTarget", "database", "table", "taskResultTable"].includes(key)) forbiddenKeys.push(key);
+      visit(nestedValue);
+    }
+  };
+  visit(value);
+  expect(forbiddenKeys).toEqual([]);
+  expect(JSON.stringify(value)).not.toMatch(/当前作品 SQLite 数据库|analysis_tasks|result_json|chapter_insights|review_items|timeline_events|ai_suggestions/u);
+}
+
 describe("AI 分析任务可读结果", () => {
   let runtime: Runtime | undefined;
 
@@ -80,7 +98,7 @@ describe("AI 分析任务可读结果", () => {
           evidence: [{ conclusion: "关系转为敌对", quote: "此后长期敌对" }],
           uncertainties: []
         }, { type: "chapter", chapterId }),
-        table: "chapter_insights",
+        location: `当前作品 · ${seeded.chapter.title}`,
         sectionTitle: "情节事件",
         itemTitle: "双方决裂"
       },
@@ -92,7 +110,7 @@ describe("AI 分析任务可读结果", () => {
           skipped: [],
           verification: { pairCount: 0 }
         }),
-        table: "characters",
+        location: "当前作品 · 角色库",
         sectionTitle: "保存的角色",
         itemTitle: "八岐大蛇"
       },
@@ -104,7 +122,7 @@ describe("AI 分析任务可读结果", () => {
           skipped: [],
           verification: { pairCount: 0 }
         }),
-        table: "characters",
+        location: "当前作品 · 角色库",
         sectionTitle: "保存的角色",
         itemTitle: "八岐大蛇"
       },
@@ -116,13 +134,13 @@ describe("AI 分析任务可读结果", () => {
           skipped: [],
           toolCallCount: 3
         }),
-        table: "review_items",
+        location: "当前作品 · 审核中心",
         sectionTitle: "角色查重建议",
         itemTitle: "八岐大蛇与大蛇疑似重复"
       },
       {
         taskId: createCompletedTask("timeline-analysis", { eventIds: [timeline.id], candidateCount: 1 }),
-        table: "timeline_events",
+        location: "当前作品 · 时间轴与事件",
         sectionTitle: "事件候选",
         itemTitle: "高天原决裂"
       },
@@ -135,7 +153,7 @@ describe("AI 分析任务可读结果", () => {
           analysisTarget: { mode: "targeted-characters", characterNames: ["八岐大蛇"], coveredChapterCount: 1 },
           skipped: []
         }, { type: "book", characterIds: [String(orochi.id)] }),
-        table: "relationships",
+        location: "当前作品 · 人物关系库",
         sectionTitle: "分析出的关系",
         itemTitle: "八岐大蛇"
       },
@@ -148,7 +166,7 @@ describe("AI 分析任务可读结果", () => {
           dimensionCount: 1,
           coveredChapterCount: 1
         }),
-        table: "analysis_tasks",
+        location: "当前作品 · AI 分析记录",
         sectionTitle: "世界观结论",
         itemTitle: "神界干预边界"
       },
@@ -161,31 +179,31 @@ describe("AI 分析任务可读结果", () => {
           coveredChapterCount: 1,
           skipped: []
         }),
-        table: "settings",
+        location: "当前作品 · 设定库",
         sectionTitle: "写入的设定",
         itemTitle: "高天原禁令"
       },
       {
         taskId: createCompletedTask("consistency-check", { reviewIds: [consistencyReview.id], issueCount: 1 }),
-        table: "review_items",
+        location: "当前作品 · 审核中心",
         sectionTitle: "一致性问题",
         itemTitle: "禁令与行动冲突"
       },
       {
         taskId: createCompletedTask("book-analysis", { content: "全书主线围绕神代秩序破裂展开。" }),
-        table: "analysis_tasks",
+        location: "当前作品 · AI 分析记录",
         sectionTitle: undefined,
         itemTitle: undefined
       },
       {
         taskId: createCompletedTask("structure", { content: "故事以决裂为转折点，进入冲突阶段。" }),
-        table: "analysis_tasks",
+        location: "当前作品 · AI 分析记录",
         sectionTitle: undefined,
         itemTitle: undefined
       },
       {
         taskId: createCompletedTask("report-update", { content: "分析报告已根据最新章节更新。" }),
-        table: "analysis_tasks",
+        location: "当前作品 · AI 分析记录",
         sectionTitle: undefined,
         itemTitle: undefined
       }
@@ -198,16 +216,17 @@ describe("AI 分析任务可读结果", () => {
       expect(response.body.data.resultSummary.analysisContent).toContain("范围：");
       expect(response.body.data.resultSummary.summary).toEqual(expect.any(String));
       expect(response.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
-        expect.objectContaining({ table: item.table })
+        expect.objectContaining({ location: item.location })
       ]));
       expect(response.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
-        expect.objectContaining({ table: "analysis_tasks", note: expect.stringContaining("result_json") })
+        expect.objectContaining({ location: "当前作品 · AI 分析记录", note: expect.stringContaining("可按需查看") })
       ]));
+      expectNoDatabaseMetadata(response.body.data);
       if (item.sectionTitle && item.itemTitle) {
         const section = response.body.data.resultSummary.sections.find((candidate: { title: string }) => candidate.title === item.sectionTitle);
         expect(section).toBeTruthy();
         expect(JSON.stringify(section.items)).toContain(item.itemTitle);
-        if (item.table === "relationships") {
+        if (item.location === "当前作品 · 人物关系库") {
           expect(JSON.stringify(section.items)).toContain("持续中");
           expect(JSON.stringify(section.items)).toContain("待确认");
         }
@@ -220,7 +239,21 @@ describe("AI 分析任务可读结果", () => {
     const seeded = await seedChapter(runtime);
     const workId = String(seeded.work.id);
     const longValue = "完整结果内容".repeat(3_000);
-    const originalResult = { content: "全书综合分析结论", longValue, nested: { retained: true } };
+    const originalResult = {
+      content: "全书综合分析结论",
+      longValue,
+      nested: {
+        retained: true,
+        database: "当前作品 SQLite 数据库",
+        table: "analysis_tasks"
+      },
+      storageTarget: {
+        database: "当前作品 SQLite 数据库",
+        table: "analysis_tasks",
+        taskResultTable: "analysis_tasks"
+      }
+    };
+    const publicResult = { content: "全书综合分析结论", longValue, nested: { retained: true } };
     const task = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
     runtime.store.updateTask(String(task.id), { status: "completed", progress: 100, result: originalResult });
 
@@ -229,11 +262,13 @@ describe("AI 分析任务可读结果", () => {
     expect(detail.body.data).not.toHaveProperty("result");
     expect(JSON.stringify(detail.body.data)).not.toContain(longValue);
     expect(databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"))).toHaveLength(1);
+    expectNoDatabaseMetadata(detail.body.data);
 
     databaseGet.mockClear();
     const fullResult = await request(runtime.app).get(`/api/tasks/${task.id}/result`).expect(200);
-    expect(fullResult.body.data).toEqual({ taskId: task.id, result: originalResult });
+    expect(fullResult.body.data).toEqual({ taskId: task.id, result: publicResult });
     expect(fullResult.body.data.result.longValue).toHaveLength(longValue.length);
+    expectNoDatabaseMetadata(fullResult.body.data);
     expect(databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"))).toHaveLength(1);
 
     databaseGet.mockClear();
@@ -286,7 +321,7 @@ describe("AI 分析任务可读结果", () => {
     expect(consistencyDetail.body.data.resultSummary.summary).toContain("审核 97 条人物关系");
     expect(consistencyDetail.body.data.resultSummary.summary).toContain("72 条已确认");
     expect(consistencyDetail.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
-      expect.objectContaining({ table: "relationships", count: 2 })
+      expect.objectContaining({ location: "当前作品 · 人物关系库", count: 2 })
     ]));
     expect(JSON.stringify(consistencyDetail.body.data.resultSummary.sections)).toContain("八岐大蛇与须佐之男");
 
@@ -299,7 +334,7 @@ describe("AI 分析任务可读结果", () => {
     const bookDetail = await request(runtime.app).get(`/api/tasks/${legacyBookTaskId}/detail`).expect(200);
     expect(bookDetail.body.data.resultSummary.summary).toContain("分析 299 章正文");
     expect(bookDetail.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
-      expect.objectContaining({ table: "timeline_events", count: 1 })
+      expect.objectContaining({ location: "当前作品 · 时间轴与事件", count: 1 })
     ]));
     expect(JSON.stringify(bookDetail.body.data.resultSummary.sections)).toContain("神代大战");
 
@@ -311,7 +346,7 @@ describe("AI 分析任务可读结果", () => {
     const characterRepairDetail = await request(runtime.app).get(`/api/tasks/${legacyCharacterRepairTaskId}/detail`).expect(200);
     expect(characterRepairDetail.body.data.resultSummary.summary).toContain("修正 1 个角色，并移除 1 个重复角色档案");
     expect(characterRepairDetail.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
-      expect.objectContaining({ table: "characters", count: 2 })
+      expect.objectContaining({ location: "当前作品 · 角色库", count: 2 })
     ]));
     expect(JSON.stringify(characterRepairDetail.body.data.resultSummary.sections)).toContain("八岐大蛇");
 
@@ -338,7 +373,9 @@ describe("AI 分析任务可读结果", () => {
     expect(relationshipDetail.body.data.resultSummary.summary).toContain("任务结果记录 2 条关系");
     expect(relationshipDetail.body.data.resultSummary.summary).toContain("另有 1 条已删除或合并");
     expect(relationshipDetail.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
-      expect.objectContaining({ table: "relationships", count: 2, note: expect.stringContaining("当前可读取 1 条") })
+      expect.objectContaining({ location: "当前作品 · 人物关系库", count: 2, note: expect.stringContaining("当前可读取 1 条") })
     ]));
+    [consistencyDetail, bookDetail, characterRepairDetail, resumableBookDetail, relationshipDetail]
+      .forEach((response) => expectNoDatabaseMetadata(response.body.data));
   });
 });

@@ -896,13 +896,6 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
         scopeType: "book",
         coveredChapterCount: 3
       },
-      storageTarget: {
-        database: "当前作品 SQLite 数据库",
-        entity: "人物关系",
-        table: "relationships",
-        taskResultTable: "analysis_tasks",
-        workId
-      },
       relationshipResults: [{
         action: "created",
         category: "social",
@@ -940,13 +933,13 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     );
     const historicalTask = await request(runtime.app).get(`/api/tasks/${task.body.data.id}`).expect(200);
     expect(historicalTask.body.data.result).toMatchObject({
-      storageTarget: { table: "relationships", taskResultTable: "analysis_tasks", workId },
       relationshipResults: [{
         relationshipId: relationships.body.data[0].id,
         snapshotSource: "current-record",
         subtype: "朋友"
       }]
     });
+    expect(historicalTask.body.data.result).not.toHaveProperty("storageTarget");
     expect([
       historicalTask.body.data.result.relationshipResults[0].fromCharacterName,
       historicalTask.body.data.result.relationshipResults[0].toCharacterName
