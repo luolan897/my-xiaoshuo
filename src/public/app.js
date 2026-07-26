@@ -2654,6 +2654,7 @@ async function openMembersDialog(targetWork = state.work) {
   if (!targetWork) return;
   memberDialogWork = targetWork;
   const canManage = ["admin", "owner"].includes(String(targetWork.accessRole));
+  $("#members-settings-return").classList.toggle("hidden", $("#settings-hub-view").classList.contains("hidden"));
   $("#members-dialog-eyebrow").textContent = `作品权限 · 《${targetWork.title}》`;
   $("#members-dialog-title").textContent = "成员模块权限";
   $("#members-list").innerHTML = '<p class="empty-state">正在读取成员……</p>';
@@ -2761,6 +2762,13 @@ async function showSettingsHub() {
   renderSettingsHub();
   replacePageRoute({ view: "settings", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
+}
+
+async function returnToSettingsHub(actionSelector, dialogSelector = null) {
+  const dialog = dialogSelector ? $(dialogSelector) : null;
+  if (dialog?.open) dialog.close();
+  if (!(await showSettingsHub())) return;
+  queueMicrotask(() => $(actionSelector)?.focus());
 }
 
 async function returnFromSettings() {
@@ -7583,6 +7591,7 @@ $("#register-form").addEventListener("submit", async (event) => {
 });
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
+$("#platform-ai-return").addEventListener("click", () => returnToSettingsHub("#platform-ai-button").catch((error) => toast(error.message, "error")));
 $("#user-management-button").addEventListener("click", openUsersDialog);
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
@@ -7592,7 +7601,9 @@ $("#presence-button").addEventListener("click", () => {
   $("#presence-button").setAttribute("aria-expanded", String(open));
 });
 $("#users-dialog-close").addEventListener("click", () => $("#users-dialog").close());
+$("#users-settings-return").addEventListener("click", () => returnToSettingsHub("#user-management-button", "#users-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#platform-ui-settings-return").addEventListener("click", () => returnToSettingsHub("#platform-ui-settings-button", "#platform-ui-settings-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -7622,6 +7633,7 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   }
 });
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
+$("#members-settings-return").addEventListener("click", () => returnToSettingsHub("#collaboration-button", "#members-dialog").catch((error) => toast(error.message, "error")));
 $("#members-dialog").addEventListener("close", () => {
   memberDialogWork = null;
   memberDialogMembers = [];
@@ -7691,6 +7703,7 @@ function cleanupExpandedRelationshipMap() {
 $("#relationship-map-close").addEventListener("click", () => $("#relationship-map-dialog").close());
 $("#relationship-map-dialog").addEventListener("close", cleanupExpandedRelationshipMap);
 $("#appearance-button").addEventListener("click", openAppearanceDialog);
+$("#appearance-settings-return").addEventListener("click", () => returnToSettingsHub("#appearance-button", "#appearance-dialog").catch((error) => toast(error.message, "error")));
 $("#toggle-whitespace-appearance").addEventListener("click", toggleChapterWhitespaceVisibility);
 $("#theme-toggle").addEventListener("click", () => {
   const theme = nextTheme(currentColorTheme());

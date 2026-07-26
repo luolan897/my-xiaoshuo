@@ -521,6 +521,9 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%; max-width: 1400px; margin: 0 auto 38px; }
 .shelf-header h1 { margin: 0 0 10px; font-size: clamp(30px, 4vw, 52px); font-weight: 560; letter-spacing: -.04em; }
 .shelf-header p { margin: 0; color: var(--muted); }
+.settings-detail-actions, .settings-dialog-header-actions { display: flex; align-items: center; gap: 10px; }
+.settings-detail-actions { flex: 0 0 auto; }
+.settings-parent-button { white-space: nowrap; }
 .settings-hub-header { align-items: center; }
 .settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }
 .settings-hub-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; max-width: 1000px; margin: 0 auto; }
@@ -2587,6 +2590,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .shelf-header, .module-header { align-items: stretch; flex-direction: column; gap: 14px; margin-bottom: 20px; }
   .shelf-header h1 { font-size: clamp(24px, 7.5vw, 32px); }
   .shelf-header .primary-button { align-self: flex-start; min-width: 150px; min-height: 40px; padding: 10px 18px; }
+  .settings-detail-actions { align-items: stretch; flex-direction: column; }
+  .settings-detail-actions .primary-button, .settings-detail-actions .settings-parent-button { align-self: stretch; width: 100%; }
   .module-header-actions { width: 100%; }
   .book-shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 14px; }
   .book-info { padding-top: 10px; padding-right: 0; }
@@ -2632,6 +2637,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   }
   .dialog-header { padding: 14px 16px 12px; }
   .dialog-header h2 { font-size: 20px; }
+  .settings-dialog-header-actions { gap: 6px; }
   .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list { padding-inline: 16px; }
   .task-detail-overview { grid-template-columns: minmax(0, 1fr); padding: 12px; }
   .task-detail-overview > * { grid-column: 1 !important; }
