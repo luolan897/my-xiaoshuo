@@ -4018,8 +4018,17 @@ async function renderTasks(page = taskListPage) {
       </div>
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
       <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
-        <div class="task-auto-run-progress-label"><span>${runningCount ? "运行中任务平均进度" : "等待任务开始"}</span><strong>${runningProgress}%</strong></div>
-        <progress class="task-auto-run-progress-bar ${runningCount ? "is-running" : "is-waiting"}" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
+        <div class="task-auto-run-progress-ring ${runningCount ? "is-running" : "is-waiting"}" role="progressbar" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${runningProgress}">
+          <svg viewBox="0 0 120 120" aria-hidden="true" focusable="false">
+            <circle class="task-auto-run-progress-ring-track" cx="60" cy="60" r="52"></circle>
+            <circle class="task-auto-run-progress-ring-value" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="${runningProgress} 100"></circle>
+          </svg>
+          <div class="task-auto-run-progress-ring-label"><strong>${runningProgress}%</strong><span>${runningCount ? "运行中平均进度" : "等待任务开始"}</span></div>
+        </div>
+        <div class="task-auto-run-progress-bar-layout">
+          <div class="task-auto-run-progress-label"><span>${runningCount ? "运行中任务平均进度" : "等待任务开始"}</span><strong>${runningProgress}%</strong></div>
+          <progress class="task-auto-run-progress-bar ${runningCount ? "is-running" : "is-waiting"}" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
+        </div>
       </div>
     </section>
     ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
