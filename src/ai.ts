@@ -415,6 +415,12 @@ export function estimateAiTokens(value: string): number {
   return Math.max(1, Math.ceil(wideCharacters * 1.1 + narrowCharacters / 4));
 }
 
+export function collapseAiBlankLines(value: string): string {
+  return value
+    .replace(/\r\n?/gu, "\n")
+    .replace(/\n[\t ]*\n(?:[\t ]*\n)+/gu, "\n\n");
+}
+
 function contextSearchTerms(value: string): string[] {
   const normalized = value.normalize("NFKC").toLocaleLowerCase("zh-CN");
   const terms = new Set<string>();
@@ -2119,7 +2125,7 @@ export class AiManager {
     input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId" | "excludeConversationMessageId">,
     model: ModelRow
   ): string {
-    return this.buildContextPlan(input, model).context;
+    return collapseAiBlankLines(this.buildContextPlan(input, model).context);
   }
 
   private enabledAgentToolIds(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): AgentToolId[] {
@@ -2227,7 +2233,7 @@ export class AiManager {
         try {
           const chapter = this.store.getChapter(chapterId);
           if (chapter.workId !== workId) return { chapterId, error: { code: "CHAPTER_WORK_MISMATCH", message: "The requested chapter belongs to a different work." } };
-          const content = String(chapter.content);
+          const content = collapseAiBlankLines(String(chapter.content));
           const excerpt = content.slice(0, Math.max(0, remainingChars));
           remainingChars -= excerpt.length;
           return { chapterId, title: chapter.title, versionNo: chapter.versionNo, ...(include !== "content" ? { summary: summaries.get(chapterId) ?? "" } : {}), ...(include !== "summary" ? { content: excerpt, contentTruncated: excerpt.length < content.length } : {}) };
@@ -2287,7 +2293,7 @@ export class AiManager {
         try {
           const section = this.store.getCharacterProfileSection(sectionId);
           if (section.workId !== workId) return { sectionId, error: { code: "CHARACTER_SECTION_WORK_MISMATCH", message: "The requested character section belongs to a different work." } };
-          const content = String(section.contentMarkdown);
+          const content = collapseAiBlankLines(String(section.contentMarkdown));
           const excerpt = content.slice(0, Math.max(0, remainingChars));
           remainingChars -= excerpt.length;
           const character = this.store.getCharacter(String(section.characterId));
@@ -3707,7 +3713,13 @@ export class AiManager {
 
   private relationshipSettingSources(workId: string, characters: Record<string, unknown>[]): RelationshipSettingSource[] {
     const characterNameById = new Map(characters.map((character) => [String(character.id), String(character.name)]));
-    const serialize = (value: Record<string, unknown>): string => JSON.stringify(value, null, 2);
+    const cleanStrings = (value: unknown): unknown => {
+      if (typeof value === "string") return collapseAiBlankLines(value);
+      if (Array.isArray(value)) return value.map(cleanStrings);
+      if (!value || typeof value !== "object") return value;
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cleanStrings(item)]));
+    };
+    const serialize = (value: Record<string, unknown>): string => JSON.stringify(cleanStrings(value), null, 2);
     const source = (sourceType: string, sourceId: unknown, title: string, value: Record<string, unknown>): RelationshipSettingSource => ({
       id: sourceType === "setting" ? String(sourceId) : `${sourceType}:${String(sourceId)}`,
       title,

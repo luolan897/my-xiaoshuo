@@ -1155,6 +1155,44 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).toContain('title="组织设定：守望会"');
   });
 
+  it("仅在发送给 AI 时合并正文和设定中的连续空行", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    const chapterContent = "林舟进入旧港。\n\n\n \n沈星随后抵达。";
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({ content: chapterContent }).expect(200);
+    const settingContent = "林舟负责守望。\n\n\n\n沈星负责导航。";
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "旧港职责",
+      category: "人物关系",
+      content: settingContent
+    }).expect(201);
+    runtime.database.run("UPDATE chapters SET content = ? WHERE id = ?", chapterContent, chapters[0].id);
+    runtime.database.run("UPDATE settings SET content = ? WHERE id = ?", settingContent, setting.body.data.id);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("林舟进入旧港。\n\n沈星随后抵达。");
+    expect(sent).not.toContain("林舟进入旧港。\n\n\n");
+    expect(sent).toContain("林舟负责守望。\\n\\n沈星负责导航。");
+    expect(sent).not.toContain("林舟负责守望。\\n\\n\\n");
+    const storedChapter = await request(runtime.app).get(`/api/chapters/${chapters[0].id}`).expect(200);
+    const storedSetting = await request(runtime.app).get(`/api/settings/${setting.body.data.id}`).expect(200);
+    expect(storedChapter.body.data.content).toBe(chapterContent);
+    expect(storedSetting.body.data.content).toBe(settingContent);
+  });
+
   it("未勾选覆盖时保留已有关系且只追加不存在的关系", async () => {
     let chapterId = "";
     let linId = "";
