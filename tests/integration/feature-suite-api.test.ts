@@ -1243,6 +1243,159 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).toContain('title="组织设定：守望会"');
   });
 
+  it("通过拼音疑似写法确认来源并并发安全地去重审核项", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      userPrompts.push(prompt);
+      if (prompt.includes("人物名称变体确认器")) {
+        const keys = [...prompt.matchAll(/"key":"([^"]+)"/gu)].map((match) => match[1]);
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(keys.map((key) => ({
+          key,
+          verdict: "same",
+          confidence: 0.96,
+          reason: "片段中的行为和对手关系与目标人物一致"
+        }))) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "摩斯拉在旧港独自追踪拉顿留下的痕迹。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "这段正文没有任何目标人物，不应作为全文发送。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const aiInternals = runtime.ai as unknown as {
+      relationshipFuzzyIndexMatches: (...args: unknown[]) => Set<string>;
+      ensureRelationshipSearchIndex: (targetWorkId: string) => Promise<number>;
+      localRelationshipSourceSelection: (
+        targetWorkId: string,
+        scope: Record<string, unknown>,
+        characters: Record<string, unknown>[],
+        selectedCharacterIds: Set<string>,
+        generation: number
+      ) => Promise<Record<string, unknown>>;
+    };
+    const originalFuzzyIndexMatches = aiInternals.relationshipFuzzyIndexMatches.bind(aiInternals);
+    let fuzzyIndexSelectionCount = 0;
+    aiInternals.relationshipFuzzyIndexMatches = (...args: unknown[]) => {
+      fuzzyIndexSelectionCount += 1;
+      return originalFuzzyIndexMatches(...args);
+    };
+    const generation = await aiInternals.ensureRelationshipSearchIndex(workId);
+    await Promise.all(Array.from({ length: 10 }, () => aiInternals.localRelationshipSourceSelection(
+      workId,
+      { type: "book", characterIds: [target.body.data.id] },
+      runtime.store.listCharacters(workId),
+      new Set([String(target.body.data.id)]),
+      generation
+    )));
+    expect(fuzzyIndexSelectionCount).toBe(1);
+    const runTask = async () => {
+      const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+        taskType: "relationship-analysis",
+        scope: { type: "book", characterIds: [target.body.data.id] }
+      }).expect(201);
+      return request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    };
+    const [first, second] = await Promise.all([runTask(), runTask()]);
+    expect(first.body.data.result.sourceSelection).toMatchObject({
+      exactSourceCount: 0,
+      confirmedSourceCount: 1,
+      rejectedSourceCount: 0,
+      uncertainSourceCount: 0
+    });
+    expect(first.body.data.result.sourceSelection.fuzzyCandidateCount).toBeGreaterThan(0);
+    expect(first.body.data.result.sourceSelection.reviewIds).toHaveLength(1);
+    expect(second.body.data.result.sourceSelection.reviewIds).toEqual(first.body.data.result.sourceSelection.reviewIds);
+    const reviews = await request(runtime.app).get(`/api/works/${workId}/reviews`).expect(200);
+    const variants = reviews.body.data.filter((item: { itemType: string }) => item.itemType === "character-name-variant");
+    expect(variants).toHaveLength(1);
+    expect(variants[0]).toMatchObject({ title: "疑似人物名错字：摩斯拉 → 魔斯拉" });
+    expect(variants[0].evidence[0]).toMatchObject({ sourceTitle: chapters[0].title, observed: "摩斯拉" });
+    const fullSourcePrompts = userPrompts.filter((prompt) => prompt.includes("定向人物关系证据收集器"));
+    expect(fullSourcePrompts.some((prompt) => prompt.includes("摩斯拉在旧港独自追踪拉顿留下的痕迹。"))).toBe(true);
+    expect(userPrompts.every((prompt) => !prompt.includes("这段正文没有任何目标人物，不应作为全文发送。"))).toBe(true);
+
+    const promptCount = userPrompts.length;
+    await runTask();
+    const repeatedTaskPrompts = userPrompts.slice(promptCount);
+    expect(repeatedTaskPrompts.every((prompt) => !prompt.includes("审核项：疑似人物名错字"))).toBe(true);
+  });
+
+  it("疑似写法确认结果不完整时不写入关系和审核项", async () => {
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "[]" } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "摩斯拉在旧港追踪拉顿。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [target.body.data.id] }
+    }).expect(201);
+
+    const failed = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(502);
+    expect(failed.body.error.code).toBe("RELATIONSHIP_VARIANT_VERIFICATION_FAILED");
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toEqual([]);
+    const reviews = await request(runtime.app).get(`/api/works/${workId}/reviews`).expect(200);
+    expect(reviews.body.data.filter((item: { itemType: string }) => item.itemType === "character-name-variant")).toEqual([]);
+  });
+
+  it("两字人物疑似写法只召回同时命中身份锚点的来源", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      userPrompts.push(prompt);
+      if (prompt.includes("人物名称变体确认器")) {
+        const keys = [...prompt.matchAll(/"key":"([^"]+)"/gu)].map((match) => match[1]);
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(keys.map((key) => ({
+          key,
+          verdict: "same",
+          confidence: 0.9,
+          reason: "人物代码与目标档案一致"
+        }))) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "临舟在旧港独自查看潮汐，这里没有身份资料。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "临舟驾驶编号 A17 的调查艇进入深空。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", code: "A17" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    (runtime.ai as unknown as { relationshipFuzzyIndexMatches: () => Set<string> }).relationshipFuzzyIndexMatches = () => {
+      throw new Error("两字名称不应先经过可能截断身份锚点的普通模糊索引查询");
+    };
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [target.body.data.id] }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({ coveredChapterCount: 1 });
+    expect(result.body.data.result.sourceSelection.confirmedSourceCount).toBe(1);
+    expect(userPrompts.some((prompt) => prompt.includes("临舟驾驶编号 A17 的调查艇进入深空。"))).toBe(true);
+    expect(userPrompts.every((prompt) => !prompt.includes("临舟在旧港独自查看潮汐，这里没有身份资料。"))).toBe(true);
+  });
+
   it("仅在发送给 AI 时合并正文和设定中的连续空行", async () => {
     const userPrompts: string[] = [];
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {

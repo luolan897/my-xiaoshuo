@@ -31,7 +31,7 @@ import {
   taskScopeLabel,
   timelineStatusLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260725-state-field-zh";
+} from "/display-labels.js?v=20260726-character-name-variant";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -3454,9 +3454,11 @@ function openReviewDetailDialog(item) {
   const evidenceHtml = evidence.length
     ? `<ul>${evidence.map((entry) => {
       if (!entry || typeof entry !== "object") return `<li>${esc(String(entry))}</li>`;
-      const source = entry.chapterTitle || entry.chapterId || "相关证据";
+      const source = entry.sourceTitle || entry.chapterTitle || entry.chapterId || "相关证据";
       const quote = entry.quote ? `<blockquote>${esc(entry.quote)}</blockquote>` : "";
-      const supports = entry.supports ? `<small>${esc(entry.supports)}</small>` : "";
+      const supports = entry.reason
+        ? `<small>${esc(entry.reason)}${typeof entry.confidence === "number" ? ` · 置信度 ${Math.round(entry.confidence * 100)}%` : ""}</small>`
+        : entry.supports ? `<small>${esc(entry.supports)}</small>` : "";
       return `<li><strong>${esc(source)}</strong>${quote}${supports}</li>`;
     }).join("")}</ul>`
     : "<p>暂无证据</p>";

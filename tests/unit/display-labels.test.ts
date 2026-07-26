@@ -29,6 +29,7 @@ describe("前端枚举中文标签", () => {
 
   it("映射审核、任务、供应商和版本枚举", () => {
     expect(reviewItemTypeLabel("timeline-conflict")).toBe("时间线冲突");
+    expect(reviewItemTypeLabel("character-name-variant")).toBe("疑似人物名错字");
     expect(reviewStatusLabel("fixed")).toBe("已修复");
     expect(taskScopeLabel("book")).toBe("全书");
     expect(providerStatusLabel("enabled")).toBe("已启用");
