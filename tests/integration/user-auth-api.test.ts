@@ -963,6 +963,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     await analysisOnly.agent.get(`/api/works/${workId}/tasks`).expect(200);
     await analysisOnly.agent.get(`/api/works/${workId}/models`).expect(200);
+    await analysisOnly.agent.get(`/api/works/${workId}/task-defaults`).expect(200);
+    const taskDefaultWriteDenied = await analysisOnly.agent
+      .put(`/api/works/${workId}/task-defaults/book-analysis`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({ modelId: "model_not_authorized" })
+      .expect(403);
+    expect(taskDefaultWriteDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     const analysisChatDenied = await analysisOnly.agent.get(`/api/works/${workId}/ai-conversations`).expect(403);
     expect(analysisChatDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     await analysisOnly.agent.post(`/api/works/${workId}/ai-conversations`)

@@ -448,6 +448,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS analysis_tasks (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
         task_type TEXT NOT NULL,
         scope_json TEXT NOT NULL DEFAULT '{}',
         status TEXT NOT NULL DEFAULT 'pending',
@@ -1703,6 +1704,22 @@ export class Database {
             CHECK(json_valid(source_refs_json) AND json_type(source_refs_json) = 'array')`);
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (43, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(44)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(analysis_tasks)").map((row) => String(row.name)));
+        if (!columns.has("model_id")) {
+          this.run("ALTER TABLE analysis_tasks ADD COLUMN model_id TEXT REFERENCES models(id) ON DELETE SET NULL");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_tasks_model ON analysis_tasks(model_id, status)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (44, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

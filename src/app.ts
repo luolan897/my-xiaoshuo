@@ -429,8 +429,8 @@ const relationshipAnalysisScopeSchema = z.object({
   }
 });
 const analysisTaskSchema = z.union([
-  z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional() }).strict(),
-  z.object({ taskType: analysisTaskTypeSchema, scope: jsonObject.optional() }).strict().superRefine((input, context) => {
+  z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional(), modelId: identifier.optional() }).strict(),
+  z.object({ taskType: analysisTaskTypeSchema, scope: jsonObject.optional(), modelId: identifier.optional() }).strict().superRefine((input, context) => {
     if (input.scope?.includeAllSettings !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "includeAllSettings"], message: "包含所有设定仅支持人物关系分析" });
     }
@@ -1528,7 +1528,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/tasks", (request, response) => {
     const input = parse(analysisTaskSchema, request.body);
     data(response, redactTaskCharacterNames(
-      store.createTask(request.params.workId, input),
+      ai.createTask(request.params.workId, input),
       requestPermissions(request, request.params.workId)
     ), 201);
   });
