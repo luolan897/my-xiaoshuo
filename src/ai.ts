@@ -122,6 +122,14 @@ type GenerateResult = {
   processSteps: AiProcessStep[];
 };
 
+export type ResolvedAiTokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheEligibleInputTokens: number;
+  source: "reported" | "estimated" | "mixed";
+};
+
 export type TaskRunActor = {
   userId: string;
   allowAdminAccess: boolean;
@@ -615,9 +623,24 @@ export function resolveOutputTokens(usage: unknown, content: string): number {
 
 type InputCacheUsage = { inputTokens: number; cachedInputTokens: number };
 
+function reportedTokenCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.round(value))
+    : null;
+}
+
 function resolveInputCacheUsage(usage: unknown): InputCacheUsage | null {
   if (!usage || typeof usage !== "object") return null;
   const record = usage as Record<string, unknown>;
+  const anthropicCacheRead = reportedTokenCount(record.cache_read_input_tokens);
+  const anthropicCacheCreation = reportedTokenCount(record.cache_creation_input_tokens);
+  if (anthropicCacheRead !== null || anthropicCacheCreation !== null) {
+    const uncachedInputTokens = reportedTokenCount(record.input_tokens) ?? 0;
+    const cachedInputTokens = anthropicCacheRead ?? 0;
+    const inputTokens = uncachedInputTokens + cachedInputTokens + (anthropicCacheCreation ?? 0);
+    if (inputTokens <= 0) return null;
+    return { inputTokens, cachedInputTokens };
+  }
   const promptDetails = record.prompt_tokens_details && typeof record.prompt_tokens_details === "object"
     ? record.prompt_tokens_details as Record<string, unknown>
     : {};
@@ -648,6 +671,43 @@ export function resolveCacheHitPercent(usage: unknown): number | undefined {
   const resolved = resolveInputCacheUsage(usage);
   if (!resolved) return undefined;
   return Math.round(resolved.cachedInputTokens / resolved.inputTokens * 1_000) / 10;
+}
+
+export function resolveAiTokenUsage(
+  usage: unknown,
+  estimatedInputTokens: number,
+  estimatedOutputTokens: number
+): ResolvedAiTokenUsage {
+  const record = usage && typeof usage === "object" && !Array.isArray(usage)
+    ? usage as Record<string, unknown>
+    : {};
+  const reportedInputTokens = reportedTokenCount(record.prompt_tokens ?? record.input_tokens);
+  const reportedOutputTokens = reportedTokenCount(record.completion_tokens ?? record.output_tokens);
+  const cacheUsage = resolveInputCacheUsage(record);
+  const inputTokens = cacheUsage?.inputTokens
+    ?? reportedInputTokens
+    ?? Math.max(0, Math.round(estimatedInputTokens));
+  const outputTokens = reportedOutputTokens ?? Math.max(0, Math.round(estimatedOutputTokens));
+  return {
+    inputTokens,
+    outputTokens,
+    cachedInputTokens: cacheUsage?.cachedInputTokens ?? 0,
+    cacheEligibleInputTokens: cacheUsage?.inputTokens ?? 0,
+    source: reportedInputTokens !== null && reportedOutputTokens !== null
+      ? "reported"
+      : reportedInputTokens === null && reportedOutputTokens === null
+        ? "estimated"
+        : "mixed"
+  };
+}
+
+function completionPayloadOutputText(payload: CompletionPayload): string {
+  const message = payload.choices?.[0]?.message;
+  return [
+    message?.reasoning_content ?? "",
+    message?.content ?? "",
+    ...(message?.tool_calls ?? []).map((toolCall) => `${toolCall.function.name}\n${String(toolCall.function.arguments ?? "")}`)
+  ].filter(Boolean).join("\n");
 }
 
 function normalizeModelPreset(input: Record<string, unknown>, modelId = ""): Record<string, unknown> {
@@ -1206,6 +1266,107 @@ export class AiManager {
       void this.schedulePendingRelationshipIndexes();
     }, 0);
     logger.info("ai.manager.ready");
+  }
+
+  getPlatformTokenUsage(timezoneOffset: number): Record<string, unknown> {
+    return this.getTokenUsage(null, timezoneOffset, true);
+  }
+
+  getWorkTokenUsage(workId: string, timezoneOffset: number): Record<string, unknown> {
+    this.store.getWork(workId);
+    return this.getTokenUsage(workId, timezoneOffset, false);
+  }
+
+  private getTokenUsage(workId: string | null, timezoneOffset: number, includeWorks: boolean): Record<string, unknown> {
+    const scopeSql = workId === null ? "" : " AND call.work_id = ?";
+    const scopeParams = workId === null ? [] : [workId];
+    const usageFilter = "(call.input_tokens > 0 OR call.output_tokens > 0)";
+    const summary = this.store.db.get(
+      `SELECT
+         COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
+         COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
+         COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
+         COUNT(*) AS request_count,
+         COALESCE(SUM(CASE WHEN call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count,
+         MIN(call.created_at) AS first_used_at,
+         MAX(call.created_at) AS last_used_at
+       FROM ai_calls call
+       JOIN works work ON work.id = call.work_id
+       WHERE COALESCE(work.is_internal, 0) = 0 AND ${usageFilter}${scopeSql}`,
+      ...scopeParams
+    ) ?? {};
+    const daily = this.store.db.all(
+      `SELECT
+         date(call.created_at, printf('%+d minutes', ?)) AS usage_date,
+         COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
+         COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
+         COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+         COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
+         COUNT(*) AS request_count,
+         COALESCE(SUM(CASE WHEN call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count
+       FROM ai_calls call
+       JOIN works work ON work.id = call.work_id
+       WHERE COALESCE(work.is_internal, 0) = 0 AND ${usageFilter}${scopeSql}
+       GROUP BY usage_date
+       ORDER BY usage_date`,
+      timezoneOffset,
+      ...scopeParams
+    ).map((row) => this.mapTokenUsageRow(row, { date: stringValue(row, "usage_date") }));
+    const works = includeWorks
+      ? this.store.db.all(
+        `SELECT
+           work.id AS work_id,
+           work.title AS work_title,
+           COALESCE(SUM(call.input_tokens), 0) AS input_tokens,
+           COALESCE(SUM(call.output_tokens), 0) AS output_tokens,
+           COALESCE(SUM(call.cached_input_tokens), 0) AS cached_input_tokens,
+           COALESCE(SUM(call.cache_eligible_input_tokens), 0) AS cache_eligible_input_tokens,
+           COUNT(call.id) AS request_count,
+           COALESCE(SUM(CASE WHEN call.id IS NULL OR call.token_usage_source = 'reported' THEN 0 ELSE 1 END), 0) AS estimated_request_count,
+           MIN(call.created_at) AS first_used_at,
+           MAX(call.created_at) AS last_used_at
+         FROM works work
+         LEFT JOIN ai_calls call ON call.work_id = work.id AND ${usageFilter}
+         WHERE COALESCE(work.is_internal, 0) = 0
+         GROUP BY work.id, work.title
+         ORDER BY (COALESCE(SUM(call.input_tokens), 0) + COALESCE(SUM(call.output_tokens), 0)) DESC, work.title`
+      ).map((row) => this.mapTokenUsageRow(row, {
+        workId: stringValue(row, "work_id"),
+        workTitle: stringValue(row, "work_title"),
+        firstUsedAt: row.first_used_at === null ? null : stringValue(row, "first_used_at"),
+        lastUsedAt: row.last_used_at === null ? null : stringValue(row, "last_used_at")
+      }))
+      : undefined;
+    return {
+      summary: this.mapTokenUsageRow(summary, {
+        firstUsedAt: summary.first_used_at === null || summary.first_used_at === undefined ? null : stringValue(summary, "first_used_at"),
+        lastUsedAt: summary.last_used_at === null || summary.last_used_at === undefined ? null : stringValue(summary, "last_used_at")
+      }),
+      daily,
+      ...(works ? { works } : {}),
+      timezoneOffset
+    };
+  }
+
+  private mapTokenUsageRow(row: Row, extra: Record<string, unknown>): Record<string, unknown> {
+    const inputTokens = numberValue(row, "input_tokens");
+    const outputTokens = numberValue(row, "output_tokens");
+    const cachedInputTokens = numberValue(row, "cached_input_tokens");
+    const cacheEligibleInputTokens = numberValue(row, "cache_eligible_input_tokens");
+    return {
+      ...extra,
+      totalTokens: inputTokens + outputTokens,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens,
+      cacheEligibleInputTokens,
+      cacheHitRate: cacheEligibleInputTokens > 0
+        ? Math.round(cachedInputTokens / cacheEligibleInputTokens * 1_000) / 10
+        : null,
+      requestCount: numberValue(row, "request_count"),
+      estimatedRequestCount: numberValue(row, "estimated_request_count")
+    };
   }
 
   resetAutoRunBatch(workId: string): void {
@@ -2789,6 +2950,23 @@ export class AiManager {
       toolCount: tools.length
     });
     let activeApiKey = "";
+    let trackedInputTokens = 0;
+    let trackedOutputTokens = 0;
+    let trackedCachedInputTokens = 0;
+    let trackedCacheEligibleInputTokens = 0;
+    const trackedUsageSources = new Set<ResolvedAiTokenUsage["source"]>();
+    const trackUsage = (usage: ResolvedAiTokenUsage): void => {
+      trackedInputTokens += usage.inputTokens;
+      trackedOutputTokens += usage.outputTokens;
+      trackedCachedInputTokens += usage.cachedInputTokens;
+      trackedCacheEligibleInputTokens += usage.cacheEligibleInputTokens;
+      trackedUsageSources.add(usage.source);
+    };
+    const trackedUsageSource = (): ResolvedAiTokenUsage["source"] => {
+      if (trackedUsageSources.size === 1 && trackedUsageSources.has("reported")) return "reported";
+      if (trackedUsageSources.size === 1 && trackedUsageSources.has("estimated")) return "estimated";
+      return "mixed";
+    };
     try {
       const apiKey = this.decryptKey(provider);
       activeApiKey = apiKey;
@@ -2877,6 +3055,12 @@ export class AiManager {
                   totalInputTokens += cacheUsage.inputTokens;
                   totalCachedInputTokens += cacheUsage.cachedInputTokens;
                 }
+                const outputText = completionPayloadOutputText(parsed);
+                trackUsage(resolveAiTokenUsage(
+                  parsed.usage,
+                  estimateAiTokens(JSON.stringify(completionMessages)),
+                  outputText ? estimateAiTokens(outputText) : 0
+                ));
                 return parsed;
               } catch {
                 throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} returned invalid JSON: ${candidate.body.slice(0, 500)}`);
@@ -2990,16 +3174,26 @@ export class AiManager {
           : "";
         throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
       }
-      this.store.db.run(
-        "UPDATE ai_calls SET status = 'completed', output_chars = ?, completed_at = ? WHERE id = ?",
-        content.length,
-        now(),
-        callId
-      );
       const outputTokens = resolveOutputTokens(payload.usage, content);
       const cacheHitPercent = cacheUsageComplete && completionRequestCount > 0 && totalInputTokens > 0
         ? Math.round(totalCachedInputTokens / totalInputTokens * 1_000) / 10
         : undefined;
+      this.store.db.run(
+        `UPDATE ai_calls
+         SET status = 'completed', output_chars = ?, input_tokens = ?, output_tokens = ?,
+             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
+             token_usage_source = ?, completed_at = ?
+         WHERE id = ?`,
+        content.length,
+        trackedInputTokens,
+        trackedOutputTokens,
+        trackedCachedInputTokens,
+        trackedCacheEligibleInputTokens,
+        trackedCacheEligibleInputTokens > 0 ? 1 : 0,
+        trackedUsageSource(),
+        now(),
+        callId
+      );
       logger.info("ai.call.completed", {
         callId,
         workId: input.workId,
@@ -3013,7 +3207,22 @@ export class AiManager {
       return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
     } catch (error) {
       const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 调用失败";
-      this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
+      this.store.db.run(
+        `UPDATE ai_calls
+         SET status = 'failed', failure = ?, input_tokens = ?, output_tokens = ?,
+             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
+             token_usage_source = ?, completed_at = ?
+         WHERE id = ?`,
+        message,
+        trackedInputTokens,
+        trackedOutputTokens,
+        trackedCachedInputTokens,
+        trackedCacheEligibleInputTokens,
+        trackedCacheEligibleInputTokens > 0 ? 1 : 0,
+        trackedUsageSource(),
+        now(),
+        callId
+      );
       logger.error("ai.call.failed", {
         callId,
         workId: input.workId,
@@ -3069,7 +3278,13 @@ export class AiManager {
       activeApiKey = apiKey;
       const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let streamedResult: { content: string; reasoning: string; outputTokens: number; cacheHitPercent?: number } | null = null;
+      let streamedResult: {
+        content: string;
+        reasoning: string;
+        outputTokens: number;
+        cacheHitPercent?: number;
+        tokenUsage: ResolvedAiTokenUsage;
+      } | null = null;
       let lastFailure: unknown = null;
       let emitted = false;
       const thinkingStepId = id("process");
@@ -3101,6 +3316,7 @@ export class AiManager {
               const streamed = await this.readCompletionStream(
                 response,
                 protocol,
+                estimateAiTokens(JSON.stringify(messages)),
                 (delta) => {
                   emitted = true;
                   onDelta(delta);
@@ -3145,13 +3361,23 @@ export class AiManager {
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
       }
       if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
-      const { content, reasoning, outputTokens, cacheHitPercent } = streamedResult;
+      const { content, reasoning, outputTokens, cacheHitPercent, tokenUsage } = streamedResult;
       const processSteps: AiProcessStep[] = reasoning.trim()
         ? [{ id: thinkingStepId, type: "thinking", round: 1, content: reasoning, createdAt: thinkingCreatedAt }]
         : [];
       this.store.db.run(
-        "UPDATE ai_calls SET status = 'completed', output_chars = ?, completed_at = ? WHERE id = ?",
+        `UPDATE ai_calls
+         SET status = 'completed', output_chars = ?, input_tokens = ?, output_tokens = ?,
+             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
+             token_usage_source = ?, completed_at = ?
+         WHERE id = ?`,
         content.length,
+        tokenUsage.inputTokens,
+        tokenUsage.outputTokens,
+        tokenUsage.cachedInputTokens,
+        tokenUsage.cacheEligibleInputTokens,
+        tokenUsage.cacheEligibleInputTokens > 0 ? 1 : 0,
+        tokenUsage.source,
         now(),
         callId
       );
@@ -3183,9 +3409,16 @@ export class AiManager {
   private async readCompletionStream(
     response: Response,
     protocol: AiProviderProtocol,
+    estimatedInputTokens: number,
     onDelta: (delta: string) => void,
     onThinkingDelta: (delta: string) => void
-  ): Promise<{ content: string; reasoning: string; outputTokens: number; cacheHitPercent?: number }> {
+  ): Promise<{
+    content: string;
+    reasoning: string;
+    outputTokens: number;
+    cacheHitPercent?: number;
+    tokenUsage: ResolvedAiTokenUsage;
+  }> {
     const protocolLabel = protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions";
     if (!response.body) throw new Error(`${protocolLabel} 流式响应缺少正文`);
     const reader = response.body.getReader();
@@ -3268,7 +3501,14 @@ export class AiManager {
     if (buffer.trim()) consumeEvent(buffer);
     if (!content.trim()) throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
     const cacheHitPercent = resolveCacheHitPercent(usage);
-    return { content, reasoning, outputTokens: resolveOutputTokens(usage, content), ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }) };
+    const outputTokens = resolveOutputTokens(usage, content);
+    return {
+      content,
+      reasoning,
+      outputTokens,
+      ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
+      tokenUsage: resolveAiTokenUsage(usage, estimatedInputTokens, outputTokens)
+    };
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {

@@ -137,7 +137,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }));
   });
 
-  it("同页协作者保存后，对方心跳可收到刷新提醒事件", async () => {
+  it("仅在双方查看同一人物关系时返回更新提醒", async () => {
     const owner = await register(runtime, "change_owner");
     const writer = await register(runtime, "change_writer");
     const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({ title: "变更提醒作品" }).expect(201);
@@ -146,6 +146,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       userId: writer.user.userId,
       role: "editor"
     }).expect(201);
+
     const volume = await owner.agent.post(`/api/works/${workId}/volumes`).set("X-CSRF-Token", owner.csrfToken).send({ title: "第一卷" }).expect(201);
     const chapter = await owner.agent.post(`/api/works/${workId}/chapters`).set("X-CSRF-Token", owner.csrfToken).send({
       volumeId: volume.body.data.id,
@@ -158,32 +159,71 @@ describe("用户、作品权限与操作者追踪 API", () => {
       clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       page: { kind: "editor", resourceId: chapterId }
     }).expect(200);
-
     await owner.agent.patch(`/api/chapters/${chapterId}`).set("X-CSRF-Token", owner.csrfToken).send({
       content: "作者更新后的正文。",
       expectedVersionNo: chapter.body.data.versionNo
     }).expect(200);
-
-    const samePage = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+    const chapterHeartbeat = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
       clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       page: { kind: "editor", resourceId: chapterId }
     }).expect(200);
-    expect(samePage.body.data.recentChanges).toEqual(expect.arrayContaining([
+    expect(chapterHeartbeat.body.data.recentChanges).toEqual([]);
+
+    const firstCharacter = await owner.agent.post(`/api/works/${workId}/characters`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "林舟"
+    }).expect(201);
+    const secondCharacter = await owner.agent.post(`/api/works/${workId}/characters`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "沈星"
+    }).expect(201);
+    const relationship = await owner.agent.post(`/api/works/${workId}/relationships`).set("X-CSRF-Token", owner.csrfToken).send({
+      fromCharacterId: firstCharacter.body.data.id,
+      toCharacterId: secondCharacter.body.data.id,
+      category: "social",
+      subtype: "朋友",
+      directed: false
+    }).expect(201);
+    const relationshipId = relationship.body.data.id;
+
+    await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "module", module: "relationships" }
+    }).expect(200);
+    const unobservedUpdate = await owner.agent.patch(`/api/relationships/${relationshipId}`).set("X-CSRF-Token", owner.csrfToken).send({
+      subtype: "旧友",
+      expectedVersionNo: relationship.body.data.versionNo
+    }).expect(200);
+    const openedAfterUpdate = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "entity-editor", module: "relationship", resourceId: relationshipId }
+    }).expect(200);
+    expect(openedAfterUpdate.body.data.recentChanges).toEqual([]);
+
+    await owner.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", owner.csrfToken).send({
+      clientId: "b1c2d3e4-f5a6-7890-abcd-ef1234567890",
+      page: { kind: "entity-editor", module: "relationship", resourceId: relationshipId }
+    }).expect(200);
+    await owner.agent.patch(`/api/relationships/${relationshipId}`).set("X-CSRF-Token", owner.csrfToken).send({
+      subtype: "盟友",
+      expectedVersionNo: unobservedUpdate.body.data.versionNo
+    }).expect(200);
+    const sameRelationship = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "entity-editor", module: "relationship", resourceId: relationshipId }
+    }).expect(200);
+    expect(sameRelationship.body.data.recentChanges).toEqual([
       expect.objectContaining({
-        pageKey: `editor:${chapterId}`,
-        label: "正文编辑",
+        pageKey: `entity-editor:relationship:${relationshipId}`,
+        label: "人物关系编辑",
         actorUserId: owner.user.userId,
         actorDisplayName: "change_owner"
       })
-    ]));
+    ]);
 
-    const otherPage = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+    const globalList = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
       clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      page: { kind: "module", module: "characters" }
+      page: { kind: "module", module: "relationships" }
     }).expect(200);
-    expect(otherPage.body.data.recentChanges).toEqual(expect.arrayContaining([
-      expect.objectContaining({ pageKey: `editor:${chapterId}` })
-    ]));
+    expect(globalList.body.data.recentChanges).toEqual([]);
   });
 
   it("首个用户成为管理员，并完成作品邀请、共同编辑与越权拦截", async () => {
@@ -226,6 +266,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     await writer.agent.delete(`/api/works/${adminWorkId}`).set("X-CSRF-Token", writer.csrfToken).expect(403);
     await writer.agent.get("/api/platform/ai/providers").expect(403);
+    await writer.agent.get("/api/platform/ai/usage").expect(403);
+    await writer.agent.get(`/api/works/${adminWorkId}/ai-settings/usage`).expect(200);
     await writer.agent.patch(`/api/chapters/${chapter.body.data.id}`).send({ content: "缺少 CSRF。" }).expect(403);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });

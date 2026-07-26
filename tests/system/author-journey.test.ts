@@ -67,11 +67,13 @@ describe("作者完整创作流程", () => {
     await once(mockServer, "close");
   });
 
-  it("正文编辑区在章节概览隐藏时仍占满剩余高度", async () => {
+  it("章节概览使用 Toast 且正文编辑区始终占满剩余高度", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
+    expect(page.text).not.toContain('id="chapter-insight"');
+    expect(page.text).toContain('id="insight-button" class="ghost-button" type="button" aria-controls="chapter-insight-toast" aria-expanded="false"');
     expect(page.text).toContain('id="chapter-line-numbers"');
     expect(page.text).not.toContain('id="toggle-whitespace-button"');
     expect(page.text).toContain('id="chapter-whitespace-overlay"');
@@ -94,6 +96,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderChapterLineNumbers()");
     expect(application.text).toContain("syncChapterLineNumberScroll");
     expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
+    expect(application.text).toContain('element.className = "toast chapter-insight-toast"');
+    expect(application.text).toContain('element.id = "chapter-insight-toast"');
+    expect(application.text).toContain("function dismissChapterInsightToast()");
+    expect(styles.text).toContain(".chapter-insight-toast {");
     expect(application.text).toContain('data-toggle-whitespace');
     expect(application.text).toContain('document.querySelectorAll("[data-toggle-whitespace]")');
     expect(page.text).toContain('id="toggle-whitespace-appearance"');
@@ -220,7 +226,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('item && canEditModule("relationships") ? `<section class="entity-dialog-management"');
     expect(application.text).toContain('title: "删除人物关系", confirmLabel: "继续删除"');
     expect(application.text).toContain('title: "删除操作需要再次确认", confirmLabel: "确认删除"');
-    expect(application.text).toContain('return dialog.showModal()');
+    expect(application.text).toContain('return reopenDialog()');
     expect(application.text).toContain('method: "DELETE", body: { expectedVersionNo: item.versionNo }');
     expect(application.text).toContain('field("keywords", "关系关键词", "keyword-chips"');
     expect(application.text).toContain("splitRelationshipKeywordInput");
@@ -280,6 +286,7 @@ describe("作者完整创作流程", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const analysisTypes = await request(runtime.app).get("/analysis-types.js").expect(200);
     const modelConfig = await request(runtime.app).get("/model-config.js").expect(200);
+    const aiUsage = await request(runtime.app).get("/ai-usage.js").expect(200);
     const graph = await request(runtime.app).get("/relationship-graph.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
     const workPermissions = await request(runtime.app).get("/work-permissions.js").expect(200);
@@ -292,27 +299,39 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="shelf-view"');
     expect(page.text).toContain('id="platform-ai-view"');
     expect(page.text).toContain('id="platform-ai-button"');
+    expect(page.text).toContain('id="platform-usage-view"');
+    expect(page.text).toContain('id="platform-usage-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-all-module-pagination-v1');
-    expect(page.text).toContain('/styles.css?v=20260727-inline-save-spacing-v1');
+    expect(page.text).toContain('/app.js?v=20260727-all-module-pagination-v2');
+    expect(page.text).toContain('/styles.css?v=20260727-inline-save-spacing-v2');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
+    expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
+    expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
+    expect(application.text).toContain('/page-route.js?v=20260727-ai-usage');
+    expect(application.text).toContain("本书 Token 用量");
+    expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
+    expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
+    expect(aiUsage.text).toContain("export function buildUsageCalendar");
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
     expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('id="presence-list"');
-    expect(application.text).toContain("function handleCollaborativeChanges(recentChanges)");
-    expect(application.text).toContain("协作者已更新");
-    expect(application.text).toContain("本页无法代为另存");
-    expect(application.text).toContain("peerPageStale");
+    expect(application.text).toContain("function handleRelationshipCollaborativeChanges(recentChanges)");
+    expect(application.text).toContain("人物关系已更新");
+    expect(application.text).toContain('localKey.startsWith("entity-editor:relationship:")');
+    expect(application.text).not.toContain("peerPageStale");
     expect(styles.text).toContain(".dev-auth-bypass .auth-view { display: none !important; }");
     expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
+    expect(styles.text).toContain(".usage-calendar-grid {");
+    expect(styles.text).toContain(".usage-stat-grid {");
+    expect(styles.text).toContain("@container usage-overview (max-width: 760px)");
     expect(page.text).toContain('id="platform-ai-return"');
     expect(page.text).toContain('id="users-settings-return"');
     expect(page.text).toContain('id="platform-ui-settings-return"');
