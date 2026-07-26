@@ -4172,11 +4172,15 @@ function renderTaskTraceMessages(messages) {
   return `<div class="task-trace-messages">${messages.map((message, index) => {
     const role = String(message?.role || "user");
     const content = message?.content === null ? "" : String(message?.content ?? "");
+    const contentChars = Number.isFinite(Number(message?.contentChars)) ? Number(message.contentChars) : content.length;
+    const contentTruncated = Boolean(message?.contentTruncated);
     const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    const toolCallCount = Number.isFinite(Number(message?.toolCallCount)) ? Number(message.toolCallCount) : toolCalls.length;
     return `<article class="task-trace-message is-${esc(role)}">
-      <header><span>${esc(taskTraceRoleLabel(role))}</span><small>#${index + 1} · ${content.length.toLocaleString("zh-CN")} 字符</small></header>
-      ${content ? `<pre>${esc(content)}</pre>` : '<p class="task-trace-empty">无文本正文</p>'}
+      <header><span>${esc(taskTraceRoleLabel(role))}</span><small>#${index + 1} · ${contentChars.toLocaleString("zh-CN")} 字符${contentTruncated ? " · 已截断" : ""}</small></header>
+      ${content ? `<pre>${esc(content)}${contentTruncated ? "\n\n……预览已截断" : ""}</pre>` : '<p class="task-trace-empty">无文本正文</p>'}
       ${toolCalls.length ? `<details><summary>Agent 请求的工具调用（${toolCalls.length}）</summary><pre>${esc(JSON.stringify(toolCalls, null, 2))}</pre></details>` : ""}
+      ${!toolCalls.length && toolCallCount ? `<small>包含 ${toolCallCount} 个工具调用，加载完整内容后显示。</small>` : ""}
       ${message?.tool_call_id ? `<small>工具调用 ID：<code>${esc(message.tool_call_id)}</code></small>` : ""}
     </article>`;
   }).join("")}</div>`;
@@ -4237,7 +4241,68 @@ function renderTaskTraceRound(round) {
   </section>`;
 }
 
-function renderTaskTraceVisualization(trace) {
+function renderTaskTraceRoundSummary(round) {
+  return `<section class="task-trace-round task-trace-round-summary">
+    <header class="task-trace-round-header">
+      <span class="task-trace-round-index">${esc(String(round?.round ?? 1))}</span>
+      <div><strong>Agent 轮次 ${esc(String(round?.round ?? 1))}</strong><small>${Number(round?.messageCount ?? 0)} 条消息 · ${Number(round?.attemptCount ?? 0)} 次请求尝试 · ${Number(round?.toolExecutionCount ?? 0)} 次工具执行</small></div>
+      <time>${esc(formatDateTime(round?.requestedAt))}</time>
+    </header>
+    <p>本轮 Prompt 共 ${Number(round?.promptChars ?? 0).toLocaleString("zh-CN")} 字符，正文、模型响应和工具结果尚未传输。</p>
+  </section>`;
+}
+
+function renderTaskTraceCallPreview(detail) {
+  const trace = detail?.trace && typeof detail.trace === "object" ? detail.trace : {};
+  const messages = Array.isArray(trace.initialMessages) ? trace.initialMessages : [];
+  const rounds = Array.isArray(trace.rounds) ? trace.rounds : [];
+  return `<div class="task-trace-load-state is-loaded">
+    <div><strong>Prompt 预览</strong><p>全部消息合计最多传输 ${Number(detail?.previewLimit ?? 3000).toLocaleString("zh-CN")} 个字符；模型响应和工具结果仍未传输。</p></div>
+    <details class="task-trace-initial" open>
+      <summary>初始上下文预览（${messages.length} 条消息 · 原文 ${Number(detail?.totalPromptChars ?? 0).toLocaleString("zh-CN")} 字符）</summary>
+      ${renderTaskTraceMessages(messages)}
+    </details>
+    <div class="task-trace-rounds">${rounds.map(renderTaskTraceRoundSummary).join("") || '<p class="task-trace-empty">尚未记录 Agent 轮次。</p>'}</div>
+    <div class="card-actions"><button class="ghost-button" type="button" data-load-task-trace-call="full">查看完整调用</button></div>
+  </div>`;
+}
+
+function renderTaskTraceCallFull(detail) {
+  const trace = detail?.trace && typeof detail.trace === "object" ? detail.trace : {};
+  const messages = Array.isArray(trace.initialMessages) ? trace.initialMessages : [];
+  const rounds = Array.isArray(trace.rounds) ? trace.rounds : [];
+  return `<div class="task-trace-load-state is-loaded">
+    <details class="task-trace-initial" open>
+      <summary>初始完整上下文（${messages.length} 条消息）</summary>
+      ${renderTaskTraceMessages(messages)}
+    </details>
+    <div class="task-trace-rounds">${rounds.map(renderTaskTraceRound).join("") || '<p class="task-trace-empty">尚未记录 Agent 轮次。</p>'}</div>
+  </div>`;
+}
+
+function bindTaskTraceCallActions(container) {
+  container.querySelectorAll("[data-load-task-trace-call]").forEach((button) => button.addEventListener("click", async () => {
+    const call = button.closest("[data-task-trace-call]");
+    const content = call?.querySelector("[data-task-trace-call-content]");
+    if (!call || !content || button.disabled) return;
+    const mode = button.dataset.loadTaskTraceCall;
+    button.disabled = true;
+    button.textContent = mode === "full" ? "正在加载完整内容" : "正在加载预览";
+    try {
+      const taskId = encodeURIComponent(call.dataset.taskTraceTask);
+      const callId = encodeURIComponent(call.dataset.taskTraceCall);
+      const detail = await api(`/api/tasks/${taskId}/trace/calls/${callId}${mode === "full" ? "?full=true" : ""}`);
+      content.innerHTML = mode === "full" ? renderTaskTraceCallFull(detail) : renderTaskTraceCallPreview(detail);
+      bindTaskTraceCallActions(content);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+      button.textContent = mode === "full" ? "查看完整调用" : "加载内容预览";
+    }
+  }));
+}
+
+function renderTaskTraceVisualization(trace, taskId) {
   if (trace?.restricted) {
     return `<section class="task-trace-section" aria-labelledby="task-trace-title">
       <header class="task-trace-heading"><div><span class="eyebrow">执行追踪</span><h3 id="task-trace-title">完整全流程上下文</h3></div></header>
@@ -4246,13 +4311,8 @@ function renderTaskTraceVisualization(trace) {
   }
   const calls = Array.isArray(trace?.calls) ? trace.calls : [];
   const capturedCalls = calls.filter((call) => call.trace);
-  const roundCount = capturedCalls.reduce((total, call) => total + (Array.isArray(call.trace?.rounds) ? call.trace.rounds.length : 0), 0);
-  const toolCount = capturedCalls.reduce((total, call) => total + (Array.isArray(call.trace?.rounds)
-    ? call.trace.rounds.reduce((roundTotal, round) => roundTotal + (Array.isArray(round.toolExecutions) ? round.toolExecutions.length : 0), 0)
-    : 0), 0);
-  const promptChars = capturedCalls.reduce((total, call) => total + (Array.isArray(call.trace?.rounds)
-    ? call.trace.rounds.reduce((roundTotal, round) => roundTotal + JSON.stringify(round.request?.messages ?? []).length, 0)
-    : 0), 0);
+  const roundCount = capturedCalls.reduce((total, call) => total + Number(call.trace?.roundCount || 0), 0);
+  const promptChars = capturedCalls.reduce((total, call) => total + Number(call.inputChars || 0), 0);
   const outputChars = capturedCalls.reduce((total, call) => total + Number(call.outputChars || 0), 0);
   if (!trace?.captured || capturedCalls.length === 0) {
     return `<section class="task-trace-section" aria-labelledby="task-trace-title">
@@ -4263,33 +4323,32 @@ function renderTaskTraceVisualization(trace) {
   return `<section class="task-trace-section" aria-labelledby="task-trace-title">
     <header class="task-trace-heading">
       <div><span class="eyebrow">执行追踪</span><h3 id="task-trace-title">完整全流程上下文</h3></div>
-      <p>按模型调用与 Agent 轮次还原实际发送内容、模型响应和工具结果。</p>
+      <p>首次只加载调用摘要；Prompt 预览与完整调用内容均按需单独请求。</p>
     </header>
     <div class="task-trace-metrics" aria-label="执行追踪统计">
       <div><strong>${capturedCalls.length}</strong><span>模型调用</span></div>
       <div><strong>${roundCount}</strong><span>Agent 轮次</span></div>
-      <div><strong>${toolCount}</strong><span>工具执行</span></div>
       <div><strong>${promptChars.toLocaleString("zh-CN")}</strong><span>Prompt 字符</span></div>
       <div><strong>${outputChars.toLocaleString("zh-CN")}</strong><span>输出字符</span></div>
     </div>
     <div class="task-trace-calls">${capturedCalls.map((call, index) => {
-      const rounds = Array.isArray(call.trace?.rounds) ? call.trace.rounds : [];
       const modelName = call.model?.displayName || call.model?.modelId || "未知模型";
       const providerName = call.provider?.name || "未知供应商";
-      return `<details class="task-trace-call is-${esc(call.status || "failed")}" ${index === 0 ? "open" : ""}>
+      return `<details class="task-trace-call is-${esc(call.status || "failed")}" data-task-trace-call="${esc(call.id)}" data-task-trace-task="${esc(taskId)}" ${index === 0 ? "open" : ""}>
         <summary>
           <span class="task-trace-call-index">${index + 1}</span>
-          <span><strong>${esc(modelName)}</strong><small>${esc(providerName)} · ${rounds.length} 轮 · ${Number(call.inputChars || 0).toLocaleString("zh-CN")} → ${Number(call.outputChars || 0).toLocaleString("zh-CN")} 字符</small></span>
+          <span><strong>${esc(modelName)}</strong><small>${esc(providerName)} · ${Number(call.trace?.roundCount || 0)} 轮 · ${Number(call.inputChars || 0).toLocaleString("zh-CN")} → ${Number(call.outputChars || 0).toLocaleString("zh-CN")} 字符</small></span>
           <span class="task-trace-status">${call.status === "completed" ? "已完成" : call.status === "running" ? "运行中" : "失败"}</span>
         </summary>
         <div class="task-trace-call-body">
           <div class="task-trace-call-meta"><code>${esc(call.id)}</code><span>${esc(formatDateTime(call.createdAt))}</span></div>
-          <details class="task-trace-initial">
-            <summary>初始完整上下文（${Array.isArray(call.trace?.initialMessages) ? call.trace.initialMessages.length : 0} 条消息）</summary>
-            ${renderTaskTraceMessages(call.trace?.initialMessages)}
-          </details>
-          ${call.failure ? `<pre class="task-trace-failure">${esc(call.failure)}</pre>` : ""}
-          <div class="task-trace-rounds">${rounds.map(renderTaskTraceRound).join("")}</div>
+          ${call.failure ? `<pre class="task-trace-failure">${esc(call.failure)}${call.failureTruncated ? "\n……失败信息已截断" : ""}</pre>` : ""}
+          <div data-task-trace-call-content>
+            <div class="task-trace-load-state">
+              <div><strong>调用内容尚未加载</strong><p>这次调用的 Prompt、模型响应和工具结果不会随任务详情传输。</p></div>
+              <button class="ghost-button" type="button" data-load-task-trace-call="preview">加载内容预览</button>
+            </div>
+          </div>
         </div>
       </details>`;
     }).join("")}</div>
@@ -4333,11 +4392,12 @@ function openTaskDetailDialog(task, trace) {
         <div><strong>结果摘要</strong>${resultPreview}</div>
         <p><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
       </section>
-      ${renderTaskTraceVisualization(trace)}
+      ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
     async () => undefined,
     "AI 分析详情",
     { submitLabel: "关闭", wide: true, trace: true });
+  bindTaskTraceCallActions($("#dialog-fields"));
 }
 
 function renderProviderCards(providers, models) {

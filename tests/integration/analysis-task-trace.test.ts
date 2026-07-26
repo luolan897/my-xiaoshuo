@@ -102,11 +102,41 @@ describe("AI 分析全流程追踪", () => {
     expect(trace.calls[0]).toMatchObject({
       status: "completed",
       model: { displayName: "追踪模型" },
+      trace: { available: true, initialMessageCount: 2, roundCount: 2, serializedChars: expect.any(Number) }
+    });
+    expect(JSON.stringify(trace)).not.toContain("审核角色规范表");
+    expect(trace.calls[0].trace).not.toHaveProperty("initialMessages");
+    expect(trace.calls[0].trace).not.toHaveProperty("rounds");
+
+    const callId = String(trace.calls[0].id);
+    const previewResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/${callId}`).expect(200);
+    const preview = previewResponse.body.data;
+    expect(preview).toMatchObject({
+      taskId: task.body.data.id,
+      callId,
+      mode: "preview",
+      previewLimit: 3000,
       trace: { initialMessages: expect.any(Array), rounds: expect.any(Array) }
     });
-    expect(trace.calls[0].trace.initialMessages[1].content).toContain("审核角色规范表");
-    expect(trace.calls[0].trace.rounds).toHaveLength(2);
-    expect(trace.calls[0].trace.rounds[0]).toMatchObject({
+    expect(preview.trace.initialMessages.reduce((total: number, message: { content?: string }) => total + String(message.content ?? "").length, 0)).toBeLessThanOrEqual(3000);
+    expect(preview.trace.initialMessages[1].content).toContain("审核角色规范表");
+    expect(preview.trace.rounds).toHaveLength(2);
+    expect(preview.trace.rounds[0]).toMatchObject({
+      round: 1,
+      messageCount: expect.any(Number),
+      promptChars: expect.any(Number),
+      attemptCount: 1,
+      toolExecutionCount: 2
+    });
+    expect(preview.trace.rounds[0]).not.toHaveProperty("request");
+    expect(preview.trace.rounds[0]).not.toHaveProperty("attempts");
+    expect(preview.trace.rounds[0]).not.toHaveProperty("toolExecutions");
+
+    const fullResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/${callId}?full=true`).expect(200);
+    const fullTrace = fullResponse.body.data.trace;
+    expect(fullTrace.initialMessages[1].content).toContain("审核角色规范表");
+    expect(fullTrace.rounds).toHaveLength(2);
+    expect(fullTrace.rounds[0]).toMatchObject({
       round: 1,
       request: {
         model: "trace-model",
@@ -125,14 +155,14 @@ describe("AI 分析全流程追踪", () => {
         { id: "tool-grep", name: "grep", status: "completed" }
       ]
     });
-    expect(trace.calls[0].trace.rounds[1].request.messages).toEqual(expect.arrayContaining([
+    expect(fullTrace.rounds[1].request.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: "assistant", tool_calls: expect.any(Array) }),
       expect.objectContaining({ role: "tool", tool_call_id: "tool-search" }),
       expect.objectContaining({ role: "tool", tool_call_id: "tool-grep" })
     ]));
-    expect(JSON.stringify(trace)).not.toContain("sk-trace-secret");
-    expect(JSON.stringify(trace)).toContain("Bearer [REDACTED]");
-    expect(trace.calls[0].trace.rounds[0].attempts[0].response).not.toHaveProperty("debug");
+    expect(JSON.stringify(fullTrace)).not.toContain("sk-trace-secret");
+    expect(JSON.stringify(fullTrace)).toContain("Bearer [REDACTED]");
+    expect(fullTrace.rounds[0].attempts[0].response).not.toHaveProperty("debug");
 
     const call = runtime.database.get<Record<string, unknown>>("SELECT task_id FROM ai_calls WHERE id = ?", trace.calls[0].id);
     expect(call?.task_id).toBe(task.body.data.id);
@@ -142,7 +172,7 @@ describe("AI 分析全流程追踪", () => {
     expect(retainedTrace.body.data.calls[0]).toMatchObject({
       provider: { id: provider.body.data.id, name: "已删除的供应商", deleted: true },
       model: { id: model.body.data.id, displayName: "已删除的模型", modelId: null, deleted: true },
-      trace: { rounds: expect.any(Array) }
+      trace: { available: true, roundCount: 2 }
     });
   });
 
@@ -160,6 +190,64 @@ describe("AI 分析全流程追踪", () => {
       captured: false,
       calls: []
     });
+  });
+
+  it("多次超长调用只在摘要后按单次调用加载预览与全文", async () => {
+    runtime = createTestRuntime();
+    const work = await request(runtime.app).post("/api/works").send({ title: "超长追踪测试" }).expect(201);
+    const task = await request(runtime.app).post(`/api/works/${work.body.data.id}/tasks`).send({
+      taskType: "book-analysis",
+      scope: { type: "book" }
+    }).expect(201);
+    const unrelatedTask = await request(runtime.app).post(`/api/works/${work.body.data.id}/tasks`).send({
+      taskType: "book-analysis",
+      scope: { type: "book" }
+    }).expect(201);
+    const timestamp = new Date().toISOString();
+    for (let index = 0; index < 20; index += 1) {
+      const callId = `call_large_trace_${index}`;
+      const initialMessages = [
+        { role: "system", content: `SYSTEM_${index}_` + "系".repeat(34_991) },
+        { role: "user", content: `USER_${index}_` + "用".repeat(34_993) }
+      ];
+      runtime.database.run(
+        `INSERT INTO ai_calls (id, work_id, task_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+         status, input_chars, output_chars, created_at, completed_at) VALUES (?, ?, ?, 'book-analysis', ?, ?, '{}', '{}',
+         'completed', 70000, 0, ?, ?)`,
+        callId,
+        work.body.data.id,
+        task.body.data.id,
+        `deleted_provider_${index}`,
+        `deleted_model_${index}`,
+        timestamp,
+        timestamp
+      );
+      runtime.database.run(
+        `INSERT INTO ai_call_traces (call_id, task_id, initial_messages_json, rounds_json, created_at, updated_at)
+         VALUES (?, ?, ?, '[]', ?, ?)`,
+        callId,
+        task.body.data.id,
+        JSON.stringify(initialMessages),
+        timestamp,
+        timestamp
+      );
+    }
+
+    const summaryResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace`).expect(200);
+    expect(summaryResponse.body.data.calls).toHaveLength(20);
+    expect(JSON.stringify(summaryResponse.body.data)).not.toContain("SYSTEM_0_");
+    expect(JSON.stringify(summaryResponse.body.data).length).toBeLessThan(25_000);
+
+    const previewResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/call_large_trace_0`).expect(200);
+    const preview = previewResponse.body.data;
+    expect(preview).toMatchObject({ mode: "preview", previewLimit: 3000, truncated: true, totalPromptChars: 70_000 });
+    expect(preview.trace.initialMessages.reduce((total: number, message: { content?: string }) => total + String(message.content ?? "").length, 0)).toBe(3000);
+    expect(preview.trace.initialMessages.every((message: { content?: string; contentTruncated?: boolean }) => String(message.content ?? "").length > 0 && message.contentTruncated)).toBe(true);
+
+    const fullResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/call_large_trace_0?full=true`).expect(200);
+    expect(fullResponse.body.data.mode).toBe("full");
+    expect(fullResponse.body.data.trace.initialMessages.reduce((total: number, message: { content?: string }) => total + String(message.content ?? "").length, 0)).toBe(70_000);
+    await request(runtime.app).get(`/api/tasks/${unrelatedTask.body.data.id}/trace/calls/call_large_trace_0`).expect(404);
   });
 
   it("供应商错误响应反射密钥时统一脱敏调用与追踪失败信息", async () => {
