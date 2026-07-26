@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  RelationshipApproximateMatchLimitError,
   damerauLevenshteinDistance,
   findApproximateNameMatches,
   relationshipCharacterTokens,
@@ -28,5 +29,16 @@ describe("人物关系来源搜索", () => {
   it("中文名称不会把拉丁字段名或单字残片当成近似写法", () => {
     expect(findApproximateNameMatches('{"name":"纪宁"}', "阿宁").some((item) => item.observed === "am")).toBe(false);
     expect(findApproximateNameMatches("人物纪宁属于守望会", "阿宁").some((item) => item.observed === "宁")).toBe(false);
+  });
+
+  it("在截取结果前排除其他已登记人物名", () => {
+    const matches = findApproximateNameMatches("摩斯拉反复出现，最终莫斯啦现身", "魔斯拉", 1, new Set(["摩斯拉"]));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.observed).toBe("莫斯啦");
+  });
+
+  it("疑似窗口超过预算时显式失败", () => {
+    expect(() => findApproximateNameMatches("摩斯拉".repeat(5), "魔斯拉", 3, new Set(), 1))
+      .toThrow(RelationshipApproximateMatchLimitError);
   });
 });

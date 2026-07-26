@@ -78,14 +78,29 @@ export type ApproximateNameMatch = {
   pinyinDistance: number;
 };
 
-export function findApproximateNameMatches(content: string, reference: string, limit = 3): ApproximateNameMatch[] {
+export class RelationshipApproximateMatchLimitError extends Error {
+  constructor(readonly maximumCandidates: number) {
+    super(`Approximate relationship match candidates exceeded ${maximumCandidates}`);
+    this.name = "RelationshipApproximateMatchLimitError";
+  }
+}
+
+export function findApproximateNameMatches(
+  content: string,
+  reference: string,
+  limit = 3,
+  excludedObserved: ReadonlySet<string> = new Set(),
+  maximumCandidates = 256
+): ApproximateNameMatch[] {
   const normalizedContent = normalizeRelationshipSearchText(content);
   const normalizedReference = normalizeRelationshipSearchText(reference).trim();
   const sourceCharacters = [...normalizedContent];
   const referenceCharacters = [...normalizedReference];
   if (referenceCharacters.length < 2 || sourceCharacters.length === 0) return [];
   const hanReference = referenceCharacters.every((character) => /\p{Script=Han}/u.test(character));
+  const normalizedExcluded = new Set([...excludedObserved].map((item) => normalizeRelationshipSearchText(item).trim()));
   const referencePinyin = relationshipPinyinSyllables(normalizedReference);
+  const sourcePinyin = relationshipPinyinSyllables(normalizedContent);
   const matches: ApproximateNameMatch[] = [];
   const seen = new Set<string>();
   for (const windowLength of [referenceCharacters.length, referenceCharacters.length - 1, referenceCharacters.length + 1]) {
@@ -95,15 +110,16 @@ export function findApproximateNameMatches(content: string, reference: string, l
       if (observedCharacters.length < 2) continue;
       if (hanReference && !observedCharacters.every((character) => /\p{Script=Han}/u.test(character))) continue;
       const observed = observedCharacters.join("");
-      if (!observed.trim() || observed === normalizedReference) continue;
+      if (!observed.trim() || observed === normalizedReference || normalizedExcluded.has(observed)) continue;
       const characterDistance = damerauLevenshteinDistance(referenceCharacters, observedCharacters, 1);
-      const observedPinyin = relationshipPinyinSyllables(observed);
+      const observedPinyin = sourcePinyin.slice(start, start + windowLength);
       const pinyinDistance = damerauLevenshteinDistance(referencePinyin, observedPinyin, 1);
       if (characterDistance > 1 && pinyinDistance > 1) continue;
       const key = `${start}:${observed}`;
       if (seen.has(key)) continue;
       seen.add(key);
       matches.push({ observed, start, end: start + windowLength, characterDistance, pinyinDistance });
+      if (matches.length > maximumCandidates) throw new RelationshipApproximateMatchLimitError(maximumCandidates);
     }
   }
   const ranked = matches.sort((left, right) =>
