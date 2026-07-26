@@ -90,4 +90,32 @@ describe("人物关系来源增量索引", () => {
     expect(runtime.database.get("PRAGMA integrity_check")?.integrity_check).toBe("ok");
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
+
+  it("分卷改名会重建引用卷标题的伏笔来源索引", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "无关正文。");
+    const workId = String(seeded.work.id);
+    runtime.store.updateVolume(String(seeded.volume.id), { title: "魔斯拉卷" });
+    const foreshadow = runtime.store.createForeshadow(workId, {
+      title: "远航线索",
+      description: "记录一次普通远航。",
+      occurrences: [{ chapterId: String(seeded.chapter.id), role: "setup", note: "首次出现" }]
+    });
+    const ai = runtime.ai as unknown as { ensureRelationshipSearchIndex(workId: string): Promise<number> };
+    await ai.ensureRelationshipSearchIndex(workId);
+
+    const matchingForeshadowIds = (): string[] => runtime!.database.all(
+      `SELECT source.source_id FROM relationship_source_exact_fts
+       JOIN relationship_source_search source ON source.id = relationship_source_exact_fts.rowid
+       WHERE source.source_type = 'foreshadow' AND relationship_source_exact_fts MATCH ?`,
+      ftsPhrase(relationshipCharacterTokens("魔斯拉"))
+    ).map((row) => String(row.source_id));
+    expect(matchingForeshadowIds()).toContain(String(foreshadow.id));
+
+    runtime.store.updateVolume(String(seeded.volume.id), { title: "无关卷" });
+    await ai.ensureRelationshipSearchIndex(workId);
+    expect(matchingForeshadowIds()).not.toContain(String(foreshadow.id));
+    expect(runtime.database.get("PRAGMA integrity_check")?.integrity_check).toBe("ok");
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
 });

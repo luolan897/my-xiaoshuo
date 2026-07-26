@@ -2006,6 +2006,47 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(46)) {
+      this.transaction(() => {
+        this.raw.exec(`
+          DROP TRIGGER IF EXISTS relationship_index_volume_dependencies_au;
+          CREATE TRIGGER relationship_index_volume_dependencies_au AFTER UPDATE ON volumes BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT chapter.work_id, 'chapter-outline', chapter.id, datetime('now')
+            FROM chapters chapter JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+            WHERE chapter.volume_id = new.id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT DISTINCT foreshadow.work_id, 'foreshadow', foreshadow.id, datetime('now')
+            FROM foreshadows foreshadow
+            JOIN foreshadow_occurrences occurrence ON occurrence.foreshadow_id = foreshadow.id
+            JOIN chapters chapter ON chapter.id = occurrence.chapter_id
+            WHERE chapter.volume_id = new.id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+        `);
+        const timestamp = new Date().toISOString();
+        this.run(
+          `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+           SELECT work_id, 'foreshadow', id, ? FROM foreshadows
+           WHERE 1
+           ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+          timestamp
+        );
+        this.run(
+          `UPDATE relationship_source_index_state SET status = 'queued', error = '', updated_at = ?
+           WHERE work_id IN (SELECT DISTINCT work_id FROM foreshadows)`,
+          timestamp
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (46, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {
