@@ -4076,7 +4076,6 @@ async function renderTasks(page = taskListPage) {
       <td class="task-row-actions">
         <button class="ghost-button" type="button" data-task-detail="${esc(item.id)}">详情</button>
         ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
-        ${canRerunAnalysisTask(item) ? `<button class="ghost-button" type="button" data-rerun-task="${esc(item.id)}">按原配置重跑</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
     </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
@@ -4159,9 +4158,6 @@ async function renderTasks(page = taskListPage) {
       toast(error.message, "error");
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
     }
-  }));
-  $("#module-content").querySelectorAll("[data-rerun-task]").forEach((button) => button.addEventListener("click", async () => {
-    await rerunAnalysisTask(button.dataset.rerunTask, button);
   }));
   $("#module-content").querySelectorAll("[data-cancel-task]").forEach((button) => button.addEventListener("click", async () => {
     button.disabled = true;
@@ -4645,7 +4641,7 @@ function openTaskDetailDialog(task, trace) {
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
         <div><strong>失败信息</strong>${failureHtml}${identityRepairHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
-        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重跑</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
+        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重新执行</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
