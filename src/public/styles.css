@@ -1371,6 +1371,27 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-result-json-content textarea { width: 100%; min-height: 360px; max-height: 52vh; resize: vertical; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--ink); font-family: var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; line-height: 1.55; tab-size: 2; white-space: pre; }
 .task-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
 .task-detail-actions small { color: var(--muted); }
+.relationship-identity-repair-entry { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.relationship-identity-repair-entry > div { display: grid; gap: 4px; }
+.relationship-identity-repair-entry strong { color: var(--ink); }
+.relationship-identity-repair-entry p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.relationship-identity-repair-entry button, .relationship-identity-repair-entry small { flex: 0 0 auto; }
+.relationship-identity-repair-summary { display: grid; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+.relationship-identity-repair-summary > div:first-child { display: grid; gap: 4px; }
+.relationship-identity-repair-summary > div:first-child > span { color: var(--accent-dark); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.relationship-identity-repair-summary h3, .relationship-identity-repair-summary p { margin: 0; }
+.relationship-identity-repair-summary h3 { color: var(--ink); font-size: 17px; }
+.relationship-identity-repair-summary p { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.relationship-identity-repair-summary dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 0; }
+.relationship-identity-repair-summary dl > div { display: grid; gap: 2px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.relationship-identity-repair-summary dt { color: var(--muted); font-size: 9px; }
+.relationship-identity-repair-summary dd { margin: 0; color: var(--ink); font-family: var(--font-latin), monospace; font-size: 11px; font-weight: 700; }
+.relationship-identity-anchor-list { display: grid; gap: 6px; }
+.relationship-identity-anchor-list > strong { color: var(--ink); font-size: 10px; }
+.relationship-identity-anchor-list > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.relationship-identity-anchor-list span, .relationship-identity-anchor-list em { padding: 4px 7px; border-radius: 12px; background: var(--paper-deep); color: var(--muted); font-size: 9px; font-style: normal; }
+.relationship-identity-repair-guidance { margin: 0; padding: 10px 12px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 10px; line-height: 1.65; }
+.relationship-identity-full-profile { justify-self: start; }
 .task-trace-section { display: grid; gap: 16px; min-width: 0; margin-top: 6px; }
 .task-trace-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding-top: 8px; }
 .task-trace-heading h3 { margin: 3px 0 0; font-size: 19px; font-weight: 600; }
@@ -2037,6 +2058,25 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-overwrite-card .checkbox-field { color: var(--ink); font-size: 11px; font-weight: 600; }
 .relationship-overwrite-card > p { margin: 0 0 0 25px; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .relationship-overwrite-card:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.relationship-source-preview-card { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.relationship-source-preview-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.relationship-source-preview-header > div { display: grid; gap: 4px; }
+.relationship-source-preview-header strong { color: var(--ink); font-size: 11px; }
+.relationship-source-preview-header p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.relationship-source-preview-header button { flex: 0 0 auto; padding: 7px 10px; font-size: 10px; }
+.relationship-source-preview-content { display: grid; gap: 9px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.relationship-source-preview-content.is-loading { color: var(--accent-dark); }
+.relationship-source-preview-summary { display: flex; flex-wrap: wrap; gap: 6px 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.relationship-source-preview-summary strong { color: var(--ink); }
+.relationship-source-preview-list { display: grid; gap: 6px; max-height: 240px; overflow-y: auto; padding-right: 3px; }
+.dialog-fields .relationship-source-preview-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); cursor: pointer; }
+.dialog-fields .relationship-source-preview-row input { width: 15px; height: 15px; margin: 0; }
+.relationship-source-preview-main { display: grid; gap: 2px; min-width: 0; }
+.relationship-source-preview-main strong { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.relationship-source-preview-main small { color: var(--muted); font-size: 9px; }
+.relationship-source-preview-match { padding: 2px 6px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-size: 8px; white-space: nowrap; }
+.relationship-source-preview-match.is-fuzzy { background: color-mix(in srgb, var(--warning, #a56f19) 12%, transparent); color: var(--warning, #8b5c10); }
+.relationship-source-preview-empty { margin: 0; padding: 9px; border: 1px dashed var(--line); border-radius: 4px; }
 .model-temperature-hint { margin: 0; color: var(--accent-dark); font-size: 10px; line-height: 1.55; }
 .item-list-rows { display: grid; gap: 7px; }
 .item-list-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
