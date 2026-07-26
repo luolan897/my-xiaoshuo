@@ -44,6 +44,7 @@ import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global
 import { resolveGlobalSearchTarget } from "/global-search.js?v=20260726-search-result-details";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -128,6 +129,12 @@ let collaborationAutoSaveDisabled = false;
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
 let relationshipSearchIndexRefreshTimer = null;
+let backgroundTaskCenterTimer = null;
+let backgroundTaskCenterRequest = 0;
+let backgroundTaskCenterWorkId = null;
+let backgroundTaskCenterTasksInitialized = false;
+let backgroundTaskCenterTaskSnapshots = new Map();
+let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
 const taskProgressRefreshInterval = 2_500;
 const taskStatusSnapshots = new Map();
 
@@ -270,6 +277,7 @@ function applyWorkAccessMode() {
   $("#ai-prompt").readOnly = aiReadOnly;
   $("#ai-prompt").setAttribute("aria-readonly", String(aiReadOnly));
   $("#ai-send").classList.toggle("permission-hidden", aiReadOnly);
+  updateBackgroundTaskCenterVisibility();
   if (proseReadOnly) {
     chapterEditorReadOnly = true;
     cancelChapterAutoSave();
@@ -2482,6 +2490,7 @@ async function initializePage() {
 }
 
 function showShelf() {
+  stopBackgroundTaskCenter();
   state.dirty = false;
   settingsReturnContext = null;
   updateDocumentTitle();
@@ -2835,6 +2844,7 @@ function renderShelf() {
 }
 
 function resetWorkScopedUiCaches() {
+  stopBackgroundTaskCenter();
   workScopedUiGeneration += 1;
   loadedAiModelsWorkId = null;
   loadedAiReferencesWorkId = null;
@@ -2890,6 +2900,7 @@ async function selectWork(workId, preferredChapterId = null) {
   chapterEditorReadOnly = true;
   if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
   applyWorkAccessMode();
+  startBackgroundTaskCenter(nextWork.id);
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   $("#top-search-button").disabled = !canReadAggregateContent();
@@ -4103,6 +4114,7 @@ async function renderTasks(page = taskListPage) {
     try {
       const result = await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
       toast(`已开始下一轮，队列中还有 ${result.pendingCount} 个待执行任务`);
+      await refreshBackgroundTaskCenter({ announce: false });
       await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -4141,6 +4153,7 @@ async function renderTasks(page = taskListPage) {
       scheduleTaskProgressRefresh(workId, 1);
       const completed = await api(`/api/tasks/${button.dataset.runTask}/run`, { method: "POST", body: {} });
       toast(completed.status === "cancelled" ? "分析任务已取消" : completed.status === "expired" ? "正文已变化，本次分析已过期" : "分析已完成");
+      await refreshBackgroundTaskCenter({ announce: false });
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -4155,6 +4168,7 @@ async function renderTasks(page = taskListPage) {
     try {
       await api(`/api/tasks/${button.dataset.cancelTask}/cancel`, { method: "POST", body: {} });
       toast("分析任务已取消");
+      await refreshBackgroundTaskCenter({ announce: false });
       if (state.module === "tasks") await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -4735,6 +4749,226 @@ function relationshipIndexStatusMarkup(status) {
     <div class="relationship-index-queue"><div class="relationship-index-queue-heading"><strong>增量任务队列</strong><span>仅包含新增、修改或删除后待同步的来源</span></div><div class="relationship-index-queue-list">${queueMarkup}</div></div>
     ${errorMarkup}
   </div>`;
+}
+
+function updateBackgroundTaskCenterVisibility() {
+  const button = $("#background-task-button");
+  if (!button) return;
+  const visible = Boolean(state.work)
+    && (canReadModule("tasks") || canReadModule("ai-settings"));
+  button.classList.toggle("hidden", !visible);
+  if (!visible) {
+    $("#background-task-count")?.classList.add("hidden");
+    return;
+  }
+  const activityCount = backgroundTaskActivityCount(
+    backgroundTaskCenterSnapshot.taskPage,
+    backgroundTaskCenterSnapshot.relationshipIndex
+  );
+  const badge = $("#background-task-count");
+  badge.textContent = activityCount > 99 ? "99+" : String(activityCount);
+  badge.classList.toggle("hidden", activityCount === 0);
+  button.classList.toggle("is-active", activityCount > 0);
+  button.setAttribute("aria-label", activityCount > 0 ? `后台任务中心，${activityCount} 项进行中` : "后台任务中心");
+  button.setAttribute("title", activityCount > 0 ? `后台任务中心 · ${activityCount} 项进行中` : "后台任务中心");
+}
+
+function backgroundTaskTransitionMessage(transition) {
+  const label = analysisTaskTypeLabel(transition.task.taskType);
+  if (transition.status === "partial") return { message: `${label}部分失败，请打开任务详情查看`, type: "error" };
+  if (transition.status === "expired") return { message: `${label}已过期，正文可能已发生变化`, type: "error" };
+  if (transition.status === "cancelled") return { message: `${label}已取消`, type: "info" };
+  return { message: `${label}已完成`, type: "info" };
+}
+
+function backgroundTaskListMarkup(taskPage, error) {
+  if (!canReadModule("tasks")) {
+    return '<section class="background-task-section"><div class="background-task-section-heading"><div><strong>AI 分析任务</strong><small>当前账户无权查看此模块</small></div></div></section>';
+  }
+  if (!taskPage) {
+    return `<section class="background-task-section"><div class="background-task-section-heading"><div><strong>AI 分析任务</strong><small>${esc(error || "正在读取任务队列")}</small></div></div></section>`;
+  }
+  const tasks = Array.isArray(taskPage.items) ? taskPage.items.slice(0, 10) : [];
+  const pendingCount = Number(taskPage.stats?.pendingCount ?? 0);
+  const runningCount = Number(taskPage.stats?.runningCount ?? 0);
+  return `<section class="background-task-section">
+    <div class="background-task-section-heading"><div><strong>AI 分析任务</strong><small>待执行 ${pendingCount} 个 · 运行中 ${runningCount} 个 · 共 ${Number(taskPage.stats?.total ?? taskPage.total ?? tasks.length)} 个</small></div></div>
+    ${error ? `<p class="background-task-error">${esc(error)}</p>` : ""}
+    ${tasks.length ? `<div class="background-task-list">${tasks.map((item) => {
+      const status = normalizedAnalysisTaskStatus(item.status);
+      return `<article class="background-task-row">
+        <span class="task-status-badge is-${esc(status)}"><span class="task-status-indicator" aria-hidden="true"></span><span>${esc(analysisTaskStatusLabel(item.status))}</span></span>
+        <div><strong>${esc(analysisTaskTypeLabel(item.taskType))}</strong><small>${esc(item.scopeSummary || "未指定范围")} · ${esc(item.model?.displayName || "默认模型")}</small></div>
+        <span class="background-task-progress">${analysisTaskProgressValue(item.progress)}%</span>
+        <button class="ghost-button" type="button" data-background-task-detail="${esc(item.id)}">详情</button>
+      </article>`;
+    }).join("")}</div>` : '<p class="background-task-empty">还没有 AI 分析任务。</p>'}
+  </section>`;
+}
+
+function backgroundIndexMarkup(relationshipIndex, error) {
+  if (!canReadModule("ai-settings")) {
+    return '<section class="background-task-section"><div class="background-task-section-heading"><div><strong>人物关系拼音索引</strong><small>当前账户无权查看此模块</small></div></div></section>';
+  }
+  if (!relationshipIndex) {
+    return `<section class="background-task-section"><div class="background-task-section-heading"><div><strong>人物关系拼音索引</strong><small>${esc(error || "正在读取索引队列")}</small></div></div></section>`;
+  }
+  const editable = canEditModule("ai-settings");
+  return `<section class="background-task-section">
+    <div class="background-task-section-heading">
+      <div><strong>人物关系拼音索引</strong><small>可在任何模块查看增量同步状态</small></div>
+      <div class="background-index-actions ${editable ? "" : "hidden"}">
+        <button class="primary-button" type="button" data-background-index-action="sync">同步增量队列</button>
+        <button class="ghost-button" type="button" data-background-index-action="rebuild">完整重建</button>
+      </div>
+    </div>
+    ${error ? `<p class="background-task-error">${esc(error)}</p>` : ""}
+    ${relationshipIndexStatusMarkup(relationshipIndex)}
+  </section>`;
+}
+
+function renderBackgroundTaskCenter() {
+  updateBackgroundTaskCenterVisibility();
+  const content = $("#background-task-content");
+  if (!content) return;
+  content.innerHTML = `${backgroundTaskListMarkup(
+    backgroundTaskCenterSnapshot.taskPage,
+    backgroundTaskCenterSnapshot.errors.tasks
+  )}${backgroundIndexMarkup(
+    backgroundTaskCenterSnapshot.relationshipIndex,
+    backgroundTaskCenterSnapshot.errors.index
+  )}`;
+  $("#background-task-dialog-meta").textContent = state.work
+    ? `《${state.work.title}》的分析任务与索引队列`
+    : "当前作品的分析任务与索引队列";
+  $("#background-task-open-analysis").classList.toggle("hidden", !canReadModule("tasks"));
+  content.querySelectorAll("[data-background-task-detail]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const taskId = encodeURIComponent(button.dataset.backgroundTaskDetail);
+      const [task, trace] = await Promise.all([
+        api(`/api/tasks/${taskId}/detail`),
+        api(`/api/tasks/${taskId}/trace`).catch((error) => {
+          if (error.code === "WORK_MODULE_READ_DENIED") return { restricted: true, captured: false, calls: [] };
+          throw error;
+        })
+      ]);
+      $("#background-task-dialog").close();
+      openTaskDetailDialog(task, trace);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+  content.querySelectorAll("[data-background-index-action]").forEach((button) => button.addEventListener("click", async () => {
+    if (!backgroundTaskCenterWorkId) return;
+    button.disabled = true;
+    const action = button.dataset.backgroundIndexAction;
+    try {
+      const status = await api(`/api/works/${encodeURIComponent(backgroundTaskCenterWorkId)}/ai-settings/relationship-search-index/${action}`, {
+        method: "POST"
+      });
+      backgroundTaskCenterSnapshot.relationshipIndex = status;
+      renderBackgroundTaskCenter();
+      toast(action === "rebuild"
+        ? `已将全部来源加入索引队列，共 ${status.queuedSourceCount} 项`
+        : Number(status.queuedSourceCount) > 0
+          ? `开始同步 ${status.queuedSourceCount} 项增量任务`
+          : "增量任务队列为空，索引已是最新状态");
+      scheduleBackgroundTaskCenterRefresh();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+}
+
+function scheduleBackgroundTaskCenterRefresh() {
+  if (backgroundTaskCenterTimer !== null) window.clearTimeout(backgroundTaskCenterTimer);
+  backgroundTaskCenterTimer = null;
+  if (!backgroundTaskCenterWorkId) return;
+  const activityCount = backgroundTaskActivityCount(
+    backgroundTaskCenterSnapshot.taskPage,
+    backgroundTaskCenterSnapshot.relationshipIndex
+  );
+  const delay = backgroundTaskPollDelay(activityCount, Boolean($("#background-task-dialog")?.open));
+  backgroundTaskCenterTimer = window.setTimeout(() => {
+    backgroundTaskCenterTimer = null;
+    void refreshBackgroundTaskCenter();
+  }, delay);
+}
+
+async function refreshBackgroundTaskCenter({ announce = true } = {}) {
+  const workId = backgroundTaskCenterWorkId;
+  if (!workId || state.work?.id !== workId) return;
+  if (backgroundTaskCenterTimer !== null) window.clearTimeout(backgroundTaskCenterTimer);
+  backgroundTaskCenterTimer = null;
+  const requestId = ++backgroundTaskCenterRequest;
+  const readTasks = canReadModule("tasks");
+  const readIndex = canReadModule("ai-settings");
+  const [taskResult, indexResult] = await Promise.all([
+    readTasks
+      ? api(`/api/works/${encodeURIComponent(workId)}/tasks?page=1&limit=30`)
+        .then((value) => ({ value }))
+        .catch((error) => ({ error }))
+      : Promise.resolve(null),
+    readIndex
+      ? api(`/api/works/${encodeURIComponent(workId)}/ai-settings/relationship-search-index`)
+        .then((value) => ({ value }))
+        .catch((error) => ({ error }))
+      : Promise.resolve(null)
+  ]);
+  if (requestId !== backgroundTaskCenterRequest || backgroundTaskCenterWorkId !== workId || state.work?.id !== workId) return;
+  const errors = {};
+  if (taskResult?.value) {
+    const transitionResult = collectBackgroundTaskTransitions(
+      backgroundTaskCenterTaskSnapshots,
+      taskResult.value.items,
+      backgroundTaskCenterTasksInitialized
+    );
+    backgroundTaskCenterTaskSnapshots = transitionResult.snapshots;
+    backgroundTaskCenterSnapshot.taskPage = taskResult.value;
+    if (backgroundTaskCenterTasksInitialized && announce && state.module !== "tasks") {
+      for (const transition of transitionResult.transitions) {
+        const notification = backgroundTaskTransitionMessage(transition);
+        toast(notification.message, notification.type);
+      }
+    }
+    backgroundTaskCenterTasksInitialized = true;
+  } else if (taskResult?.error) {
+    errors.tasks = taskResult.error.message;
+    console.error("Failed to refresh background analysis tasks", taskResult.error);
+  }
+  if (indexResult?.value) {
+    backgroundTaskCenterSnapshot.relationshipIndex = indexResult.value;
+  } else if (indexResult?.error) {
+    errors.index = indexResult.error.message;
+    console.error("Failed to refresh relationship search index status", indexResult.error);
+  }
+  backgroundTaskCenterSnapshot.errors = errors;
+  renderBackgroundTaskCenter();
+  scheduleBackgroundTaskCenterRefresh();
+}
+
+function stopBackgroundTaskCenter() {
+  if (backgroundTaskCenterTimer !== null) window.clearTimeout(backgroundTaskCenterTimer);
+  backgroundTaskCenterTimer = null;
+  backgroundTaskCenterRequest += 1;
+  backgroundTaskCenterWorkId = null;
+  backgroundTaskCenterTasksInitialized = false;
+  backgroundTaskCenterTaskSnapshots = new Map();
+  backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
+  const dialog = $("#background-task-dialog");
+  if (dialog?.open) dialog.close();
+  $("#background-task-button")?.classList.add("hidden");
+  $("#background-task-count")?.classList.add("hidden");
+}
+
+function startBackgroundTaskCenter(workId) {
+  stopBackgroundTaskCenter();
+  backgroundTaskCenterWorkId = String(workId);
+  renderBackgroundTaskCenter();
+  void refreshBackgroundTaskCenter();
 }
 
 async function renderPlatformAiConfig() {
@@ -6825,6 +7059,7 @@ async function openTaskDialog() {
         }));
     }
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
+    await refreshBackgroundTaskCenter({ announce: false });
     taskListPage = 1;
     toast("分析任务已创建，已进入任务队列");
     void renderTasks(1).catch((error) => toast(`任务已创建，但列表刷新失败：${error.message}`, "error"));
@@ -8474,6 +8709,26 @@ $(".quick-actions").addEventListener("click", (event) => {
 });
 $("#top-search-button").addEventListener("click", () => {
   openSearchDialog().catch((error) => toast(error.message, "error"));
+});
+$("#background-task-button").addEventListener("click", () => {
+  renderBackgroundTaskCenter();
+  const dialog = $("#background-task-dialog");
+  if (!dialog.open) dialog.showModal();
+  void refreshBackgroundTaskCenter();
+});
+$("#background-task-dialog").addEventListener("close", scheduleBackgroundTaskCenterRefresh);
+$("#background-task-refresh").addEventListener("click", async () => {
+  const button = $("#background-task-refresh");
+  button.disabled = true;
+  try {
+    await refreshBackgroundTaskCenter();
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#background-task-open-analysis").addEventListener("click", () => {
+  $("#background-task-dialog").close();
+  showModule("tasks").catch((error) => toast(error.message, "error"));
 });
 $("#search-dialog-close").addEventListener("click", () => $("#search-dialog").close());
 $("#search-form").addEventListener("submit", async (event) => {
