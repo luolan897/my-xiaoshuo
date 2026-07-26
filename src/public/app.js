@@ -4796,42 +4796,77 @@ function commitRelationshipKeywordInputs(container) {
 
 function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   void discardPendingMarkdownAttachments();
+  const dialog = $("#form-dialog");
+  const form = $("#dynamic-form");
+  const submit = $("#dialog-submit");
+  const submitStatus = $("#dialog-submit-status");
+  const submitStatusMessage = $("#dialog-submit-status-message");
+  const submitLabel = options.submitLabel ?? "保存";
+  let submitting = false;
+  let disabledStates = [];
   $("#dialog-title").textContent = title;
   $("#dialog-eyebrow").textContent = eyebrow;
   $("#dialog-meta").textContent = options.meta ?? "";
   $("#dialog-meta").classList.toggle("hidden", !options.meta);
   $("#dialog-fields").innerHTML = fields;
-  $("#dialog-submit").textContent = options.submitLabel ?? "保存";
+  submit.textContent = submitLabel;
+  submitStatusMessage.textContent = options.pendingMessage ?? "正在提交，请稍候";
+  submitStatus.classList.add("hidden");
+  form.classList.remove("is-submitting");
+  form.removeAttribute("aria-busy");
   $("#dynamic-form .dialog-actions [value='cancel']").classList.toggle("hidden", Boolean(options.hideCancel));
-  $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
-  $("#form-dialog").classList.toggle("trace-dialog", Boolean(options.trace));
+  dialog.classList.toggle("wide-dialog", Boolean(options.wide));
+  dialog.classList.toggle("trace-dialog", Boolean(options.trace));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
   bindVditorEditors($("#dialog-fields"));
-  const form = $("#dynamic-form");
   form.onclick = null;
   form.onkeydown = null;
+  dialog.oncancel = (event) => {
+    if (submitting) event.preventDefault();
+  };
   form.onsubmit = async (event) => {
+    if (submitting) {
+      event.preventDefault();
+      return;
+    }
     if (event.submitter?.value === "cancel") {
       void discardPendingMarkdownAttachments();
       return;
     }
     event.preventDefault();
-    const submit = $("#dialog-submit");
-    submit.disabled = true;
+    submitting = true;
+    form.setAttribute("aria-busy", "true");
+    form.classList.add("is-submitting");
+    submitStatus.classList.remove("hidden");
+    submit.textContent = options.pendingLabel ?? "处理中…";
     try {
       commitRelationshipKeywordInputs(form);
-      await onSubmit(new FormData(form));
+      const formData = new FormData(form);
+      disabledStates = [...form.elements].map((control) => [control, control.disabled]);
+      disabledStates.forEach(([control]) => {
+        control.disabled = true;
+      });
+      await onSubmit(formData);
       const markdown = [...form.querySelectorAll("[data-vditor-value]")].map((textarea) => textarea.value).join("\n\n");
       await cleanupPendingMarkdownAttachments(markdown);
-      $("#form-dialog").close();
+      dialog.close();
     } catch (error) {
-      toast(error.message, "error");
+      const message = error instanceof Error ? error.message : "未知错误";
+      toast(`${options.errorPrefix ?? ""}${message}`, "error");
     } finally {
-      submit.disabled = false;
+      disabledStates.forEach(([control, wasDisabled]) => {
+        control.disabled = wasDisabled;
+      });
+      disabledStates = [];
+      submitting = false;
+      form.removeAttribute("aria-busy");
+      form.classList.remove("is-submitting");
+      submitStatus.classList.add("hidden");
+      submit.textContent = submitLabel;
     }
   };
-  $("#form-dialog").showModal();
+  dialog.showModal();
   $("#dialog-fields").scrollTop = 0;
 }
 
@@ -6257,7 +6292,13 @@ async function openTaskDialog() {
       : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
     taskListPage = 1;
-    await renderTasks(1);
+    toast("分析任务已创建，已进入任务队列");
+    void renderTasks(1).catch((error) => toast(`任务已创建，但列表刷新失败：${error.message}`, "error"));
+  }, "AI 分析", {
+    submitLabel: "创建任务",
+    pendingLabel: "创建中…",
+    pendingMessage: "正在创建分析任务，请稍候",
+    errorPrefix: "任务创建失败："
   });
   const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
   const scopeTypeSelect = $("#dialog-fields").querySelector('select[name="scopeType"]');

@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260726-module-page-sizes">
+    <link rel="stylesheet" href="/styles.css?v=20260726-task-submit-loading">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -337,6 +337,10 @@
           <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
         </div>
         <div id="dialog-fields" class="dialog-fields"></div>
+        <div id="dialog-submit-status" class="dialog-submit-status hidden" role="status" aria-live="polite">
+          <span id="dialog-submit-status-message">正在提交，请稍候</span>
+          <div class="dialog-submit-progress" role="progressbar" aria-label="提交处理中" aria-valuetext="正在等待服务器响应"><span></span></div>
+        </div>
         <div class="dialog-actions">
           <button class="ghost-button" value="cancel" type="submit">取消</button>
           <button id="dialog-submit" class="primary-button" value="default" type="submit">保存</button>
@@ -741,6 +745,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260726-module-page-sizes"></script>
+    <script type="module" src="/app.js?v=20260726-task-submit-loading"></script>
   </body>
 </html>
