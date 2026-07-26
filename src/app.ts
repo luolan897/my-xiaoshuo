@@ -408,7 +408,7 @@ const contextSchema = z.object({
 
 const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
 const relationshipAnalysisScopeSchema = z.object({
-  type: z.enum(["chapter", "book"]),
+  type: z.enum(["chapter", "book", "settings"]),
   chapterId: identifier.optional(),
   includeAllSettings: z.boolean().optional(),
   additionalPrompt: z.string().trim().max(10_000).optional(),
@@ -1546,10 +1546,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     redactTaskCharacterNames(store.getTask(request.params.taskId), requestPermissions(request))
   ));
   app.get("/api/tasks/:taskId/trace", (request, response) => data(response, ai.getTaskTrace(request.params.taskId)));
-  app.get("/api/tasks/:taskId/trace/calls/:callId", (request, response) => {
-    const full = parse(z.enum(["true", "false"]).default("false"), request.query.full ?? "false") === "true";
-    data(response, ai.getTaskTraceCall(request.params.taskId, request.params.callId, full));
-  });
+  app.get("/api/tasks/:taskId/trace/calls/:callId", (request, response) =>
+    data(response, ai.getTaskTraceCall(request.params.taskId, request.params.callId)));
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
     data(response, redactTaskCharacterNames(

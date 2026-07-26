@@ -4241,32 +4241,6 @@ function renderTaskTraceRound(round) {
   </section>`;
 }
 
-function renderTaskTraceRoundSummary(round) {
-  return `<section class="task-trace-round task-trace-round-summary">
-    <header class="task-trace-round-header">
-      <span class="task-trace-round-index">${esc(String(round?.round ?? 1))}</span>
-      <div><strong>Agent 轮次 ${esc(String(round?.round ?? 1))}</strong><small>${Number(round?.messageCount ?? 0)} 条消息 · ${Number(round?.attemptCount ?? 0)} 次请求尝试 · ${Number(round?.toolExecutionCount ?? 0)} 次工具执行</small></div>
-      <time>${esc(formatDateTime(round?.requestedAt))}</time>
-    </header>
-    <p>本轮 Prompt 共 ${Number(round?.promptChars ?? 0).toLocaleString("zh-CN")} 字符，正文、模型响应和工具结果尚未传输。</p>
-  </section>`;
-}
-
-function renderTaskTraceCallPreview(detail) {
-  const trace = detail?.trace && typeof detail.trace === "object" ? detail.trace : {};
-  const messages = Array.isArray(trace.initialMessages) ? trace.initialMessages : [];
-  const rounds = Array.isArray(trace.rounds) ? trace.rounds : [];
-  return `<div class="task-trace-load-state is-loaded">
-    <div><strong>Prompt 预览</strong><p>全部消息合计最多传输 ${Number(detail?.previewLimit ?? 3000).toLocaleString("zh-CN")} 个字符；模型响应和工具结果仍未传输。</p></div>
-    <details class="task-trace-initial" open>
-      <summary>初始上下文预览（${messages.length} 条消息 · 原文 ${Number(detail?.totalPromptChars ?? 0).toLocaleString("zh-CN")} 字符）</summary>
-      ${renderTaskTraceMessages(messages)}
-    </details>
-    <div class="task-trace-rounds">${rounds.map(renderTaskTraceRoundSummary).join("") || '<p class="task-trace-empty">尚未记录 Agent 轮次。</p>'}</div>
-    <div class="card-actions"><button class="ghost-button" type="button" data-load-task-trace-call="full">查看完整调用</button></div>
-  </div>`;
-}
-
 function renderTaskTraceCallFull(detail) {
   const trace = detail?.trace && typeof detail.trace === "object" ? detail.trace : {};
   const messages = Array.isArray(trace.initialMessages) ? trace.initialMessages : [];
@@ -4285,19 +4259,17 @@ function bindTaskTraceCallActions(container) {
     const call = button.closest("[data-task-trace-call]");
     const content = call?.querySelector("[data-task-trace-call-content]");
     if (!call || !content || button.disabled) return;
-    const mode = button.dataset.loadTaskTraceCall;
     button.disabled = true;
-    button.textContent = mode === "full" ? "正在加载完整内容" : "正在加载预览";
+    button.textContent = "正在加载中";
     try {
       const taskId = encodeURIComponent(call.dataset.taskTraceTask);
       const callId = encodeURIComponent(call.dataset.taskTraceCall);
-      const detail = await api(`/api/tasks/${taskId}/trace/calls/${callId}${mode === "full" ? "?full=true" : ""}`);
-      content.innerHTML = mode === "full" ? renderTaskTraceCallFull(detail) : renderTaskTraceCallPreview(detail);
-      bindTaskTraceCallActions(content);
+      const detail = await api(`/api/tasks/${taskId}/trace/calls/${callId}`);
+      content.innerHTML = renderTaskTraceCallFull(detail);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
-      button.textContent = mode === "full" ? "查看完整调用" : "加载内容预览";
+      button.textContent = "加载完整内容";
     }
   }));
 }
@@ -4323,7 +4295,7 @@ function renderTaskTraceVisualization(trace, taskId) {
   return `<section class="task-trace-section" aria-labelledby="task-trace-title">
     <header class="task-trace-heading">
       <div><span class="eyebrow">执行追踪</span><h3 id="task-trace-title">完整全流程上下文</h3></div>
-      <p>首次只加载调用摘要；Prompt 预览与完整调用内容均按需单独请求。</p>
+      <p>首次只加载调用摘要；每次调用的完整 Prompt、响应和工具结果按需单独请求。</p>
     </header>
     <div class="task-trace-metrics" aria-label="执行追踪统计">
       <div><strong>${capturedCalls.length}</strong><span>模型调用</span></div>
@@ -4334,10 +4306,12 @@ function renderTaskTraceVisualization(trace, taskId) {
     <div class="task-trace-calls">${capturedCalls.map((call, index) => {
       const modelName = call.model?.displayName || call.model?.modelId || "未知模型";
       const providerName = call.provider?.name || "未知供应商";
+      const sourceRefs = Array.isArray(call.sourceRefs) ? call.sourceRefs : [];
+      const sourceSummary = sourceRefs.map((source) => String(source?.title || "")).filter(Boolean).join("、");
       return `<details class="task-trace-call is-${esc(call.status || "failed")}" data-task-trace-call="${esc(call.id)}" data-task-trace-task="${esc(taskId)}" ${index === 0 ? "open" : ""}>
         <summary>
           <span class="task-trace-call-index">${index + 1}</span>
-          <span><strong>${esc(modelName)}</strong><small>${esc(providerName)} · ${Number(call.trace?.roundCount || 0)} 轮 · ${Number(call.inputChars || 0).toLocaleString("zh-CN")} → ${Number(call.outputChars || 0).toLocaleString("zh-CN")} 字符</small></span>
+          <span><strong>${esc(modelName)}</strong><small>${esc(providerName)} · ${Number(call.trace?.roundCount || 0)} 轮 · ${Number(call.inputChars || 0).toLocaleString("zh-CN")} → ${Number(call.outputChars || 0).toLocaleString("zh-CN")} 字符</small>${sourceSummary ? `<small class="task-trace-call-sources" title="${esc(sourceSummary)}">发送：${esc(sourceSummary)}</small>` : ""}</span>
           <span class="task-trace-status">${call.status === "completed" ? "已完成" : call.status === "running" ? "运行中" : "失败"}</span>
         </summary>
         <div class="task-trace-call-body">
@@ -4346,7 +4320,7 @@ function renderTaskTraceVisualization(trace, taskId) {
           <div data-task-trace-call-content>
             <div class="task-trace-load-state">
               <div><strong>调用内容尚未加载</strong><p>这次调用的 Prompt、模型响应和工具结果不会随任务详情传输。</p></div>
-              <button class="ghost-button" type="button" data-load-task-trace-call="preview">加载内容预览</button>
+              <button class="ghost-button" type="button" data-load-task-trace-call="full">加载完整内容</button>
             </div>
           </div>
         </div>
@@ -6458,10 +6432,10 @@ async function openTaskDialog() {
   const chapterField = `<label class="task-chapter-field">章节<select name="chapterId">${chapterOptions.map(([key, text], index) => `<option value="${esc(key)}" ${index === 0 ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
-    <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。</span></p>
+    <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。默认仅追加不存在的关系，不修改或删除已有关系。</span></p>
     <div class="relationship-overwrite-card hidden">
       <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
-      <p>任务成功后，会先删除所有涉及所选角色的旧关系，再写入本次分析结果。</p>
+      <p>勾选后，任务成功时会先删除所有涉及所选角色的旧关系，再写入本次分析结果；不勾选则只追加新关系。</p>
     </div>
     <label>额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将同时追加到证据收集和全局关系归纳提示词，仅影响本次任务。</small></label>
   </div>`;
@@ -6469,10 +6443,13 @@ async function openTaskDialog() {
     const taskType = String(form.get("taskType"));
     const scopeType = String(form.get("scopeType"));
     const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
+    const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
     const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
     const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
-    const scope = taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
+    const scope = settingsOnly
+      ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
+      : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
@@ -6505,7 +6482,10 @@ async function openTaskDialog() {
   const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-overwrite-card");
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
-  allSettingsOption.textContent = "全书 + 所有设定";
+  allSettingsOption.textContent = "全书 + 设定集";
+  const settingsOnlyOption = document.createElement("option");
+  settingsOnlyOption.value = "settings";
+  settingsOnlyOption.textContent = "仅设定集";
   const syncChapterField = () => {
     const disabled = scopeTypeSelect.value !== "chapter";
     chapterSelect.disabled = disabled;
@@ -6541,9 +6521,14 @@ async function openTaskDialog() {
   const syncRelationshipOptions = () => {
     const enabled = taskTypeSelect.value === "relationship-analysis";
     if (enabled && !allSettingsOption.isConnected) scopeTypeSelect.append(allSettingsOption);
+    if (enabled && !settingsOnlyOption.isConnected) scopeTypeSelect.append(settingsOnlyOption);
     if (!enabled && allSettingsOption.isConnected) {
       if (scopeTypeSelect.value === allSettingsOption.value) scopeTypeSelect.value = "book";
       allSettingsOption.remove();
+    }
+    if (!enabled && settingsOnlyOption.isConnected) {
+      if (scopeTypeSelect.value === settingsOnlyOption.value) scopeTypeSelect.value = "book";
+      settingsOnlyOption.remove();
     }
     relationshipOptions.classList.toggle("hidden", !enabled);
     relationshipPrompt.disabled = !enabled;

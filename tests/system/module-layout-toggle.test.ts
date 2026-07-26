@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260726-task-result-heading-gap-v7');
-    expect(page.text).toContain('/app.js?v=20260726-readable-analysis-results-v7');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260726-readable-analysis-results-v7"></script>');
+    expect(page.text).toContain('/styles.css?v=20260726-relationship-trace-results-v8');
+    expect(page.text).toContain('/app.js?v=20260726-relationship-trace-results-v8');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260726-relationship-trace-results-v8"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');

@@ -102,6 +102,7 @@ describe("AI 分析全流程追踪", () => {
     expect(trace.calls[0]).toMatchObject({
       status: "completed",
       model: { displayName: "追踪模型" },
+      sourceRefs: [{ type: "chapter", title: "第一章" }],
       trace: { available: true, initialMessageCount: 2, roundCount: 2, serializedChars: expect.any(Number) }
     });
     expect(JSON.stringify(trace)).not.toContain("审核角色规范表");
@@ -109,31 +110,15 @@ describe("AI 分析全流程追踪", () => {
     expect(trace.calls[0].trace).not.toHaveProperty("rounds");
 
     const callId = String(trace.calls[0].id);
-    const previewResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/${callId}`).expect(200);
-    const preview = previewResponse.body.data;
-    expect(preview).toMatchObject({
+    const fullResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/${callId}`).expect(200);
+    const full = fullResponse.body.data;
+    expect(full).toMatchObject({
       taskId: task.body.data.id,
       callId,
-      mode: "preview",
-      previewLimit: 3000,
+      mode: "full",
       trace: { initialMessages: expect.any(Array), rounds: expect.any(Array) }
     });
-    expect(preview.trace.initialMessages.reduce((total: number, message: { content?: string }) => total + String(message.content ?? "").length, 0)).toBeLessThanOrEqual(3000);
-    expect(preview.trace.initialMessages[1].content).toContain("审核角色规范表");
-    expect(preview.trace.rounds).toHaveLength(2);
-    expect(preview.trace.rounds[0]).toMatchObject({
-      round: 1,
-      messageCount: expect.any(Number),
-      promptChars: expect.any(Number),
-      attemptCount: 1,
-      toolExecutionCount: 2
-    });
-    expect(preview.trace.rounds[0]).not.toHaveProperty("request");
-    expect(preview.trace.rounds[0]).not.toHaveProperty("attempts");
-    expect(preview.trace.rounds[0]).not.toHaveProperty("toolExecutions");
-
-    const fullResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/${callId}?full=true`).expect(200);
-    const fullTrace = fullResponse.body.data.trace;
+    const fullTrace = full.trace;
     expect(fullTrace.initialMessages[1].content).toContain("审核角色规范表");
     expect(fullTrace.rounds).toHaveLength(2);
     expect(fullTrace.rounds[0]).toMatchObject({
@@ -192,7 +177,7 @@ describe("AI 分析全流程追踪", () => {
     });
   });
 
-  it("多次超长调用只在摘要后按单次调用加载预览与全文", async () => {
+  it("多次超长调用只在摘要后按单次调用加载完整内容", async () => {
     runtime = createTestRuntime();
     const work = await request(runtime.app).post("/api/works").send({ title: "超长追踪测试" }).expect(201);
     const task = await request(runtime.app).post(`/api/works/${work.body.data.id}/tasks`).send({
@@ -206,9 +191,13 @@ describe("AI 分析全流程追踪", () => {
     const timestamp = new Date().toISOString();
     for (let index = 0; index < 20; index += 1) {
       const callId = `call_large_trace_${index}`;
+      const systemPrefix = `SYSTEM_${index}_`;
+      const userPrefix = index === 0
+        ? `USER_${index}_<CHAPTER id="chapter_trace" title="第一章"><正文不应进入摘要></CHAPTER><SETTING id="setting_trace" title="旧港盟约"><设定正文不应进入摘要></SETTING>`
+        : `USER_${index}_`;
       const initialMessages = [
-        { role: "system", content: `SYSTEM_${index}_` + "系".repeat(34_991) },
-        { role: "user", content: `USER_${index}_` + "用".repeat(34_993) }
+        { role: "system", content: systemPrefix + "系".repeat(35_000 - systemPrefix.length) },
+        { role: "user", content: userPrefix + "用".repeat(35_000 - userPrefix.length) }
       ];
       runtime.database.run(
         `INSERT INTO ai_calls (id, work_id, task_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
@@ -236,15 +225,14 @@ describe("AI 分析全流程追踪", () => {
     const summaryResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace`).expect(200);
     expect(summaryResponse.body.data.calls).toHaveLength(20);
     expect(JSON.stringify(summaryResponse.body.data)).not.toContain("SYSTEM_0_");
+    expect(JSON.stringify(summaryResponse.body.data)).not.toContain("正文不应进入摘要");
+    expect(summaryResponse.body.data.calls[0].sourceRefs).toEqual([
+      { type: "chapter", title: "第一章" },
+      { type: "setting", title: "旧港盟约" }
+    ]);
     expect(JSON.stringify(summaryResponse.body.data).length).toBeLessThan(25_000);
 
-    const previewResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/call_large_trace_0`).expect(200);
-    const preview = previewResponse.body.data;
-    expect(preview).toMatchObject({ mode: "preview", previewLimit: 3000, truncated: true, totalPromptChars: 70_000 });
-    expect(preview.trace.initialMessages.reduce((total: number, message: { content?: string }) => total + String(message.content ?? "").length, 0)).toBe(3000);
-    expect(preview.trace.initialMessages.every((message: { content?: string; contentTruncated?: boolean }) => String(message.content ?? "").length > 0 && message.contentTruncated)).toBe(true);
-
-    const fullResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/call_large_trace_0?full=true`).expect(200);
+    const fullResponse = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace/calls/call_large_trace_0`).expect(200);
     expect(fullResponse.body.data.mode).toBe("full");
     expect(fullResponse.body.data.trace.initialMessages.reduce((total: number, message: { content?: string }) => total + String(message.content ?? "").length, 0)).toBe(70_000);
     await request(runtime.app).get(`/api/tasks/${unrelatedTask.body.data.id}/trace/calls/call_large_trace_0`).expect(404);
