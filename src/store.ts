@@ -867,6 +867,13 @@ export class Store {
       entityId: entityType === "user" && entityId ? accountReference(entityId) : entityId,
       detailKeys
     });
+    if (workId) {
+      try {
+        this.relationshipIndexQueuedHandler?.(workId);
+      } catch {
+        // 索引调度失败不影响主写入路径
+      }
+    }
   }
 
   createWork(input: WorkInput): Record<string, unknown> {
@@ -994,9 +1001,14 @@ export class Store {
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
+  private relationshipIndexQueuedHandler: ((workId: string) => void) | null = null;
 
   setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
     this.analysisTaskQueuedHandler = handler;
+  }
+
+  setRelationshipIndexQueuedHandler(handler: ((workId: string) => void) | null): void {
+    this.relationshipIndexQueuedHandler = handler;
   }
 
   private notifyAnalysisTaskQueued(workId: string): void {
@@ -6460,10 +6472,13 @@ export class Store {
     if (characterIds.length === 0) return "";
     const overwriteSuffix = scope.replaceExistingRelationships === true ? " · 覆盖已有关系" : "";
     const preFilterSuffix = scope.preFilterRelationshipSources === false ? " · 未前置过滤" : "";
-    if (!includeCharacterNames) return ` · 定向 ${characterIds.length} 人${preFilterSuffix}${overwriteSuffix}`;
+    const sourcePreviewSuffix = Array.isArray(scope.relationshipSourceRefs)
+      ? ` · 已预检 ${scope.relationshipSourceRefs.length} 条来源`
+      : "";
+    if (!includeCharacterNames) return ` · 定向 ${characterIds.length} 人${preFilterSuffix}${sourcePreviewSuffix}${overwriteSuffix}`;
     const snapshotNames = this.taskCharacterSnapshotNames(scope);
     const names = characterIds.map((characterId) => snapshotNames.get(characterId) ?? characterNames.get(characterId) ?? "已删除角色");
-    return ` · 定向 ${characterIds.length} 人：${names.join("、")}${preFilterSuffix}${overwriteSuffix}`;
+    return ` · 定向 ${characterIds.length} 人：${names.join("、")}${preFilterSuffix}${sourcePreviewSuffix}${overwriteSuffix}`;
   }
 
   private taskCharacterSnapshotNames(scope: Record<string, unknown>): Map<string, string> {
