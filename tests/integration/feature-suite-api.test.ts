@@ -1730,6 +1730,32 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(discarded.body.data.result.relationshipChangePreview.status).toBe("discarded");
     const applyDiscarded = await request(runtime.app).post(`/api/tasks/${staleTask.body.data.id}/relationship-changes/apply`).send({}).expect(409);
     expect(applyDiscarded.body.error.code).toBe("RELATIONSHIP_PREVIEW_NOT_PENDING");
+
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "林舟关系补充",
+      category: "人物关系",
+      content: "林舟与沈星曾长期并肩行动。"
+    }).expect(201);
+    const settingsPreviewTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        characterIds: [linId],
+        replaceExistingRelationships: true,
+        previewRelationshipChanges: true,
+        additionalPrompt: "验证设定来源过期保护"
+      }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${settingsPreviewTask.body.data.id}/run`).send({ modelId }).expect(200);
+    await request(runtime.app).patch(`/api/settings/${setting.body.data.id}`).send({
+      content: "林舟与沈星的关系设定已由作者修改。"
+    }).expect(200);
+    const staleSettingsApply = await request(runtime.app)
+      .post(`/api/tasks/${settingsPreviewTask.body.data.id}/relationship-changes/apply`)
+      .send({})
+      .expect(409);
+    expect(staleSettingsApply.body.error.code).toBe("RELATIONSHIP_PREVIEW_SOURCE_CHANGED");
   });
 
   it("拒绝不适用于当前任务或缺少角色前提的关系分析选项", async () => {

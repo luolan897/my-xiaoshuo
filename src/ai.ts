@@ -5184,6 +5184,7 @@ export class AiManager {
     const characters = this.store.listCharacters(workId);
     if (characters.length < 2) throw new AppError(409, "CHARACTERS_REQUIRED", "人物关系分析至少需要两个角色档案");
     const settingsOnly = scope.type === "settings";
+    const includesSettings = settingsOnly || scope.includeAllSettings === true;
     const selectedCharacterIds = new Set(scope.characterIds ?? []);
     for (const characterId of selectedCharacterIds) {
       const character = characters.find((item) => item.id === characterId);
@@ -5841,7 +5842,7 @@ export class AiManager {
         recordRelationshipOutcome("created", relationship);
         existing.push(relationship);
       }
-        if (taskId && settingsOnly) this.store.refreshTaskSourceVersions(taskId);
+        if (taskId && includesSettings) this.store.refreshTaskSourceVersions(taskId);
         if (previewRelationshipChanges) {
           relationshipChangeOperations = this.relationshipChangeOperations(
             relationshipsBeforePreview,
@@ -5866,7 +5867,7 @@ export class AiManager {
         }
       }
       relationshipIds.length = 0;
-      if (taskId && settingsOnly) this.store.refreshTaskSourceVersions(taskId);
+      if (taskId && includesSettings) this.store.refreshTaskSourceVersions(taskId);
     }
     if (sourceSelection) {
       const acceptedVariants = sourceSelection.variantDecisions.filter((decision) => decision.verdict === "same" && decision.confidence >= 0.8);
@@ -5914,7 +5915,7 @@ export class AiManager {
       });
       sourceSelection.summary.reviewIds = [...reviewIds];
     }
-    if (previewRelationshipChanges && taskId && settingsOnly) this.store.refreshTaskSourceVersions(taskId);
+    if (previewRelationshipChanges && taskId && includesSettings) this.store.refreshTaskSourceVersions(taskId);
     const relationshipResults = [...relationshipOutcomes.values()].map(({ action, relationship }) =>
       this.relationshipResultSnapshot(workId, action, relationship));
     const createdCount = relationshipResults.filter((item) => item.action === "created").length;

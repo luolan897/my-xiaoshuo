@@ -5321,6 +5321,29 @@ export class Store {
     return versions;
   }
 
+  private analysisTaskSourceVersions(workId: string, scope: Record<string, unknown>): Record<string, number | string> {
+    const sourceVersions: Record<string, number | string> = {};
+    if (typeof scope.chapterId === "string") {
+      const chapter = this.getChapter(scope.chapterId);
+      if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+      sourceVersions[scope.chapterId] = Number(chapter.versionNo);
+    } else if (scope.type === "book" || scope.type === "volume") {
+      const tree = this.getWorkTree(workId);
+      const volumes = tree.volumes as Record<string, unknown>[];
+      const selectedVolumes = scope.type === "volume"
+        ? volumes.filter((volume) => volume.id === scope.volumeId)
+        : volumes;
+      if (scope.type === "volume" && selectedVolumes.length === 0) throw notFound("卷");
+      for (const chapter of selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])) {
+        sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
+      }
+    }
+    if (scope.type === "settings" || (scope.includeAllSettings === true && scope.previewRelationshipChanges === true)) {
+      Object.assign(sourceVersions, this.relationshipSettingsSourceVersions(workId));
+    }
+    return sourceVersions;
+  }
+
   private mapContinuationGuard(row: Row): Record<string, unknown> {
     return {
       id: requiredString(row, "id"),
@@ -5341,7 +5364,6 @@ export class Store {
     const taskId = id("task");
     const timestamp = now();
     const scope = { ...(input.scope ?? { type: "book" }) };
-    const sourceVersions: Record<string, number | string> = {};
     const targetCharacters: Array<{ id: string; name: string }> = [];
     if (Array.isArray(scope.characterIds)) {
       for (const characterId of scope.characterIds) {
@@ -5352,23 +5374,7 @@ export class Store {
       }
       if (targetCharacters.length > 0) scope.targetCharacters = targetCharacters;
     }
-    if (typeof scope.chapterId === "string") {
-      const chapter = this.getChapter(scope.chapterId);
-      if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
-      sourceVersions[scope.chapterId] = Number(chapter.versionNo);
-    } else if (scope.type === "book" || scope.type === "volume") {
-      const tree = this.getWorkTree(workId);
-      const volumes = tree.volumes as Record<string, unknown>[];
-      const selectedVolumes = scope.type === "volume"
-        ? volumes.filter((volume) => volume.id === scope.volumeId)
-        : volumes;
-      if (scope.type === "volume" && selectedVolumes.length === 0) throw notFound("卷");
-      for (const chapter of selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])) {
-        sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
-      }
-    } else if (scope.type === "settings") {
-      Object.assign(sourceVersions, this.relationshipSettingsSourceVersions(workId));
-    }
+    const sourceVersions = this.analysisTaskSourceVersions(workId, scope);
     this.db.run(
       `INSERT INTO analysis_tasks (id, work_id, model_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
@@ -5481,30 +5487,12 @@ export class Store {
     const task = this.getTask(taskId);
     const scope = task.scope as Record<string, unknown>;
     const expected = task.sourceVersions as Record<string, number | string>;
-    if (scope.type === "settings") {
-      const current = this.relationshipSettingsSourceVersions(String(task.workId));
-      const expectedIds = Object.keys(expected).sort();
-      const currentIds = Object.keys(current).sort();
-      return expectedIds.length === currentIds.length
-        && expectedIds.every((settingId, index) => settingId === currentIds[index] && expected[settingId] === current[settingId]);
+    let current: Record<string, number | string>;
+    try {
+      current = this.analysisTaskSourceVersions(String(task.workId), scope);
+    } catch {
+      return false;
     }
-    let chapters: Record<string, unknown>[] = [];
-    if (typeof scope.chapterId === "string") {
-      const row = this.db.get("SELECT id, work_id, version_no FROM chapters WHERE id = ?", scope.chapterId);
-      if (!row || requiredString(row, "work_id") !== task.workId) return false;
-      chapters = [{ id: requiredString(row, "id"), versionNo: numberValue(row, "version_no") }];
-    } else if (scope.type === "book" || scope.type === "volume") {
-      const tree = this.getWorkTree(String(task.workId));
-      const volumes = tree.volumes as Record<string, unknown>[];
-      const selectedVolumes = scope.type === "volume"
-        ? volumes.filter((volume) => volume.id === scope.volumeId)
-        : volumes;
-      if (scope.type === "volume" && selectedVolumes.length === 0) return false;
-      chapters = selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[]);
-    } else {
-      return true;
-    }
-    const current = Object.fromEntries(chapters.map((chapter) => [String(chapter.id), Number(chapter.versionNo)]));
     const expectedIds = Object.keys(expected).sort();
     const currentIds = Object.keys(current).sort();
     return expectedIds.length === currentIds.length
@@ -5514,10 +5502,10 @@ export class Store {
   refreshTaskSourceVersions(taskId: string): void {
     const task = this.getTask(taskId);
     const scope = task.scope as Record<string, unknown>;
-    if (scope.type !== "settings") return;
+    if (scope.type !== "settings" && !(scope.includeAllSettings === true && scope.previewRelationshipChanges === true)) return;
     this.db.run(
       "UPDATE analysis_tasks SET source_versions_json = ?, updated_at = ? WHERE id = ?",
-      JSON.stringify(this.relationshipSettingsSourceVersions(String(task.workId))),
+      JSON.stringify(this.analysisTaskSourceVersions(String(task.workId), scope)),
       now(),
       taskId
     );
