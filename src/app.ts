@@ -520,9 +520,26 @@ function redactOrganizationMembers(record: Record<string, unknown>, permissions:
 
 function redactTaskCharacterNames(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
   const { scopeSummaryWithoutCharacterNames, ...result } = record;
+  const proseRestricted = permissions.prose === "none";
+  const proseScope = recordValue(result.scope);
+  const selectionScopeRestricted = proseRestricted
+    && (proseScope?.type === "selection" || String(result.scopeSummary ?? "").startsWith("选定内容："));
+  if (selectionScopeRestricted) {
+    if (proseScope) {
+      const { selection: _selection, ...redactedScope } = proseScope;
+      result.scope = redactedScope;
+    }
+    result.scopeSummary = "选定内容（正文读取权限受限）";
+    if (Array.isArray(result.scopeDetails)) {
+      result.scopeDetails = result.scopeDetails.map((item) => {
+        const detail = recordValue(item);
+        return detail?.type === "selection" ? { type: "selection", restricted: true } : item;
+      });
+    }
+  }
   const characterRestricted = permissions.characters === "none";
   if (characterRestricted) {
-    if (typeof scopeSummaryWithoutCharacterNames === "string") result.scopeSummary = scopeSummaryWithoutCharacterNames;
+    if (!selectionScopeRestricted && typeof scopeSummaryWithoutCharacterNames === "string") result.scopeSummary = scopeSummaryWithoutCharacterNames;
     const scope = recordValue(result.scope);
     if (scope) {
       const { targetCharacters: _targetCharacters, ...redactedScope } = scope;
@@ -1517,9 +1534,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     redactTaskCharacterNames(store.getTaskDetail(request.params.taskId), requestPermissions(request))
   ));
   app.get("/api/tasks/:taskId/result", (request, response) => {
-    const task = store.getTask(request.params.taskId);
+    const task = store.getTaskResultPayload(request.params.taskId);
     const redacted = redactTaskCharacterNames(
-      { ...task, result: store.getTaskStoredResult(request.params.taskId) },
+      task,
       requestPermissions(request)
     );
     data(response, { taskId: task.id, result: redacted.result });

@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
 
@@ -224,12 +224,121 @@ describe("AI 分析任务可读结果", () => {
     const task = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
     runtime.store.updateTask(String(task.id), { status: "completed", progress: 100, result: originalResult });
 
+    const databaseGet = vi.spyOn(runtime.store.db, "get");
     const detail = await request(runtime.app).get(`/api/tasks/${task.id}/detail`).expect(200);
     expect(detail.body.data).not.toHaveProperty("result");
     expect(JSON.stringify(detail.body.data)).not.toContain(longValue);
+    expect(databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"))).toHaveLength(1);
 
+    databaseGet.mockClear();
     const fullResult = await request(runtime.app).get(`/api/tasks/${task.id}/result`).expect(200);
     expect(fullResult.body.data).toEqual({ taskId: task.id, result: originalResult });
     expect(fullResult.body.data.result.longValue).toHaveLength(longValue.length);
+    expect(databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"))).toHaveLength(1);
+
+    databaseGet.mockClear();
+    await request(runtime.app).get(`/api/tasks/${task.id}/trace`).expect(200);
+    const traceTaskQueries = databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"));
+    expect(traceTaskQueries).toHaveLength(1);
+    expect(String(traceTaskQueries[0]?.[0])).toContain("SELECT work_id");
+  });
+
+  it("兼容主库历史任务结构并说明选定内容和现存数据差异", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "八岐大蛇在神代引发大战。");
+    const workId = String(seeded.work.id);
+    const timeline = runtime.store.createTimelineEvent(workId, {
+      name: "神代大战",
+      description: "八岐大蛇引发大战。",
+      eventType: "conflict",
+      timeLabel: "神代",
+      chapterIds: [String(seeded.chapter.id)],
+      participantIds: [],
+      location: "高天原",
+      impactScope: "神界"
+    }, "analysis", "legacy-readable-result-test");
+    const from = runtime.store.createCharacter(workId, { name: "八岐大蛇", firstChapterId: String(seeded.chapter.id) });
+    const to = runtime.store.createCharacter(workId, { name: "须佐之男", firstChapterId: String(seeded.chapter.id) });
+    const relationship = runtime.store.createRelationship(workId, {
+      fromCharacterId: String(from.id),
+      toCharacterId: String(to.id),
+      category: "conflict",
+      subtype: "宿敌"
+    }, "analysis", "legacy-readable-result-test");
+    const createCompletedTask = (taskType: string, result: Record<string, unknown>, selection: string): string => {
+      const task = runtime!.store.createTask(workId, { taskType, scope: { type: "selection", selection } });
+      runtime!.store.updateTask(String(task.id), { status: "completed", progress: 100, result });
+      return String(task.id);
+    };
+
+    const legacyConsistencyTaskId = createCompletedTask("consistency-check", {
+      relationships: 97,
+      confirmed: 72,
+      pending: 25,
+      mergedCanonicalIds: [relationship.id],
+      semanticCorrections: ["八岐大蛇与须佐之男"]
+    }, "人物关系重复、方向与语义最终审计");
+    const consistencyDetail = await request(runtime.app).get(`/api/tasks/${legacyConsistencyTaskId}/detail`).expect(200);
+    expect(consistencyDetail.body.data.scopeSummary).toContain("选定内容：人物关系重复、方向与语义最终审计");
+    expect(consistencyDetail.body.data.scopeDetails).toEqual([
+      { type: "selection", selection: "人物关系重复、方向与语义最终审计" }
+    ]);
+    expect(consistencyDetail.body.data.resultSummary.summary).toContain("审核 97 条人物关系");
+    expect(consistencyDetail.body.data.resultSummary.summary).toContain("72 条已确认");
+    expect(consistencyDetail.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: "relationships", count: 2 })
+    ]));
+    expect(JSON.stringify(consistencyDetail.body.data.resultSummary.sections)).toContain("八岐大蛇与须佐之男");
+
+    const legacyBookTaskId = createCompletedTask("book-analysis", {
+      sourceChapterCount: 299,
+      sourceChunkCount: 30,
+      eventCount: 1,
+      eventIds: [timeline.id]
+    }, "全文时间线按正文顺序重建：299章全覆盖");
+    const bookDetail = await request(runtime.app).get(`/api/tasks/${legacyBookTaskId}/detail`).expect(200);
+    expect(bookDetail.body.data.resultSummary.summary).toContain("分析 299 章正文");
+    expect(bookDetail.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: "timeline_events", count: 1 })
+    ]));
+    expect(JSON.stringify(bookDetail.body.data.resultSummary.sections)).toContain("神代大战");
+
+    const legacyCharacterRepairTaskId = createCompletedTask("book-analysis", {
+      correctedCharacterIds: [from.id],
+      removedDuplicateCharacterIds: ["character_removed"],
+      evidence: [{ chapterId: seeded.chapter.id, quote: "八岐大蛇在神代引发大战。" }]
+    }, "人物档案补充人工核验");
+    const characterRepairDetail = await request(runtime.app).get(`/api/tasks/${legacyCharacterRepairTaskId}/detail`).expect(200);
+    expect(characterRepairDetail.body.data.resultSummary.summary).toContain("修正 1 个角色，并移除 1 个重复角色档案");
+    expect(characterRepairDetail.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: "characters", count: 2 })
+    ]));
+    expect(JSON.stringify(characterRepairDetail.body.data.resultSummary.sections)).toContain("八岐大蛇");
+
+    const resumableBookTaskId = createCompletedTask("book-analysis", {
+      resumable: true,
+      sourceChapterCount: 299,
+      sourceChunkCount: 20,
+      completedChunkCount: 20,
+      chunkResults: [{ chunk: 1 }]
+    }, "全文联合知识分析");
+    const resumableBookDetail = await request(runtime.app).get(`/api/tasks/${resumableBookTaskId}/detail`).expect(200);
+    expect(resumableBookDetail.body.data.resultSummary.summary).toBe("已完成 20/20 个正文分段的阶段分析，当前结果可继续处理。");
+    expect(resumableBookDetail.body.data.resultSummary.metrics).toEqual(expect.arrayContaining([
+      { label: "可继续处理", value: "是" },
+      { label: "已完成分段", value: 20 },
+      { label: "分段结果", value: 1 }
+    ]));
+
+    const legacyRelationshipTaskId = createCompletedTask("relationship-analysis", {
+      relationshipIds: [relationship.id, "relationship_deleted"],
+      skipped: []
+    }, "人物长期关系分析");
+    const relationshipDetail = await request(runtime.app).get(`/api/tasks/${legacyRelationshipTaskId}/detail`).expect(200);
+    expect(relationshipDetail.body.data.resultSummary.summary).toContain("任务结果记录 2 条关系");
+    expect(relationshipDetail.body.data.resultSummary.summary).toContain("另有 1 条已删除或合并");
+    expect(relationshipDetail.body.data.resultSummary.storageTargets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: "relationships", count: 2, note: expect.stringContaining("当前可读取 1 条") })
+    ]));
   });
 });

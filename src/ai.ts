@@ -1712,7 +1712,7 @@ export class AiManager {
   }
 
   getTaskTrace(taskId: string): Record<string, unknown> {
-    this.store.getTask(taskId);
+    this.store.getTaskWorkId(taskId);
     const rows = this.store.db.all(
       `SELECT call.id, call.task_type, call.provider_id, call.model_id, call.status, call.failure,
         call.input_chars, call.output_chars, call.created_at, call.completed_at, trace.call_id AS trace_call_id,
@@ -1771,7 +1771,7 @@ export class AiManager {
   }
 
   getTaskTraceCall(taskId: string, callId: string, full = false): Record<string, unknown> {
-    this.store.getTask(taskId);
+    this.store.getTaskWorkId(taskId);
     const row = this.store.db.get(
       `SELECT trace.initial_messages_json, trace.rounds_json, trace.created_at, trace.updated_at
        FROM ai_calls call JOIN ai_call_traces trace ON trace.call_id = call.id AND trace.task_id = call.task_id

@@ -4419,7 +4419,12 @@ function bindTaskResultActions(container) {
     button.textContent = "正在拉取完整 JSON";
     try {
       const payload = await api(`/api/tasks/${encodeURIComponent(button.dataset.loadTaskResultJson)}/result`);
-      content.innerHTML = `<pre>${esc(JSON.stringify(payload.result, null, 2))}</pre>`;
+      const resultJson = document.createElement("textarea");
+      resultJson.readOnly = true;
+      resultJson.spellcheck = false;
+      resultJson.setAttribute("aria-label", "完整返回 JSON");
+      resultJson.value = JSON.stringify(payload.result, null, 2);
+      content.replaceChildren(resultJson);
       button.textContent = "完整 JSON 已加载";
     } catch (error) {
       toast(error.message, "error");
@@ -4445,6 +4450,10 @@ function openTaskDetailDialog(task, trace) {
       </li>`;
     }
     if (item.type === "book") return "<li>全书</li>";
+    if (item.type === "selection") return item.restricted
+      ? "<li>选定内容（正文读取权限受限）</li>"
+      : `<li>选定内容：${esc(item.selection || "未提供")}</li>`;
+    if (item.type === "none") return "<li>无上下文</li>";
     return `<li>${esc(JSON.stringify(item))}</li>`;
   }).join("") || "<li>无范围详情</li>";
   const failures = Array.isArray(task.failures) ? task.failures : [];

@@ -1052,6 +1052,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       progress: 100,
       result: { eventIds: [secretTimeline.id] }
     });
+    const secretSelectionTask = await owner.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ taskType: "book-analysis", scope: { type: "selection", selection: "TOP_SECRET_SELECTION_PROSE" } })
+      .expect(201);
+    expect(secretSelectionTask.body.data.scopeSummary).toContain("TOP_SECRET_SELECTION_PROSE");
 
     const noContentPermissions = Object.fromEntries(Object.keys(basePermissions).map((module) => [module, "none"]));
     await owner.agent.patch(`/api/works/${workId}/members/${analysisOnly.user.userId}`)
@@ -1063,6 +1068,9 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const protectedTaskSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === targetedTask.body.data.id);
     expect(protectedTaskSummary.scopeSummary).toBe("全书 · 定向 1 人");
     expect(JSON.stringify(protectedTaskSummary)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedSelectionSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === secretSelectionTask.body.data.id);
+    expect(protectedSelectionSummary.scopeSummary).toBe("选定内容（正文读取权限受限）");
+    expect(JSON.stringify(protectedSelectionSummary)).not.toContain("TOP_SECRET_SELECTION_PROSE");
     const protectedTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}`).expect(200);
     expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人");
     expect(protectedTaskDetail.body.data.scope.targetCharacters).toBeUndefined();
@@ -1084,6 +1092,12 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(protectedTimelineDetail.body.data.resultSummary.restricted).toBe(true);
     expect(protectedTimelineDetail.body.data.resultSummary.sections).toEqual([]);
     expect(JSON.stringify(protectedTimelineDetail.body.data)).not.toContain("TOP_SECRET_TIMELINE");
+    const protectedSelectionDetail = await analysisOnly.agent.get(`/api/tasks/${secretSelectionTask.body.data.id}/detail`).expect(200);
+    expect(protectedSelectionDetail.body.data.scopeSummary).toBe("选定内容（正文读取权限受限）");
+    expect(protectedSelectionDetail.body.data.scope.selection).toBeUndefined();
+    expect(protectedSelectionDetail.body.data.scopeDetails).toEqual([{ type: "selection", restricted: true }]);
+    expect(protectedSelectionDetail.body.data.resultSummary.restricted).toBe(true);
+    expect(JSON.stringify(protectedSelectionDetail.body.data)).not.toContain("TOP_SECRET_SELECTION_PROSE");
     const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
