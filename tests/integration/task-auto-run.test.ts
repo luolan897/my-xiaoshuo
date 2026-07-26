@@ -151,7 +151,7 @@ describe("分析任务自动运行", () => {
     expect(summaries.body.data.items[0]).not.toHaveProperty("sourceVersions");
     expect(summaries.body.data.items[0]).not.toHaveProperty("failures");
     const defaultSummaryPage = await request(runtime.app).get(`/api/works/${workId}/tasks?view=summary`).expect(200);
-    expect(defaultSummaryPage.body.data).toMatchObject({ page: 1, limit: 50, total: tasks.body.data.total });
+    expect(defaultSummaryPage.body.data).toMatchObject({ page: 1, limit: 30, total: tasks.body.data.total });
     expect(defaultSummaryPage.body.data.items).toHaveLength(tasks.body.data.total);
     const detail = await request(runtime.app).get(`/api/tasks/${summaries.body.data.items[0].id}`).expect(200);
     expect(detail.body.data).toEqual(expect.objectContaining({
@@ -175,13 +175,13 @@ describe("分析任务自动运行", () => {
     const firstPage = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
     expect(firstPage.body.data).toMatchObject({
       page: 1,
-      limit: 50,
+      limit: 30,
       total: 55,
       hasMore: true,
       nextPage: 2,
       stats: { total: 55, pendingCount: 55, runningCount: 0, runningProgress: 0 }
     });
-    expect(firstPage.body.data.items).toHaveLength(50);
+    expect(firstPage.body.data.items).toHaveLength(30);
     expect(JSON.stringify(firstPage.body.data)).not.toContain("不可出现在摘要中的提示");
     expect(firstPage.body.data.items[0]).not.toHaveProperty("scope");
     expect(firstPage.body.data.items[0]).not.toHaveProperty("result");
@@ -189,9 +189,9 @@ describe("分析任务自动运行", () => {
     expect(firstPage.body.data.items[0]).not.toHaveProperty("sourceVersions");
     expect(firstPage.body.data.items[0]).not.toHaveProperty("failures");
 
-    const secondPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=2&limit=50`).expect(200);
-    expect(secondPage.body.data).toMatchObject({ page: 2, limit: 50, total: 55, hasMore: false, nextPage: null });
-    expect(secondPage.body.data.items).toHaveLength(5);
+    const secondPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=2`).expect(200);
+    expect(secondPage.body.data).toMatchObject({ page: 2, limit: 30, total: 55, hasMore: false, nextPage: null });
+    expect(secondPage.body.data.items).toHaveLength(25);
   });
 
   it("开启自动运行后遵守并发与单次上限", async () => {

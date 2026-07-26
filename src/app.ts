@@ -339,9 +339,18 @@ const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional()
 });
 
-const platformUiSettingsSchema = z.object({
-  toastPosition: z.enum(["bottom-right", "top-right"])
+const platformPageSizesSchema = z.object({
+  characters: z.number().int().min(10).max(100).optional(),
+  analysisTasks: z.number().int().min(10).max(100).optional(),
+  fileVersions: z.number().int().min(10).max(100).optional()
 }).strict();
+
+const platformUiSettingsSchema = z.object({
+  toastPosition: z.enum(["bottom-right", "top-right"]).optional(),
+  pageSizes: platformPageSizesSchema.optional()
+}).strict().refine((input) => input.toastPosition !== undefined || input.pageSizes !== undefined, {
+  message: "至少需要提供一项界面设置"
+});
 
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
@@ -1426,7 +1435,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/tasks", (request, response) => {
     data(response, store.listTaskSummariesPage(
       request.params.workId,
-      parsePagination(request.query) ?? { page: 1, limit: 50, offset: 0 }
+      parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 }
     ));
   });
   app.post("/api/works/:workId/tasks", (request, response) => {

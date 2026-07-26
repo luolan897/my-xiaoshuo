@@ -52,6 +52,24 @@ import {
   resizeCropRect
 } from "/avatar-crop.js?v=20260725-avatar-crop";
 
+const defaultPageSizes = Object.freeze({
+  characters: 30,
+  analysisTasks: 30,
+  fileVersions: 30
+});
+
+function normalizePageSize(value, fallback = 30) {
+  const candidate = Number(value);
+  return Number.isInteger(candidate) && candidate >= 10 && candidate <= 100 ? candidate : fallback;
+}
+
+function normalizePageSizes(value) {
+  return Object.fromEntries(Object.entries(defaultPageSizes).map(([module, fallback]) => [
+    module,
+    normalizePageSize(value?.[module], fallback)
+  ]));
+}
+
 const state = {
   user: null,
   csrfToken: null,
@@ -74,6 +92,7 @@ const state = {
   dirty: false,
   pendingImportMeta: null,
   pendingCoverWorkId: null,
+  uiSettings: { toastPosition: "bottom-right", pageSizes: { ...defaultPageSizes } },
   relationshipGraph: null,
   galaxy: null,
   relationshipMindMap: null,
@@ -1928,7 +1947,7 @@ async function api(path, options = {}) {
   return payload.data;
 }
 
-async function apiPage(path, page = 1, limit = 50) {
+async function apiPage(path, page = 1, limit = 30) {
   const separator = path.includes("?") ? "&" : "?";
   const result = await api(`${path}${separator}page=${page}&limit=${limit}`);
   if (Array.isArray(result)) return { items: result, page, limit, hasMore: false, nextPage: null };
@@ -2037,7 +2056,12 @@ function applyAuthenticatedUser(session) {
 
 function applyPlatformUiSettings(settings) {
   const position = settings?.toastPosition === "top-right" ? "top-right" : "bottom-right";
+  state.uiSettings = { toastPosition: position, pageSizes: normalizePageSizes(settings?.pageSizes) };
   $("#toast-region").dataset.position = position;
+}
+
+function pageSizeFor(module) {
+  return normalizePageSize(state.uiSettings.pageSizes[module], defaultPageSizes[module] ?? 30);
 }
 
 async function loadPlatformUiSettings() {
@@ -2532,6 +2556,10 @@ async function openPlatformUiSettingsDialog() {
   try {
     const settings = await api("/api/platform/ui-settings");
     $("#toast-position").value = settings.toastPosition === "top-right" ? "top-right" : "bottom-right";
+    const pageSizes = normalizePageSizes(settings.pageSizes);
+    $("#page-size-characters").value = String(pageSizes.characters);
+    $("#page-size-analysis-tasks").value = String(pageSizes.analysisTasks);
+    $("#page-size-file-versions").value = String(pageSizes.fileVersions);
     $("#platform-ui-settings-dialog").showModal();
   } catch (error) {
     toast(error.message, "error");
@@ -3477,13 +3505,14 @@ async function renderSettings() {
 
 async function renderCharacters(page = characterListPage) {
   const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
+  const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
-    hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page),
+    hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page, pageSize),
     canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
-    ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, 50)
+    ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, pageSize)
     : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
@@ -3910,8 +3939,9 @@ async function renderReviews() {
 
 async function renderTasks(page = taskListPage) {
   stopTaskProgressRefresh();
+  const pageSize = pageSizeFor("analysisTasks");
   const [taskPage, settings] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/tasks`, page, 50),
+    apiPage(`/api/works/${state.work.id}/tasks`, page, pageSize),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
       : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
@@ -6725,7 +6755,7 @@ async function loadImportHistoryPage(page) {
   const workId = state.work?.id;
   if (!workId || !page) return;
   const requestId = ++importHistoryRequestId;
-  const result = await apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25);
+  const result = await apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, pageSizeFor("fileVersions"));
   if (requestId !== importHistoryRequestId || state.work?.id !== workId || !$("#import-history-dialog").open) return;
   importHistoryRecords = page === 1 ? result.items : [...importHistoryRecords, ...result.items];
   importHistoryNextPage = result.nextPage;
@@ -7326,11 +7356,20 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   try {
     const settings = await api("/api/platform/ui-settings", {
       method: "PATCH",
-      body: { toastPosition: $("#toast-position").value }
+      body: {
+        toastPosition: $("#toast-position").value,
+        pageSizes: {
+          characters: Number($("#page-size-characters").value),
+          analysisTasks: Number($("#page-size-analysis-tasks").value),
+          fileVersions: Number($("#page-size-file-versions").value)
+        }
+      }
     });
     applyPlatformUiSettings(settings);
+    characterListPage = 1;
+    taskListPage = 1;
     $("#platform-ui-settings-dialog").close();
-    toast("界面通知设置已保存");
+    toast("界面与分页设置已保存");
   } catch (error) {
     toast(error.message, "error");
   } finally {

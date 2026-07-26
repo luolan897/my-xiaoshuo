@@ -1080,12 +1080,15 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await writer.agent.get("/api/works").expect(401);
   });
 
-  it("管理员可统一设置 Toast 位置，普通用户只能读取", async () => {
+  it("管理员可统一设置界面与分模块分页，普通用户只能读取", async () => {
     const admin = await register(runtime, "ui_admin");
     const writer = await register(runtime, "ui_writer");
 
     const defaults = await writer.agent.get("/api/ui-settings").expect(200);
-    expect(defaults.body.data).toMatchObject({ toastPosition: "bottom-right" });
+    expect(defaults.body.data).toMatchObject({
+      toastPosition: "bottom-right",
+      pageSizes: { characters: 30, analysisTasks: 30, fileVersions: 30 }
+    });
     await writer.agent.get("/api/platform/ui-settings").expect(403);
     await writer.agent.patch("/api/platform/ui-settings")
       .set("X-CSRF-Token", writer.csrfToken)
@@ -1100,14 +1103,39 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", admin.csrfToken)
       .send({ toastPosition: "top-right", unknown: true })
       .expect(400);
+    await admin.agent.patch("/api/platform/ui-settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ pageSizes: { characters: 9 } })
+      .expect(400);
+    await admin.agent.patch("/api/platform/ui-settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ pageSizes: { settings: 20 } })
+      .expect(400);
 
     const updated = await admin.agent.patch("/api/platform/ui-settings")
       .set("X-CSRF-Token", admin.csrfToken)
-      .send({ toastPosition: "top-right" })
+      .send({
+        toastPosition: "top-right",
+        pageSizes: { characters: 20, analysisTasks: 40, fileVersions: 15 }
+      })
       .expect(200);
-    expect(updated.body.data).toMatchObject({ toastPosition: "top-right" });
+    expect(updated.body.data).toMatchObject({
+      toastPosition: "top-right",
+      pageSizes: { characters: 20, analysisTasks: 40, fileVersions: 15 }
+    });
+    const partialUpdate = await admin.agent.patch("/api/platform/ui-settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ pageSizes: { characters: 25 } })
+      .expect(200);
+    expect(partialUpdate.body.data).toMatchObject({
+      toastPosition: "top-right",
+      pageSizes: { characters: 25, analysisTasks: 40, fileVersions: 15 }
+    });
     const visibleToWriter = await writer.agent.get("/api/ui-settings").expect(200);
-    expect(visibleToWriter.body.data).toMatchObject({ toastPosition: "top-right" });
+    expect(visibleToWriter.body.data).toMatchObject({
+      toastPosition: "top-right",
+      pageSizes: { characters: 25, analysisTasks: 40, fileVersions: 15 }
+    });
     expect(runtime.database.get(
       "SELECT action, user_id FROM audit_logs WHERE action = 'platform.ui-settings.updated'"
     )).toEqual({ action: "platform.ui-settings.updated", user_id: admin.user.userId });

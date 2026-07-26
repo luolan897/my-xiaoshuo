@@ -35,6 +35,35 @@ type WorkInput = {
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
 
+type PlatformPageSizes = {
+  characters: number;
+  analysisTasks: number;
+  fileVersions: number;
+};
+
+const defaultPlatformPageSizes: PlatformPageSizes = {
+  characters: 30,
+  analysisTasks: 30,
+  fileVersions: 30
+};
+
+function platformPageSizes(value: unknown): PlatformPageSizes {
+  const stored = typeof value === "string"
+    ? json<Record<string, unknown>>(value, {})
+    : value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const pageSize = (key: keyof PlatformPageSizes): number => {
+    const candidate = Number(stored[key]);
+    return Number.isInteger(candidate) && candidate >= 10 && candidate <= 100
+      ? candidate
+      : defaultPlatformPageSizes[key];
+  };
+  return {
+    characters: pageSize("characters"),
+    analysisTasks: pageSize("analysisTasks"),
+    fileVersions: pageSize("fileVersions")
+  };
+}
+
 type SettingInput = {
   title: string;
   category: string;
@@ -932,21 +961,32 @@ export class Store {
     const row = this.db.get("SELECT * FROM platform_ui_settings WHERE id = 1");
     return {
       toastPosition: String(row?.toast_position) === "top-right" ? "top-right" : "bottom-right",
+      pageSizes: platformPageSizes(row?.page_sizes_json),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
 
-  updatePlatformUiSettings(input: { toastPosition: "bottom-right" | "top-right" }): Record<string, unknown> {
+  updatePlatformUiSettings(input: {
+    toastPosition?: "bottom-right" | "top-right";
+    pageSizes?: Partial<PlatformPageSizes>;
+  }): Record<string, unknown> {
     const timestamp = now();
+    const current = this.getPlatformUiSettings();
+    const currentPageSizes = platformPageSizes(current.pageSizes);
+    const pageSizes = platformPageSizes(JSON.stringify({ ...currentPageSizes, ...input.pageSizes }));
+    const toastPosition = input.toastPosition ?? (current.toastPosition === "top-right" ? "top-right" : "bottom-right");
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO platform_ui_settings (id, toast_position, updated_at) VALUES (1, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET toast_position = excluded.toast_position, updated_at = excluded.updated_at`,
-        input.toastPosition,
+        `INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, updated_at) VALUES (1, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET toast_position = excluded.toast_position,
+           page_sizes_json = excluded.page_sizes_json, updated_at = excluded.updated_at`,
+        toastPosition,
+        JSON.stringify(pageSizes),
         timestamp
       );
       this.audit(PLATFORM_AI_WORK_ID, "platform.ui-settings.updated", "platform-ui-settings", "platform-ui-settings", {
-        toastPosition: input.toastPosition
+        toastPosition,
+        pageSizes
       });
     });
     return this.getPlatformUiSettings();
