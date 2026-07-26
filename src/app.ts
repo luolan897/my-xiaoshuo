@@ -1466,6 +1466,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     redactTaskCharacterNames(store.getTask(request.params.taskId), requestPermissions(request))
   ));
   app.get("/api/tasks/:taskId/trace", (request, response) => data(response, ai.getTaskTrace(request.params.taskId)));
+  app.get("/api/tasks/:taskId/trace/calls/:callId", (request, response) => {
+    const full = parse(z.enum(["true", "false"]).default("false"), request.query.full ?? "false") === "true";
+    data(response, ai.getTaskTraceCall(request.params.taskId, request.params.callId, full));
+  });
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
     data(response, redactTaskCharacterNames(

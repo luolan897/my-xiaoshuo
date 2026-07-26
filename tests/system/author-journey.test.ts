@@ -297,8 +297,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-trace-security-review-relationship-filters');
-    expect(page.text).toContain('/styles.css?v=20260726-relationship-label-scale');
+    expect(page.text).toContain('/app.js?v=20260726-task-progress-ring-trace-lazy-load');
+    expect(page.text).toContain('/styles.css?v=20260726-task-progress-ring-trace-lazy-load');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -489,6 +489,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("每轮任务上限");
     expect(application.text).toContain("开始下一轮");
     expect(application.text).toContain('class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}"');
+    expect(application.text).toContain('class="task-auto-run-progress-ring ${runningCount ? "is-running" : "is-waiting"}" role="progressbar"');
+    expect(application.text).toContain('class="task-auto-run-progress-ring-value" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="${runningProgress} 100"');
     expect(application.text).toContain('class="task-auto-run-progress-bar ${runningCount ? "is-running" : "is-waiting"}" max="100" value="${runningProgress}"');
     expect(application.text).toContain("scheduleTaskProgressRefresh(state.work.id, runningCount)");
     expect(application.text).toContain("scheduleTaskProgressRefresh(workId, 1)");
@@ -498,6 +500,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain("消化 pending 任务");
     expect(application.text).toContain("/tasks/auto-run");
     expect(styles.text).toContain(".task-auto-run-panel");
+    expect(styles.text).toContain(".task-auto-run-progress-ring-value { stroke: var(--accent);");
+    expect(styles.text).toContain(".task-auto-run-progress-ring { display: none; }");
+    expect(styles.text).toContain(".task-auto-run-progress-bar-layout { display: grid;");
     expect(styles.text).toContain(".task-auto-run-progress-bar::-webkit-progress-value");
     expect(application.text).toContain('class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}"');
     expect(application.text).toContain('class="task-progress-track" role="progressbar"');
