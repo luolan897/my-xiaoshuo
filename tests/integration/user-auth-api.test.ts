@@ -998,7 +998,9 @@ describe("用户、作品权限与操作者追踪 API", () => {
       traceTimestamp
     );
     const ownerTrace = await owner.agent.get(`/api/tasks/${taskId}/trace`).expect(200);
-    expect(JSON.stringify(ownerTrace.body.data)).toContain("TOP_SECRET_PROSE");
+    expect(JSON.stringify(ownerTrace.body.data)).not.toContain("TOP_SECRET_PROSE");
+    const ownerTracePreview = await owner.agent.get(`/api/tasks/${taskId}/trace/calls/call_permission_trace`).expect(200);
+    expect(JSON.stringify(ownerTracePreview.body.data)).toContain("TOP_SECRET_PROSE");
 
     const secretCharacter = await owner.agent.post(`/api/works/${workId}/characters`)
       .set("X-CSRF-Token", owner.csrfToken)
@@ -1054,6 +1056,12 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const protectedTrace = await analysisOnly.agent.get(`/api/tasks/${taskId}/trace`).expect(403);
     expect(protectedTrace.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     expect(JSON.stringify(protectedTrace.body)).not.toContain("TOP_SECRET_PROSE");
+    const protectedTracePreview = await analysisOnly.agent.get(`/api/tasks/${taskId}/trace/calls/call_permission_trace`).expect(403);
+    expect(protectedTracePreview.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(protectedTracePreview.body)).not.toContain("TOP_SECRET_PROSE");
+    const protectedTraceFull = await analysisOnly.agent.get(`/api/tasks/${taskId}/trace/calls/call_permission_trace?full=true`).expect(403);
+    expect(protectedTraceFull.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(protectedTraceFull.body)).not.toContain("TOP_SECRET_PROSE");
   });
 
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {
