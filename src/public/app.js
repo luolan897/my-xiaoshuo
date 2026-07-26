@@ -169,6 +169,10 @@ function analysisTaskStatusLabel(status) {
   })[String(status)] ?? "未知状态";
 }
 
+function canRerunAnalysisTask(task) {
+  return ["review", "completed", "partial", "expired", "cancelled"].includes(String(task?.status ?? ""));
+}
+
 function normalizedAnalysisTaskStatus(status) {
   const value = String(status);
   return ["pending", "running", "review", "completed", "partial", "expired", "cancelled"].includes(value)
@@ -4061,6 +4065,7 @@ async function renderTasks(page = taskListPage) {
       <td class="task-row-actions">
         <button class="ghost-button" type="button" data-task-detail="${esc(item.id)}">详情</button>
         ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
+        ${canRerunAnalysisTask(item) ? `<button class="ghost-button" type="button" data-rerun-task="${esc(item.id)}">按原配置重跑</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
     </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
@@ -4142,6 +4147,9 @@ async function renderTasks(page = taskListPage) {
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
     }
   }));
+  $("#module-content").querySelectorAll("[data-rerun-task]").forEach((button) => button.addEventListener("click", async () => {
+    await rerunAnalysisTask(button.dataset.rerunTask, button);
+  }));
   $("#module-content").querySelectorAll("[data-cancel-task]").forEach((button) => button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -4154,6 +4162,23 @@ async function renderTasks(page = taskListPage) {
     }
   }));
   scheduleTaskProgressRefresh(state.work.id, runningCount);
+}
+
+async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {
+  const workId = state.work?.id;
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "正在创建";
+  try {
+    const rerun = await api(`/api/tasks/${encodeURIComponent(taskId)}/rerun`, { method: "POST", body: {} });
+    if (closeDetail) $("#form-dialog").close();
+    toast(`已按原配置创建新任务 ${rerun.id}`);
+    if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
 }
 
 function stopTaskProgressRefresh() {
@@ -4472,6 +4497,93 @@ function bindTaskResultActions(container) {
   }));
 }
 
+function relationshipIdentityRepairFailure(task) {
+  if (task?.taskType !== "relationship-analysis" || !Array.isArray(task.failures)) return null;
+  return task.failures.find((failure) =>
+    failure?.code === "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED"
+    && failure.details
+    && typeof failure.details === "object"
+    && typeof failure.details.characterId === "string"
+  ) ?? null;
+}
+
+function relationshipIdentityRepairMetrics(details) {
+  const metrics = [];
+  if (Number.isFinite(Number(details.candidateCount))) {
+    metrics.push(["疑似来源", `${Number(details.candidateCount)} / 上限 ${Number(details.maximum)}`]);
+  }
+  if (Number.isFinite(Number(details.fuzzyReferenceCount))) {
+    metrics.push(["名称与别名", `${Number(details.fuzzyReferenceCount)} / 上限 ${Number(details.maximumFuzzyReferences)}`]);
+  }
+  if (Number.isFinite(Number(details.scannedCharacters))) {
+    metrics.push(["待核对文本", `${Number(details.scannedCharacters).toLocaleString("zh-CN")} / 上限 ${Number(details.maximumScannedCharacters).toLocaleString("zh-CN")} 字符`]);
+  }
+  if (Number.isFinite(Number(details.fuzzyMatchCount))) {
+    metrics.push(["疑似写法", `${Number(details.fuzzyMatchCount)} / 上限 ${Number(details.maximumFuzzyMatches)}`]);
+  }
+  metrics.push(["身份锚点", `${Number(details.identityAnchorCount ?? 0)} 个`]);
+  return metrics;
+}
+
+async function openRelationshipIdentityRepairDialog(task, failure) {
+  const details = failure.details && typeof failure.details === "object" ? failure.details : {};
+  const character = await api(`/api/characters/${encodeURIComponent(details.characterId)}`);
+  const anchors = [
+    character.code,
+    character.attributes?.identity,
+    character.race?.name || character.species,
+    ...(Array.isArray(character.organizations) ? character.organizations.map((organization) => organization.name) : [])
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  const metrics = relationshipIdentityRepairMetrics(details);
+  const metricHtml = metrics.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join("");
+  const anchorHtml = anchors.length
+    ? anchors.map((anchor) => `<span>${esc(anchor)}</span>`).join("")
+    : "<em>尚未登记可用于消歧的身份锚点</em>";
+  openDialog("修复人物身份资料",
+    `<section class="relationship-identity-repair-summary">
+      <div><span>匹配诊断</span><h3>${esc(character.name)}</h3><p>${esc(failure.message)}</p></div>
+      <dl>${metricHtml}</dl>
+      <div class="relationship-identity-anchor-list"><strong>当前身份锚点</strong><div>${anchorHtml}</div></div>
+    </section>
+    <p class="relationship-identity-repair-guidance">把原文中确实指向该人物的稳定称呼登记为别名；编号和身份定位应填写会在正文或设定中共同出现的辨识词。保存后，别名命中会转为精确匹配，身份锚点可收窄过多的拼音疑似来源。</p>
+    <label>角色标准名<input type="text" value="${esc(character.name)}" readonly></label>
+    ${field("aliases", "确认别名", "item-list", character.aliases ?? [])}
+    ${field("code", "人物编号或代号", "text", character.code)}
+    ${field("identity", "身份与定位", "text", character.attributes?.identity)}
+    <button class="ghost-button relationship-identity-full-profile" type="button" data-open-identity-character-profile>打开完整人物档案</button>`,
+    async (form) => {
+      const aliases = form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean);
+      const code = String(form.get("code") ?? "").trim();
+      const identity = String(form.get("identity") ?? "").trim();
+      const saved = await api(`/api/characters/${encodeURIComponent(character.id)}`, {
+        method: "PATCH",
+        body: {
+          aliases,
+          code,
+          attributes: { ...(character.attributes ?? {}), identity },
+          expectedVersionNo: character.versionNo,
+          changeNote: `修复人物关系来源匹配：${failure.message}`.slice(0, 500)
+        }
+      });
+      await loadAiReferences();
+      if (state.module === "tasks") await renderTasks(taskListPage);
+      toast(`“${saved.name}”的身份资料已保存为 v${saved.versionNo}，可重新运行原分析配置`);
+    },
+    "人物关系匹配修复",
+    {
+      submitLabel: "保存身份修复",
+      pendingLabel: "保存中…",
+      pendingMessage: "正在保存人物身份资料",
+      errorPrefix: "身份修复失败：",
+      wide: true
+    });
+  $("#dialog-fields").querySelector("[data-open-identity-character-profile]")?.addEventListener("click", async () => {
+    $("#form-dialog").close();
+    await openCharacterEditor(character);
+    activateCharacterEditorTab("profile");
+  });
+}
+
 function openTaskDetailDialog(task, trace) {
   if (!task) return;
   const details = Array.isArray(task.scopeDetails) ? task.scopeDetails : [];
@@ -4498,6 +4610,15 @@ function openTaskDetailDialog(task, trace) {
   const failureHtml = failures.length
     ? `<ul>${failures.map((item) => `<li>${esc(item.message || JSON.stringify(item))}</li>`).join("")}</ul>`
     : "<p>无</p>";
+  const identityRepairFailure = relationshipIdentityRepairFailure(task);
+  const identityRepairHtml = identityRepairFailure
+    ? `<section class="relationship-identity-repair-entry">
+        <div><strong>可修复的人物身份匹配问题</strong><p>系统已定位到触发来源超限的角色。补充准确别名或身份锚点后，再按原配置重试。</p></div>
+        ${canEditModule("characters")
+          ? '<button class="primary-button" type="button" data-task-identity-repair>修复人物身份资料</button>'
+          : "<small>当前账户没有人物模块编辑权限。</small>"}
+      </section>`
+    : "";
   const resultPreview = renderTaskResult(task);
   openDialog("任务详情",
     `<div class="task-detail">
@@ -4508,8 +4629,9 @@ function openTaskDetailDialog(task, trace) {
         <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
         <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
-        <div><strong>失败信息</strong>${failureHtml}</div>
+        <div><strong>失败信息</strong>${failureHtml}${identityRepairHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
+        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重跑</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
@@ -4518,6 +4640,19 @@ function openTaskDetailDialog(task, trace) {
     { submitLabel: "关闭", wide: true, trace: true });
   bindTaskTraceCallActions($("#dialog-fields"));
   bindTaskResultActions($("#dialog-fields"));
+  $("#dialog-fields").querySelector("[data-rerun-task-detail]")?.addEventListener("click", async (event) => {
+    await rerunAnalysisTask(event.currentTarget.dataset.rerunTaskDetail, event.currentTarget, { closeDetail: true });
+  });
+  $("#dialog-fields").querySelector("[data-task-identity-repair]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    $("#form-dialog").close();
+    try {
+      await openRelationshipIdentityRepairDialog(task, identityRepairFailure);
+    } catch (error) {
+      toast(`身份修复向导加载失败：${error.message}`, "error");
+    }
+  });
 }
 
 function renderProviderCards(providers, models) {
@@ -6636,15 +6771,23 @@ async function openTaskDialog() {
       <label class="checkbox-field"><input name="previewRelationshipChanges" type="checkbox" checked><span>分析完成后先预览关系变更</span></label>
       <p>建议保持开启。分析只生成新增、更新和删除清单，确认应用前不会修改人物关系库；取消勾选则沿用直接写入逻辑。</p>
     </div>
+    <section class="relationship-source-preview-card" aria-labelledby="relationship-source-preview-title">
+      <div class="relationship-source-preview-header">
+        <div><strong id="relationship-source-preview-title">发送来源预检</strong><p>创建任务前查看将发送的章节与设定，并可取消误命中的来源。疑似拼音写法可能调用当前任务模型确认身份。</p></div>
+        <button type="button" class="ghost-button" data-relationship-source-preview disabled>预览来源</button>
+      </div>
+      <div class="relationship-source-preview-content" data-relationship-source-preview-content role="status" aria-live="polite">选择至少一个被分析角色后即可预览。</div>
+    </section>
     <div class="relationship-overwrite-card relationship-existing-overwrite-card hidden">
       <label class="checkbox-field"><input name="replaceExistingRelationships" type="checkbox" disabled><span>用本次结果覆盖所选角色的已有关系</span></label>
       <p>勾选后，任务成功时会先删除所有涉及所选角色的旧关系，再写入本次分析结果；不勾选则只追加新关系。</p>
     </div>
     <label>额外分析提示<textarea name="additionalPrompt" maxlength="10000" placeholder="例如：重点识别权力继承、师承变化或隐秘亲缘关系"></textarea><small>将同时追加到证据收集和全局关系归纳提示词，仅影响本次任务。</small></label>
   </div>`;
-  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
+  let relationshipSourcePreview = null;
+  let relationshipSourcePreviewConfigKey = "";
+  const buildRelationshipScope = (form) => {
     const taskType = String(form.get("taskType"));
-    const modelId = String(form.get("modelId"));
     const scopeType = String(form.get("scopeType"));
     const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
     const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
@@ -6658,6 +6801,29 @@ async function openTaskDialog() {
       : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+    return scope;
+  };
+  const relationshipPreviewKey = (scope, modelId) => JSON.stringify({
+    type: scope.type,
+    chapterId: scope.chapterId ?? null,
+    includeAllSettings: scope.includeAllSettings === true,
+    characterIds: scope.characterIds ?? [],
+    preFilterRelationshipSources: scope.preFilterRelationshipSources !== false,
+    modelId
+  });
+  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
+    const taskType = String(form.get("taskType"));
+    const modelId = String(form.get("modelId"));
+    const scope = buildRelationshipScope(form);
+    if (taskType === "relationship-analysis" && relationshipSourcePreview
+      && relationshipSourcePreviewConfigKey === relationshipPreviewKey(scope, modelId)) {
+      scope.relationshipSourceRefs = [...$("#dialog-fields").querySelectorAll("[data-relationship-source-selected]:checked")]
+        .map((input) => ({
+          sourceType: input.dataset.sourceType,
+          sourceId: input.dataset.sourceId,
+          sourceVersion: input.dataset.sourceVersion
+        }));
+    }
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     taskListPage = 1;
     toast("分析任务已创建，已进入任务队列");
@@ -6686,6 +6852,8 @@ async function openTaskDialog() {
   const relationshipCharacterClear = relationshipOptions.querySelector("[data-relationship-character-clear]");
   const relationshipCharacterEmpty = relationshipOptions.querySelector("[data-relationship-character-empty]");
   const preFilterRelationships = relationshipOptions.querySelector('input[name="preFilterRelationshipSources"]');
+  const relationshipSourcePreviewButton = relationshipOptions.querySelector("[data-relationship-source-preview]");
+  const relationshipSourcePreviewContent = relationshipOptions.querySelector("[data-relationship-source-preview-content]");
   const replaceRelationships = relationshipOptions.querySelector('input[name="replaceExistingRelationships"]');
   const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-existing-overwrite-card");
   const allSettingsOption = document.createElement("option");
@@ -6714,6 +6882,41 @@ async function openTaskDialog() {
     relationshipCharacterCount.textContent = selected.length ? `已选 ${selected.length}` : "未选择";
     relationshipCharacterClear.disabled = selected.length === 0;
     relationshipCharacterTrigger.setAttribute("aria-label", `筛选被分析角色，已选择 ${selected.length} 个`);
+  };
+  const invalidateRelationshipSourcePreview = () => {
+    relationshipSourcePreview = null;
+    relationshipSourcePreviewConfigKey = "";
+    relationshipSourcePreviewContent.classList.remove("is-loading");
+    relationshipSourcePreviewContent.textContent = relationshipCharacterInputs.some((input) => input.checked)
+      ? "分析配置已变化，请重新预览将发送的来源。"
+      : "选择至少一个被分析角色后即可预览。";
+  };
+  const relationshipSourceTypeLabel = (sourceType) => ({
+    chapter: "章节",
+    work: "作品资料",
+    setting: "设定",
+    character: "人物档案",
+    race: "种族",
+    organization: "组织",
+    "timeline-track": "时间轴",
+    "timeline-event": "时间线事件",
+    relationship: "已有关系",
+    "chapter-outline": "章节大纲",
+    foreshadow: "伏笔",
+    review: "审核项"
+  }[sourceType] ?? sourceType);
+  const renderRelationshipSourcePreview = (preview) => {
+    const summary = `<div class="relationship-source-preview-summary"><strong>${preview.sourceCount} 条来源</strong><span>${preview.chapterCount} 章</span><span>${preview.settingCount} 条设定资料</span><span>约 ${Number(preview.totalCharacters).toLocaleString("zh-CN")} 字符</span><span>预计 ${preview.estimatedBatchCount} 个批次</span></div>`;
+    if (!preview.sources.length) {
+      relationshipSourcePreviewContent.innerHTML = `${summary}<p class="relationship-source-preview-empty">当前配置没有命中任何来源。仍可创建任务，但任务不会向模型发送正文或设定。</p>`;
+      return;
+    }
+    const rows = preview.sources.map((source) => `<label class="relationship-source-preview-row">
+      <input type="checkbox" data-relationship-source-selected data-source-type="${esc(source.sourceType)}" data-source-id="${esc(source.sourceId)}" data-source-version="${esc(source.version)}" checked>
+      <span class="relationship-source-preview-main"><strong>${esc(source.title)}</strong><small>${esc(relationshipSourceTypeLabel(source.sourceType))} · ${Number(source.characterCount).toLocaleString("zh-CN")} 字符</small></span>
+      <span class="relationship-source-preview-match ${source.matchType === "fuzzy" ? "is-fuzzy" : ""}">${source.matchType === "exact" ? "名称命中" : source.matchType === "fuzzy" ? "疑似写法确认" : "范围内来源"}</span>
+    </label>`).join("");
+    relationshipSourcePreviewContent.innerHTML = `${summary}<div class="relationship-source-preview-list" role="group" aria-label="选择要发送的来源">${rows}</div>`;
   };
   const filterRelationshipCharacters = () => {
     const query = relationshipCharacterSearch.value.trim().toLocaleLowerCase();
@@ -6746,6 +6949,7 @@ async function openTaskDialog() {
     if (!enabled) setRelationshipCharacterBubbleOpen(false);
     const hasSelectedCharacters = enabled && relationshipCharacterInputs.some((input) => input.checked);
     preFilterRelationships.disabled = !hasSelectedCharacters;
+    relationshipSourcePreviewButton.disabled = !hasSelectedCharacters || !taskModelSelect.value;
     replaceRelationships.disabled = !hasSelectedCharacters;
     relationshipOverwriteCard.classList.toggle("hidden", !hasSelectedCharacters);
     if (!hasSelectedCharacters) replaceRelationships.checked = false;
@@ -6760,16 +6964,55 @@ async function openTaskDialog() {
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
     syncTaskModelDefault();
+    invalidateRelationshipSourcePreview();
+    syncRelationshipOptions();
+  });
+  taskModelSelect.addEventListener("change", () => {
+    invalidateRelationshipSourcePreview();
     syncRelationshipOptions();
   });
   relationshipCharacterTrigger.addEventListener("click", () => {
     setRelationshipCharacterBubbleOpen(relationshipCharacterTrigger.getAttribute("aria-expanded") !== "true");
   });
   relationshipCharacterSearch.addEventListener("input", filterRelationshipCharacters);
-  for (const input of relationshipCharacterInputs) input.addEventListener("change", syncRelationshipOptions);
+  for (const input of relationshipCharacterInputs) input.addEventListener("change", () => {
+    invalidateRelationshipSourcePreview();
+    syncRelationshipOptions();
+  });
   relationshipCharacterClear.addEventListener("click", () => {
     for (const input of relationshipCharacterInputs) input.checked = false;
+    invalidateRelationshipSourcePreview();
     syncRelationshipOptions();
+  });
+  preFilterRelationships.addEventListener("change", invalidateRelationshipSourcePreview);
+  relationshipSourcePreviewButton.addEventListener("click", async () => {
+    const form = new FormData($("#dynamic-form"));
+    const scope = buildRelationshipScope(form);
+    const modelId = String(form.get("modelId") ?? "");
+    if (!scope.characterIds?.length) return toast("请先选择至少一个被分析角色", "error");
+    relationshipSourcePreviewButton.disabled = true;
+    relationshipSourcePreviewButton.textContent = "预检中…";
+    relationshipSourcePreviewContent.classList.add("is-loading");
+    relationshipSourcePreviewContent.textContent = "正在构建索引并核对来源，请稍候。";
+    try {
+      const preview = await api(`/api/works/${state.work.id}/tasks/relationship-source-preview`, {
+        method: "POST",
+        body: { scope, modelId }
+      });
+      relationshipSourcePreview = preview;
+      relationshipSourcePreviewConfigKey = relationshipPreviewKey(scope, modelId);
+      relationshipSourcePreviewContent.classList.remove("is-loading");
+      renderRelationshipSourcePreview(preview);
+    } catch (error) {
+      relationshipSourcePreview = null;
+      relationshipSourcePreviewConfigKey = "";
+      relationshipSourcePreviewContent.classList.remove("is-loading");
+      relationshipSourcePreviewContent.textContent = `来源预检失败：${error.message}`;
+      toast(`来源预检失败：${error.message}`, "error");
+    } finally {
+      relationshipSourcePreviewButton.textContent = "重新预览";
+      syncRelationshipOptions();
+    }
   });
   $("#dynamic-form").onclick = (event) => {
     if (!relationshipCharacterPickerElement.contains(event.target)) setRelationshipCharacterBubbleOpen(false);
@@ -6780,7 +7023,11 @@ async function openTaskDialog() {
     setRelationshipCharacterBubbleOpen(false);
     relationshipCharacterTrigger.focus();
   };
-  scopeTypeSelect.addEventListener("change", syncChapterField);
+  scopeTypeSelect.addEventListener("change", () => {
+    invalidateRelationshipSourcePreview();
+    syncChapterField();
+  });
+  chapterSelect.addEventListener("change", invalidateRelationshipSourcePreview);
   syncRelationshipOptions();
 }
 

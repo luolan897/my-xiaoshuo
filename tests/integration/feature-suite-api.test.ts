@@ -764,6 +764,68 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(cancel.body.error.code).toBe("TASK_NOT_CANCELLABLE");
   });
 
+  it("按原配置重跑终态任务并刷新人物快照与来源版本", async () => {
+    runtime = createTestRuntime();
+    const { workId, chapters } = await seedWork(runtime);
+    const modelId = await configureAi(runtime, workId);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "银月基多拉"
+    }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: {
+        type: "book",
+        characterIds: [character.body.data.id],
+        additionalPrompt: "只分析可靠证据",
+        preFilterRelationshipSources: false,
+        replaceExistingRelationships: true
+      }
+    }).expect(201);
+    const pendingRerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(409);
+    expect(pendingRerun.body.error.code).toBe("TASK_NOT_RERUNNABLE");
+
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "银月基多拉在北港上空现身。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/characters/${character.body.data.id}`).send({
+      name: "月影基多拉"
+    }).expect(200);
+    const expired = await request(runtime.app).get(`/api/tasks/${original.body.data.id}`).expect(200);
+    expect(expired.body.data.status).toBe("expired");
+
+    const rerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(201);
+    expect(rerun.body.data).toMatchObject({
+      taskType: "relationship-analysis",
+      status: "pending",
+      progress: 0,
+      rerunOfTaskId: original.body.data.id,
+      model: { id: modelId },
+      scope: {
+        type: "book",
+        characterIds: [character.body.data.id],
+        targetCharacters: [{ id: character.body.data.id, name: "月影基多拉" }],
+        additionalPrompt: "只分析可靠证据",
+        preFilterRelationshipSources: false,
+        replaceExistingRelationships: true
+      }
+    });
+    expect(rerun.body.data.id).not.toBe(original.body.data.id);
+    expect(rerun.body.data.sourceVersions[chapters[0].id]).toBe(2);
+    const originalAfter = await request(runtime.app).get(`/api/tasks/${original.body.data.id}`).expect(200);
+    expect(originalAfter.body.data.status).toBe("expired");
+    const audit = runtime.database.get(
+      "SELECT detail_json FROM audit_logs WHERE entity_id = ? AND action = 'task.created'",
+      rerun.body.data.id
+    );
+    expect(JSON.parse(String(audit?.detail_json))).toMatchObject({ rerunOfTaskId: original.body.data.id });
+
+    const invalidBody = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({
+      modelId: "model_override"
+    }).expect(400);
+    expect(invalidBody.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
   it("续写前自动装载相关人物、大纲和伏笔，续写后返回冲突卡并绑定文本哈希", async () => {
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens: number };
@@ -1245,6 +1307,123 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).toContain('title="组织设定：守望会"');
   });
 
+  it("预检人物关系来源并按用户保留的来源创建任务", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在旧港查看完整航海日志。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "这是一章完全无关的正文。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "纪宁",
+      aliases: ["阿宁"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾川" }).expect(201);
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "旧港盟约",
+      category: "人物关系",
+      content: "阿宁与顾川订立了长期守望盟约。"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const scope = {
+      type: "book",
+      includeAllSettings: true,
+      characterIds: [target.body.data.id],
+      preFilterRelationshipSources: true
+    };
+
+    const preview = await request(runtime.app)
+      .post(`/api/works/${workId}/tasks/relationship-source-preview`)
+      .send({ scope, modelId })
+      .expect(200);
+    expect(preview.body.data).toMatchObject({
+      preFilterRelationshipSources: true,
+      chapterCount: 1,
+      sourceCount: expect.any(Number),
+      totalCharacters: expect.any(Number),
+      estimatedBatchCount: expect.any(Number)
+    });
+    expect(preview.body.data.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceType: "chapter",
+        sourceId: chapters[0].id,
+        title: chapters[0].title,
+        matchType: "exact"
+      }),
+      expect.objectContaining({
+        sourceType: "setting",
+        sourceId: setting.body.data.id,
+        title: "旧港盟约",
+        matchType: "exact"
+      })
+    ]));
+    expect(preview.body.data.sources).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: "chapter", sourceId: chapters[1].id })
+    ]));
+
+    const previewedChapter = preview.body.data.sources.find((source: { sourceType: string }) => source.sourceType === "chapter");
+    const previewedSetting = preview.body.data.sources.find((source: { sourceType: string }) => source.sourceType === "setting");
+    const chapterRef = {
+      sourceType: previewedChapter.sourceType,
+      sourceId: previewedChapter.sourceId,
+      sourceVersion: previewedChapter.version
+    };
+    const settingRef = {
+      sourceType: previewedSetting.sourceType,
+      sourceId: previewedSetting.sourceId,
+      sourceVersion: previewedSetting.version
+    };
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { ...scope, relationshipSourceRefs: [chapterRef] }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toContain("已预检 1 条来源");
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({}).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      sourcePreviewApplied: true,
+      coveredChapterCount: 1,
+      coveredSettingCount: 0
+    });
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("阿宁在旧港查看完整航海日志。");
+    expect(sent).not.toContain("阿宁与顾川订立了长期守望盟约。");
+    expect(sent).not.toContain("这是一章完全无关的正文。");
+
+    const queuedTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { ...scope, additionalPrompt: "验证排队期间的来源版本变化", relationshipSourceRefs: [settingRef] }
+    }).expect(201);
+    expect(queuedTask.body.data.status).toBe("pending");
+    await request(runtime.app).patch(`/api/settings/${setting.body.data.id}`).send({
+      content: "阿宁与顾川在预检后修改了盟约。"
+    }).expect(200);
+    const staleRun = await request(runtime.app).post(`/api/tasks/${queuedTask.body.data.id}/run`).send({}).expect(409);
+    expect(staleRun.body.error).toMatchObject({ code: "RELATIONSHIP_SOURCE_PREVIEW_STALE" });
+
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在预检后改写了航海日志。"
+    }).expect(200);
+    const staleTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { ...scope, relationshipSourceRefs: [chapterRef] }
+    }).expect(409);
+    expect(staleTask.body.error).toMatchObject({ code: "RELATIONSHIP_SOURCE_PREVIEW_STALE" });
+  });
+
   it("关闭前置过滤时定向人物关系分析发送范围内全部章节和设定", async () => {
     const userPrompts: string[] = [];
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
@@ -1302,6 +1481,72 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).toContain("阿宁与顾川在旧港订立了长期守望盟约。");
     expect(sent).toContain("无关设定也必须发送。");
     expect(sent).not.toContain("人物名称变体确认器");
+  });
+
+  it("来源候选超限时保存结构化诊断并可通过身份资料修复", async () => {
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "[]" } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId } = await seedWork(runtime);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    (runtime.ai as unknown as { relationshipFuzzyIndexMatches: () => Set<string> }).relationshipFuzzyIndexMatches = () =>
+      new Set(Array.from({ length: 201 }, (_, index) => `setting:diagnostic_${index}`));
+
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      modelId
+    }).expect(201);
+    const failed = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({}).expect(409);
+    expect(failed.body.error).toMatchObject({
+      code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
+      details: {
+        characterId: target.body.data.id,
+        reason: "candidate-sources",
+        candidateCount: 201,
+        maximum: 200,
+        identityAnchorCount: 0
+      }
+    });
+    const detail = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/detail`).expect(200);
+    expect(detail.body.data.failures).toEqual([expect.objectContaining({
+      code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
+      message: "疑似人物名来源过多，请补充人物别名或身份资料后重试",
+      details: expect.objectContaining({
+        characterId: target.body.data.id,
+        reason: "candidate-sources",
+        candidateCount: 201,
+        identityAnchorCount: 0
+      })
+    })]);
+
+    const repaired = await request(runtime.app).patch(`/api/characters/${target.body.data.id}`).send({
+      aliases: ["摩斯拉"],
+      code: "TITAN-M01",
+      attributes: { identity: "生态守护泰坦" },
+      expectedVersionNo: target.body.data.versionNo,
+      changeNote: "修复人物关系来源匹配"
+    }).expect(200);
+    expect(repaired.body.data).toMatchObject({
+      aliases: ["摩斯拉"],
+      code: "TITAN-M01",
+      attributes: { identity: "生态守护泰坦" }
+    });
+
+    const retry = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      modelId
+    }).expect(201);
+    const completed = await request(runtime.app).post(`/api/tasks/${retry.body.data.id}/run`).send({}).expect(200);
+    expect(completed.body.data.result).toMatchObject({
+      preFilterRelationshipSources: true,
+      sourceSelection: expect.objectContaining({ exactSourceCount: expect.any(Number) })
+    });
+    expect(completed.body.data.result.sourceSelection.exactSourceCount).toBeGreaterThan(0);
   });
 
   it("通过拼音疑似写法确认来源并并发安全地去重审核项", async () => {
