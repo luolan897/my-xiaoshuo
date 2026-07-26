@@ -297,7 +297,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-task-submit-loading');
+    expect(page.text).toContain('/app.js?v=20260726-search-result-details');
     expect(page.text).toContain('/styles.css?v=20260726-task-submit-loading');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
@@ -390,6 +390,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="user-management-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="search-dialog"');
     expect(application.text).toContain('isGlobalSearchShortcut(event)');
+    expect(application.text).toContain('const target = resolveGlobalSearchTarget(result);');
+    expect(application.text).toContain('await selectChapter(target.id);');
+    expect(application.text).toContain('const item = await api(target.apiPath);');
+    expect(application.text).toContain('openSettingEditor(item, { readOnly: true });');
+    expect(application.text).toContain('await openCharacterEditor(item, { readOnly: true });');
+    expect(application.text).toContain('await openRaceDialog(item, { readOnly: true });');
+    expect(application.text).toContain('await openOrganizationDialog(item, { readOnly: true });');
     expect(application.text).toContain('{ capture: true }');
     expect(page.text).not.toContain('id="search-button"');
     expect(page.text).toContain('class="prompt-composer"');
