@@ -229,6 +229,14 @@ curl http://127.0.0.1:13210/api/health
 
 提交代码或文档前，请阅读 [协作开发规范](docs/CONTRIBUTING.md)。所有日常变更均从最新 `develop` 派生，并通过以 `develop` 为目标分支的 Pull Request 合入。
 
+## 许可证
+
+Copyright (C) 2026 musnows
+
+除另有说明的第三方组件外，本项目自本次许可证变更起采用 [GNU Affero General Public License v3.0 only](LICENSE)（`AGPL-3.0-only`）授权。你可以使用、修改、分发或商业化本软件，但分发衍生版本时必须继续以 AGPLv3 提供对应源码；如果修改后的版本通过网络与用户交互，也必须向这些用户提供该版本的对应源码。
+
+许可证变更前已经发布的版本继续适用其发布时附带的许可证。
+
 ## 🌟 Special Thanks
 
 感谢开源项目 [Vditor](https://github.com/Vanessa219/vditor)，为叙界提供 Markdown 编辑器、即时渲染和分屏预览能力。

@@ -2,7 +2,7 @@
   "name": "@musnows/scriverse",
   "version": "0.5.2",
   "description": "Command-line client and local server for the Scriverse long-form fiction workspace",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "author": "musnows",
   "homepage": "https://scriverse.top/",
   "repository": {
