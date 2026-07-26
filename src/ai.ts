@@ -1704,7 +1704,7 @@ export class AiManager {
   }
 
   getTaskTrace(taskId: string): Record<string, unknown> {
-    this.store.getTask(taskId);
+    this.store.getTaskWorkId(taskId);
     const rows = this.store.db.all(
       `SELECT call.id, call.task_type, call.provider_id, call.model_id, call.status, call.failure,
         call.input_chars, call.output_chars, call.created_at, call.completed_at, trace.call_id AS trace_call_id,
@@ -1771,7 +1771,7 @@ export class AiManager {
   }
 
   getTaskTraceCall(taskId: string, callId: string): Record<string, unknown> {
-    this.store.getTask(taskId);
+    this.store.getTaskWorkId(taskId);
     const row = this.store.db.get(
       `SELECT trace.initial_messages_json, trace.rounds_json, trace.created_at, trace.updated_at
        FROM ai_calls call JOIN ai_call_traces trace ON trace.call_id = call.id AND trace.task_id = call.task_id
@@ -4235,6 +4235,21 @@ export class AiManager {
     }
 
     const relationshipIds: string[] = [];
+    const relationshipOutcomes = new Map<string, {
+      action: "created" | "updated" | "unchanged";
+      relationship: Record<string, unknown>;
+    }>();
+    const recordRelationshipOutcome = (
+      action: "created" | "updated" | "unchanged",
+      relationship: Record<string, unknown>
+    ): void => {
+      const relationshipId = String(relationship.id);
+      const previous = relationshipOutcomes.get(relationshipId);
+      relationshipOutcomes.set(relationshipId, {
+        action: previous?.action === "created" ? "created" : action,
+        relationship
+      });
+    };
     let replacedRelationshipCount = 0;
     this.store.db.transaction(() => {
       if (targeted && scope.replaceExistingRelationships === true) {
@@ -4371,6 +4386,9 @@ export class AiManager {
               timeRange: candidate.timeRange,
               evidence: mergedEvidence
             }, "analysis", taskId ?? null, "AI 合并关系证据");
+            recordRelationshipOutcome("updated", existing[duplicateIndex] as Record<string, unknown>);
+          } else {
+            recordRelationshipOutcome("unchanged", duplicate);
           }
           if (candidatePeerStrength > 0) {
             for (let index = existing.length - 1; index >= 0; index -= 1) {
@@ -4416,6 +4434,7 @@ export class AiManager {
             timeRange: candidate.timeRange,
             evidence: mergedEvidence
           }, "analysis", taskId ?? null, "AI 更新关系强度");
+          recordRelationshipOutcome("updated", existing[weakerExistingPeerIndex] as Record<string, unknown>);
           continue;
         }
         const relationship = this.store.createRelationship(
@@ -4425,15 +4444,54 @@ export class AiManager {
           taskId ?? null
         );
         relationshipIds.push(String(relationship.id));
+        recordRelationshipOutcome("created", relationship);
         existing.push(relationship);
       }
     });
+    const characterNameById = new Map(characters.map((character) => [String(character.id), String(character.name)]));
+    const relationshipResults = [...relationshipOutcomes.values()].map(({ action, relationship }) => {
+      const evidence = Array.isArray(relationship.evidence)
+        ? relationship.evidence.filter((item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        : [];
+      return {
+        relationshipId: String(relationship.id),
+        action,
+        fromCharacterId: String(relationship.fromCharacterId),
+        fromCharacterName: characterNameById.get(String(relationship.fromCharacterId)) ?? String(relationship.fromCharacterId),
+        toCharacterId: String(relationship.toCharacterId),
+        toCharacterName: characterNameById.get(String(relationship.toCharacterId)) ?? String(relationship.toCharacterId),
+        category: String(relationship.category),
+        subtype: String(relationship.subtype),
+        keywords: Array.isArray(relationship.keywords) ? relationship.keywords.map(String) : [],
+        directed: Boolean(relationship.directed),
+        currentStatus: String(relationship.currentStatus ?? ""),
+        timeRange: relationship.timeRange && typeof relationship.timeRange === "object" && !Array.isArray(relationship.timeRange)
+          ? relationship.timeRange
+          : {},
+        confidence: Number(relationship.confidence ?? 0),
+        confirmationStatus: String(relationship.confirmationStatus ?? "pending"),
+        evidenceCount: evidence.length,
+        evidence: evidence.slice(0, 3).map((item) => ({
+          chapterId: String(item.chapterId ?? ""),
+          chapterTitle: String(item.chapterTitle ?? chapterById.get(String(item.chapterId))?.title ?? ""),
+          quote: String(item.quote ?? ""),
+          supports: String(item.supports ?? "")
+        })),
+        evidenceTruncated: evidence.length > 3
+      };
+    });
+    const createdCount = relationshipResults.filter((item) => item.action === "created").length;
+    const updatedCount = relationshipResults.filter((item) => item.action === "updated").length;
+    const unchangedCount = relationshipResults.filter((item) => item.action === "unchanged").length;
     this.store.audit(workId, "relationship.analysis.completed", "work", workId, {
       batchCount: chunks.length,
       coveredChapterCount: chapters.length,
       coveredSettingCount: settings.length,
       rawCandidateCount: rawCandidates.length,
       savedCount: relationshipIds.length,
+      updatedCount,
+      unchangedCount,
       skippedCount: skipped.length,
       fallbackSegmentCount,
       policyOmittedSegmentCount,
@@ -4446,6 +4504,20 @@ export class AiManager {
     return {
       relationshipIds,
       candidateCount: relationshipIds.length,
+      createdCount,
+      updatedCount,
+      unchangedCount,
+      relationshipResults,
+      analysisTarget: {
+        mode: targeted ? "targeted-characters" : "all-relationships",
+        scopeType: scope.type,
+        characterIds: [...selectedCharacterIds],
+        characterNames: characters
+          .filter((character) => selectedCharacterIds.has(String(character.id)))
+          .map((character) => String(character.name)),
+        coveredChapterCount: chapters.length,
+        includeAllSettings: scope.includeAllSettings === true
+      },
       rawCandidateCount: rawCandidates.length,
       skipped,
       batchCount: chunks.length,

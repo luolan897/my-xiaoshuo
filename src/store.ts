@@ -5390,9 +5390,13 @@ export class Store {
   }
 
   getTask(taskId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM analysis_tasks WHERE id = ?", taskId);
+    return this.mapTask(this.getTaskRow(taskId));
+  }
+
+  getTaskWorkId(taskId: string): string {
+    const row = this.db.get("SELECT work_id FROM analysis_tasks WHERE id = ?", taskId);
     if (!row) throw notFound("分析任务");
-    return this.mapTask(row);
+    return requiredString(row, "work_id");
   }
 
   countRunningTasks(workId: string): number {
@@ -5489,21 +5493,754 @@ export class Store {
     return this.getTask(taskId);
   }
 
+  getTaskStoredResult(taskId: string): Record<string, unknown> {
+    const row = this.getTaskRow(taskId, "result_json");
+    return json<Record<string, unknown>>(requiredString(row, "result_json"), {});
+  }
+
+  getTaskResultPayload(taskId: string): Record<string, unknown> {
+    const row = this.getTaskRow(taskId, "id, work_id, task_type, scope_json, result_json");
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      taskType: requiredString(row, "task_type"),
+      scope: json<Record<string, unknown>>(requiredString(row, "scope_json"), {}),
+      result: this.taskResultForClient(json<Record<string, unknown>>(requiredString(row, "result_json"), {}))
+    };
+  }
+
+  getTaskDetail(taskId: string): Record<string, unknown> {
+    const row = this.getTaskRow(taskId);
+    const task = this.mapTask(row);
+    const { result: _result, ...detail } = task;
+    const storedResultJson = requiredString(row, "result_json").trim();
+    const hasResult = storedResultJson !== "" && storedResultJson !== "{}" && storedResultJson !== "null";
+    return {
+      ...detail,
+      hasResult,
+      resultSummary: this.buildTaskResultSummary(task, hasResult)
+    };
+  }
+
+  private getTaskRow(taskId: string, columns = "*"): Row {
+    const row = this.db.get(`SELECT ${columns} FROM analysis_tasks WHERE id = ?`, taskId);
+    if (!row) throw notFound("分析任务");
+    return row;
+  }
+
+  private taskResultObjects(value: unknown): Record<string, unknown>[] {
+    return Array.isArray(value)
+      ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      : [];
+  }
+
+  private taskResultEvidence(value: unknown): Record<string, unknown>[] {
+    return this.taskResultObjects(value).map((item) => ({
+      chapterId: String(item.chapterId ?? ""),
+      chapterTitle: String(item.chapterTitle ?? ""),
+      quote: String(item.quote ?? ""),
+      supports: String(item.supports ?? item.conclusion ?? "")
+    })).filter((item) => item.chapterId || item.chapterTitle || item.quote || item.supports).slice(0, 5);
+  }
+
+  private taskResultItem(value: unknown, fallbackTitle: string): Record<string, unknown> {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return { title: String(value) };
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { title: fallbackTitle };
+    const item = value as Record<string, unknown>;
+    const firstText = (keys: string[]): string => {
+      for (const key of keys) {
+        if (typeof item[key] === "string" && String(item[key]).trim()) return String(item[key]).trim();
+      }
+      return "";
+    };
+    const title = firstText(["title", "name", "question", "canonicalName", "conclusion", "summary"]) || fallbackTitle;
+    const subtitle = firstText(["category", "eventType", "itemType", "role", "type"]);
+    const description = firstText(["description", "content", "conclusion", "reason", "identity", "suggestion", "supports"]);
+    const tags = [item.tags, item.aliases, item.keywords, item.contradictions]
+      .flatMap((candidate) => Array.isArray(candidate) ? candidate : [])
+      .filter((candidate): candidate is string => typeof candidate === "string" && Boolean(candidate.trim()))
+      .map((candidate) => candidate.trim())
+      .slice(0, 20);
+    const detailFields: Array<[string, string]> = [
+      ["严重程度", "severity"],
+      ["发生时间", "timeLabel"],
+      ["地点", "location"],
+      ["影响范围", "impactScope"],
+      ["当前状态", "currentStatus"],
+      ["确认状态", "confirmationStatus"],
+      ["处理状态", "status"],
+      ["种族", "species"],
+      ["身份", "identity"],
+      ["修改建议", "suggestion"],
+      ["原文引文", "quote"]
+    ];
+    const statusLabels: Record<string, string> = {
+      active: "持续中",
+      ongoing: "持续中",
+      ended: "已结束",
+      historical: "历史关系",
+      pending: "待确认",
+      confirmed: "已确认",
+      rejected: "已否决",
+      candidate: "候选",
+      fixed: "已修复",
+      ignored: "已忽略"
+    };
+    const valueLabels: Record<string, string> = {
+      high: "高",
+      medium: "中",
+      low: "低",
+      "character-duplicate": "角色重复",
+      "setting-conflict": "设定冲突",
+      consistency: "一致性问题",
+      conflict: "冲突",
+      other: "其他"
+    };
+    const details = detailFields.flatMap(([label, key]) => {
+      const candidate = item[key];
+      if (typeof candidate !== "string" || !candidate.trim()) return [];
+      const value = ["currentStatus", "confirmationStatus", "status"].includes(key)
+        ? statusLabels[candidate.trim()] ?? candidate.trim()
+        : valueLabels[candidate.trim()] ?? candidate.trim();
+      return [{ label, value }];
+    });
+    if (typeof item.confidence === "number") {
+      details.push({ label: "置信度", value: `${Math.round(item.confidence * 100)}%` });
+    }
+    return {
+      title,
+      subtitle: valueLabels[subtitle] ?? subtitle,
+      description,
+      tags,
+      details,
+      evidence: this.taskResultEvidence(item.evidence)
+    };
+  }
+
+  private taskCharacterReferenceSummary(workId: string, reference: string): { name: string; summary: string } | null {
+    const separator = reference.lastIndexOf("@");
+    if (separator <= 0) return null;
+    const characterId = reference.slice(0, separator);
+    const versionNo = Number(reference.slice(separator + 1));
+    if (!Number.isInteger(versionNo) || versionNo <= 0) return null;
+    const version = this.db.get(
+      "SELECT work_id, snapshot_json FROM character_versions WHERE character_id = ? AND version_no = ?",
+      characterId,
+      versionNo
+    );
+    let character: Record<string, unknown> | null = null;
+    if (version && optionalString(version, "work_id") === workId) {
+      character = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
+    } else {
+      try {
+        const current = this.getCharacter(characterId);
+        if (current.workId === workId) character = current;
+      } catch {
+        return null;
+      }
+    }
+    if (!character) return null;
+    const name = typeof character.name === "string" && character.name.trim() ? character.name.trim() : "分析时角色";
+    const aliases = Array.isArray(character.aliases)
+      ? character.aliases.filter((alias): alias is string => typeof alias === "string" && Boolean(alias.trim())).map((alias) => alias.trim())
+      : [];
+    const attributes = character.attributes && typeof character.attributes === "object" && !Array.isArray(character.attributes)
+      ? character.attributes as Record<string, unknown>
+      : {};
+    const identity = typeof attributes.identity === "string" ? attributes.identity.trim() : "";
+    const species = typeof character.species === "string" ? character.species.trim() : "";
+    const basics = [
+      aliases.length ? `别名：${aliases.join("、")}` : "",
+      identity ? `身份：${identity}` : "",
+      species ? `种族：${species}` : ""
+    ].filter(Boolean);
+    return { name, summary: basics.length ? `${name}（${basics.join("；")}）` : name };
+  }
+
+  private taskSkippedIdentityCandidate(value: unknown, fallbackTitle: string, workId: string): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return this.taskResultItem(value, fallbackTitle);
+    const item = value as Record<string, unknown>;
+    const references = typeof item.pair === "string" ? item.pair.split("|") : [];
+    if (references.length !== 2) return this.taskResultItem(value, fallbackTitle);
+    const left = this.taskCharacterReferenceSummary(workId, references[0] ?? "");
+    const right = this.taskCharacterReferenceSummary(workId, references[1] ?? "");
+    if (!left || !right) return this.taskResultItem(value, fallbackTitle);
+    const reason = typeof item.reason === "string" && item.reason.trim() ? item.reason.trim() : "分析信息不足";
+    return {
+      title: `${left.name} ↔ ${right.name}`,
+      subtitle: "未生成查重建议",
+      description: `AI 未生成可提交审核的角色查重建议：${reason}`,
+      tags: [],
+      details: [
+        { label: "候选角色一", value: left.summary },
+        { label: "候选角色二", value: right.summary },
+        { label: "未生成原因", value: reason }
+      ],
+      evidence: []
+    };
+  }
+
+  private buildTaskResultSummary(task: Record<string, unknown>, hasResult: boolean): Record<string, unknown> {
+    const taskType = String(task.taskType);
+    const workId = String(task.workId);
+    const result = task.result && typeof task.result === "object" && !Array.isArray(task.result)
+      ? task.result as Record<string, unknown>
+      : {};
+    const labelByType: Record<string, string> = {
+      "chapter-analysis": "章节理解",
+      "character-extraction": "全书角色抽取",
+      "character-summary": "全书角色抽取",
+      "character-identity-audit": "AI 角色查重",
+      "timeline-analysis": "时间轴与事件抽取",
+      "relationship-analysis": "人物关系分析",
+      "worldview-analysis": "世界观分析",
+      "setting-extraction": "设定抽取",
+      "consistency-check": "一致性校对",
+      "book-analysis": "全书综合分析",
+      structure: "结构分析",
+      "report-update": "报告更新"
+    };
+    const analysisLabel = labelByType[taskType] ?? "AI 分析";
+    const taskStorage = {
+      label: "完整任务结果",
+      entity: "AI 分析记录",
+      key: "analysis-record",
+      count: hasResult ? 1 : 0,
+      note: "完整返回 JSON 保存在本次 AI 分析记录中，可按需查看。"
+    };
+    const productStorageTargets = (targets: Record<string, unknown>[]): Record<string, unknown>[] => targets.map((target) => ({
+      label: String(target.label ?? target.entity ?? "分析结果"),
+      location: `当前作品 · ${String(target.entity ?? "AI 分析记录")}`,
+      count: Number(target.count ?? 0),
+      ...(typeof target.note === "string" && target.note.trim() ? { note: target.note.trim() } : {})
+    }));
+    if (!hasResult) {
+      return {
+        title: `${analysisLabel}结果`,
+        analysisContent: `${analysisLabel}；范围：${String(task.scopeSummary ?? "未指定")}`,
+        summary: "任务尚未产生分析结果。",
+        metrics: [],
+        storageTargets: productStorageTargets([taskStorage]),
+        sections: []
+      };
+    }
+    const metric = (label: string, value: unknown): Record<string, unknown> => ({ label, value: Number(value ?? 0) });
+    const section = (title: string, values: unknown, emptyMessage: string): Record<string, unknown> => {
+      const source = Array.isArray(values) ? values : [];
+      return {
+        title,
+        totalCount: source.length,
+        items: source.slice(0, 100).map((item, index) => this.taskResultItem(item, `${title} ${index + 1}`)),
+        emptyMessage
+      };
+    };
+    const idList = (value: unknown): string[] => Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+    const resultFieldLabels: Record<string, string> = {
+      sourceChapterCount: "分析章节",
+      sourceChunkCount: "分析分段",
+      eventCount: "时间轴事件",
+      resumable: "可继续处理",
+      completedChunkCount: "已完成分段",
+      chunkResults: "分段结果",
+      consolidationResults: "汇总结果",
+      semanticReviewResults: "语义复核结果",
+      relationships: "审核关系",
+      confirmed: "已确认",
+      pending: "待确认",
+      characters: "角色档案",
+      timelineEvents: "时间轴事件",
+      foreshadows: "伏笔",
+      races: "种族",
+      organizations: "组织",
+      removedForeshadows: "已移除伏笔",
+      correctedRaceClassification: "种族分类修正",
+      timelineTypoFixed: "时间轴错字修正",
+      ianAliasAdded: "补充角色别名",
+      fixedRelationships: "修正人物关系",
+      semanticCorrections: "关系语义修正",
+      mergedCanonicalIds: "合并规范关系",
+      mergedCharacterId: "合并后角色",
+      removedDuplicateCharacterId: "移除重复角色",
+      settingIds: "设定",
+      settings: "设定",
+      raceIds: "种族",
+      organizationIds: "组织",
+      timelineEventIds: "时间轴事件",
+      eventIds: "时间轴事件",
+      foreshadowIds: "伏笔",
+      correctedCharacterIds: "修正角色",
+      removedDuplicateCharacterIds: "移除重复角色"
+    };
+    const resultFieldLabel = (key: string): string => resultFieldLabels[key] ?? key;
+    const resultRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+    const genericMetrics = (source: Record<string, unknown>): Record<string, unknown>[] => {
+      const ignored = new Set(["content", "bookSummary", "callId", "callIds", "summarySettingId", "summarySuggestionId"]);
+      const values: Record<string, unknown>[] = [];
+      const labels = new Set<string>();
+      const append = (key: string, value: unknown): void => {
+        if (ignored.has(key) || key.endsWith("Id")) return;
+        const label = resultFieldLabel(key);
+        if (labels.has(label)) return;
+        let displayValue: unknown;
+        if (typeof value === "number") displayValue = value;
+        else if (typeof value === "boolean") displayValue = value ? "是" : "否";
+        else if (typeof value === "string" && value.trim() && value.length <= 100) displayValue = value.trim();
+        else if (Array.isArray(value) && key !== "callIds") displayValue = value.length;
+        else return;
+        labels.add(label);
+        values.push({ label, value: displayValue });
+      };
+      for (const [key, value] of Object.entries(source)) {
+        if (key === "counts") {
+          for (const [countKey, countValue] of Object.entries(resultRecord(value))) append(countKey, countValue);
+        } else append(key, value);
+      }
+      return values.slice(0, 12);
+    };
+    const genericSections = (source: Record<string, unknown>): Record<string, unknown>[] => Object.entries(source).flatMap(([key, value]) => {
+      if (!Array.isArray(value) || value.length === 0 || key === "callIds" || key === "fixedRelationships" || key.endsWith("Ids")) return [];
+      return [section(resultFieldLabel(key), value, `没有可展示的${resultFieldLabel(key)}。`)];
+    });
+    const resolveIds = (
+      ids: string[],
+      getter: (entityId: string) => Record<string, unknown>
+    ): Record<string, unknown>[] => ids.flatMap((entityId) => {
+      try {
+        const entity = getter(entityId);
+        return entity.workId === workId ? [entity] : [];
+      } catch { return []; }
+    });
+    const storageTargets: Record<string, unknown>[] = [taskStorage];
+    const addStorageTarget = (target: Record<string, unknown>): void => {
+      if (!storageTargets.some((item) => item.key === target.key)) storageTargets.unshift(target);
+    };
+    let summary = "分析已完成。";
+    let metrics: Record<string, unknown>[] = [];
+    let sections: Record<string, unknown>[] = [];
+
+    if (taskType === "chapter-analysis") {
+      let chapterTitle = String(result.chapterId ?? "指定章节");
+      if (typeof result.chapterId === "string") {
+        try { chapterTitle = String(this.getChapter(result.chapterId).title); } catch { /* 历史章节可能已删除 */ }
+      }
+      summary = typeof result.summary === "string" && result.summary.trim() ? result.summary.trim() : "章节理解已生成。";
+      metrics = [
+        metric("事件", Array.isArray(result.events) ? result.events.length : 0),
+        metric("出场角色", Array.isArray(result.characters) ? result.characters.length : 0),
+        metric("设定", Array.isArray(result.settings) ? result.settings.length : 0),
+        metric("不确定项", Array.isArray(result.uncertainties) ? result.uncertainties.length : 0)
+      ];
+      storageTargets.unshift({
+        label: "章节理解记录",
+        entity: chapterTitle,
+        key: "chapter-insight",
+        count: result.insightId ? 1 : 0,
+        note: `对应章节版本 v${Number(result.chapterVersion ?? 0)}。`
+      });
+      sections = [
+        section("情节事件", result.events, "没有提取到明确事件。"),
+        section("出场角色", result.characters, "没有提取到角色信息。"),
+        section("章节设定", result.settings, "没有提取到设定信息。"),
+        section("原文依据", result.evidence, "没有可展示的原文依据。"),
+        section("不确定项", result.uncertainties, "没有标记不确定项。")
+      ];
+    } else if (taskType === "timeline-analysis") {
+      const ids = idList(result.eventIds);
+      const events = ids.flatMap((eventId) => {
+        try {
+          const event = this.getTimelineEvent(eventId);
+          return event.workId === workId ? [event] : [];
+        } catch { return []; }
+      });
+      summary = `提取并写入 ${events.length} 个时间轴事件候选。`;
+      metrics = [metric("写入事件", events.length), metric("已不存在", Math.max(0, ids.length - events.length))];
+      storageTargets.unshift({ label: "时间轴候选", entity: "时间轴与事件", key: "timeline", count: events.length, note: "以候选状态写入，等待作者确认。" });
+      sections = [section("事件候选", events, "没有形成可写入的时间轴事件。")];
+    } else if (taskType === "worldview-analysis") {
+      summary = typeof result.summary === "string" && result.summary.trim() ? result.summary.trim() : "世界观分析已完成。";
+      metrics = [metric("世界观维度", result.dimensionCount), metric("冲突", Array.isArray(result.conflicts) ? result.conflicts.length : 0), metric("待确认问题", Array.isArray(result.uncertainties) ? result.uncertainties.length : 0), metric("覆盖章节", result.coveredChapterCount)];
+      sections = [
+        section("世界观结论", result.dimensions, "没有形成有证据支持的世界观结论。"),
+        section("设定冲突", result.conflicts, "没有发现明确冲突。"),
+        section("待确认问题", result.uncertainties, "没有标记待确认问题。")
+      ];
+    } else if (taskType === "setting-extraction") {
+      const ids = idList(result.settingIds);
+      const settings = ids.flatMap((settingId) => {
+        try {
+          const setting = this.getSetting(settingId);
+          return setting.workId === workId ? [setting] : [];
+        } catch { return []; }
+      });
+      summary = `识别 ${Number(result.rawCandidateCount ?? settings.length)} 个候选，写入 ${settings.length} 条设定。`;
+      metrics = [metric("新建", result.createdCount), metric("更新", result.updatedCount), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("覆盖章节", result.coveredChapterCount)];
+      storageTargets.unshift({ label: "设定候选", entity: "设定库", key: "settings", count: settings.length, note: "写入为待确认设定，不覆盖已确认或锁定内容。" });
+      sections = [section("写入的设定", settings, "没有形成可写入的设定。"), section("未写入候选", result.skipped, "没有候选被跳过。")];
+    } else if (taskType === "consistency-check" && !("reviewIds" in result)) {
+      const relationshipCount = typeof result.relationships === "number" ? result.relationships : null;
+      const confirmedCount = Number(result.confirmed ?? 0);
+      const pendingCount = Number(result.pending ?? 0);
+      const semanticCorrections = Array.isArray(result.semanticCorrections) ? result.semanticCorrections : [];
+      const mergedRelationships = idList(result.mergedCanonicalIds);
+      const fixedRelationships = idList(result.fixedRelationships);
+      if (relationshipCount !== null) {
+        summary = `审核 ${relationshipCount} 条人物关系，其中 ${confirmedCount} 条已确认、${pendingCount} 条待确认；完成 ${mergedRelationships.length} 组关系合并和 ${semanticCorrections.length} 项语义修正。`;
+      } else {
+        summary = "一致性校对已完成，以下是本次实际检查和修正的数据。";
+      }
+      metrics = genericMetrics(result);
+      sections = genericSections(result);
+      const relationshipChanges = mergedRelationships.length + fixedRelationships.length + semanticCorrections.length;
+      if (relationshipChanges > 0) {
+        addStorageTarget({
+          label: "人物关系修正",
+          entity: "人物关系库",
+          key: "relationships",
+          count: relationshipChanges,
+          note: "数量按任务记录的合并、修正和语义校正项统计。"
+        });
+      }
+      if (typeof result.mergedCharacterId === "string" || typeof result.removedDuplicateCharacterId === "string" || typeof result.ianAliasAdded === "string") {
+        addStorageTarget({ label: "角色档案修正", entity: "角色库", key: "characters", count: 1, note: "包含角色合并、重复档案清理或别名补充。" });
+      }
+      if (result.timelineTypoFixed === true) {
+        addStorageTarget({ label: "时间轴修正", entity: "时间轴与事件", key: "timeline", count: 1, note: "任务记录已修正时间轴文本。" });
+      }
+      if (typeof result.removedForeshadows === "number" && result.removedForeshadows > 0) {
+        addStorageTarget({ label: "伏笔清理", entity: "伏笔库", key: "foreshadows", count: result.removedForeshadows, note: "任务记录已移除重复或无效伏笔。" });
+      }
+      if (result.correctedRaceClassification === true) {
+        addStorageTarget({ label: "种族分类修正", entity: "种族库", key: "races", count: 1, note: "任务记录已修正种族分类。" });
+      }
+    } else if (taskType === "consistency-check" || taskType === "character-identity-audit") {
+      const ids = idList(result.reviewIds);
+      const reviews = ids.flatMap((reviewId) => {
+        try {
+          const review = this.getReviewItem(reviewId);
+          return review.workId === workId ? [review] : [];
+        } catch { return []; }
+      });
+      summary = taskType === "character-identity-audit"
+        ? `检查 ${Number(result.characterCount ?? 0)} 个角色档案，生成 ${reviews.length} 条查重建议。`
+        : `发现并写入 ${reviews.length} 条一致性审核事项。`;
+      metrics = taskType === "character-identity-audit"
+        ? [metric("角色档案", result.characterCount), metric("疑似重复", reviews.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("工具调用", result.toolCallCount)]
+        : [metric("审核事项", reviews.length), metric("已不存在", Math.max(0, ids.length - reviews.length))];
+      storageTargets.unshift({ label: "审核建议", entity: "审核中心", key: "reviews", count: reviews.length, note: "只生成待处理建议，不会自动修正文或合并角色。" });
+      const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+      sections = [
+        section(taskType === "character-identity-audit" ? "角色查重建议" : "一致性问题", reviews, "没有发现需要审核的问题。"),
+        ...(taskType === "character-identity-audit" ? [{
+          title: "未生成建议的候选",
+          totalCount: skipped.length,
+          items: skipped.slice(0, 100).map((item, index) => this.taskSkippedIdentityCandidate(item, `未生成建议的候选 ${index + 1}`, workId)),
+          emptyMessage: "没有候选被跳过。"
+        }] : [])
+      ];
+    } else if (taskType === "character-extraction" || taskType === "character-summary") {
+      const ids = idList(result.characterIds);
+      const characters = ids.flatMap((characterId) => {
+        try {
+          const character = this.getCharacter(characterId);
+          if (character.workId !== workId) return [];
+          const attributes = character.attributes && typeof character.attributes === "object" && !Array.isArray(character.attributes)
+            ? character.attributes as Record<string, unknown>
+            : {};
+          const profile = character.profile && typeof character.profile === "object" && !Array.isArray(character.profile)
+            ? character.profile as Record<string, unknown>
+            : {};
+          return [{
+            ...character,
+            identity: String(attributes.identity ?? ""),
+            description: String(profile.summary ?? "")
+          }];
+        } catch { return []; }
+      });
+      summary = `识别 ${Number(result.candidateCount ?? characters.length)} 个角色候选，保存 ${characters.length} 个角色档案。`;
+      const verification = result.verification && typeof result.verification === "object" && !Array.isArray(result.verification)
+        ? result.verification as Record<string, unknown>
+        : {};
+      metrics = [metric("保存角色", characters.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("覆盖章节", result.coveredChapterCount), metric("身份复核", verification.pairCount)];
+      storageTargets.unshift({ label: "角色档案", entity: "角色库", key: "characters", count: characters.length, note: "新角色会创建档案，命中已有角色时会合并可靠信息。" });
+      sections = [section("保存的角色", characters, "没有形成可保存的角色档案。"), section("未写入候选", result.skipped, "没有候选被跳过。")];
+    } else if (taskType === "book-analysis") {
+      const timelineIds = [...new Set([...idList(result.eventIds), ...idList(result.timelineEventIds)])];
+      const settingIds = [...new Set([
+        ...idList(result.settingIds),
+        ...(typeof result.summarySettingId === "string" ? [result.summarySettingId] : [])
+      ])];
+      const raceIds = idList(result.raceIds);
+      const organizationIds = idList(result.organizationIds);
+      const foreshadowIds = idList(result.foreshadowIds);
+      const correctedCharacterIds = idList(result.correctedCharacterIds);
+      const removedDuplicateCharacterIds = idList(result.removedDuplicateCharacterIds);
+      const timelineEvents = resolveIds(timelineIds, (entityId) => this.getTimelineEvent(entityId));
+      const settings = resolveIds(settingIds, (entityId) => this.getSetting(entityId));
+      const races = resolveIds(raceIds, (entityId) => this.getRace(entityId, false));
+      const organizations = resolveIds(organizationIds, (entityId) => this.getOrganization(entityId));
+      const foreshadows = resolveIds(foreshadowIds, (entityId) => this.getForeshadow(entityId));
+      const correctedCharacters = resolveIds(correctedCharacterIds, (entityId) => this.getCharacter(entityId));
+      const bookSummary = resultRecord(result.bookSummary);
+      const oneSentence = typeof bookSummary.oneSentence === "string" ? bookSummary.oneSentence.trim() : "";
+      const content = typeof result.content === "string" ? result.content.trim() : "";
+      if (oneSentence) summary = oneSentence;
+      else if (timelineIds.length > 0) {
+        summary = `分析 ${Number(result.sourceChapterCount ?? 0)} 章正文，重建并记录 ${timelineIds.length} 个时间轴事件；当前作品中仍可查看 ${timelineEvents.length} 个。`;
+      } else if (correctedCharacterIds.length > 0 || removedDuplicateCharacterIds.length > 0) {
+        summary = `核验人物档案后修正 ${correctedCharacterIds.length} 个角色，并移除 ${removedDuplicateCharacterIds.length} 个重复角色档案。`;
+      } else if (Array.isArray(result.chunkResults)) {
+        summary = `已完成 ${Number(result.completedChunkCount ?? result.chunkResults.length)}/${Number(result.sourceChunkCount ?? result.chunkResults.length)} 个正文分段的阶段分析${result.resumable === true ? "，当前结果可继续处理" : ""}。`;
+      } else if (content) summary = content;
+      else summary = "全书综合分析已完成，以下展示任务记录的统计、结论和写入数据。";
+      metrics = genericMetrics(result);
+      if (timelineIds.length > 0) {
+        addStorageTarget({ label: "时间轴事件", entity: "时间轴与事件", key: "timeline", count: timelineIds.length, note: `任务记录 ${timelineIds.length} 个事件，当前仍可查看 ${timelineEvents.length} 个。` });
+      }
+      if (settingIds.length > 0) {
+        addStorageTarget({ label: "世界设定", entity: "设定库", key: "settings", count: settingIds.length, note: `任务记录 ${settingIds.length} 个设定，当前仍可查看 ${settings.length} 个。` });
+      }
+      if (raceIds.length > 0) {
+        addStorageTarget({ label: "种族资料", entity: "种族库", key: "races", count: raceIds.length, note: `任务记录 ${raceIds.length} 个种族，当前仍可查看 ${races.length} 个。` });
+      }
+      if (organizationIds.length > 0) {
+        addStorageTarget({ label: "组织资料", entity: "组织库", key: "organizations", count: organizationIds.length, note: `任务记录 ${organizationIds.length} 个组织，当前仍可查看 ${organizations.length} 个。` });
+      }
+      if (foreshadowIds.length > 0) {
+        addStorageTarget({ label: "伏笔资料", entity: "伏笔库", key: "foreshadows", count: foreshadowIds.length, note: `任务记录 ${foreshadowIds.length} 个伏笔，当前仍可查看 ${foreshadows.length} 个。` });
+      }
+      if (typeof result.summarySuggestionId === "string") {
+        addStorageTarget({ label: "全书分析建议", entity: "AI 建议", key: "suggestions", count: 1, note: "保存全书概要对应的分析建议。" });
+      }
+      if (correctedCharacterIds.length > 0 || removedDuplicateCharacterIds.length > 0) {
+        addStorageTarget({
+          label: "角色档案核验",
+          entity: "角色库",
+          key: "characters",
+          count: correctedCharacterIds.length + removedDuplicateCharacterIds.length,
+          note: `修正 ${correctedCharacterIds.length} 个角色，移除 ${removedDuplicateCharacterIds.length} 个重复档案；当前可读取 ${correctedCharacters.length} 个修正后角色。`
+        });
+      }
+      sections = [];
+      if (Object.keys(bookSummary).length > 0) {
+        const overviewDetails = [
+          ["剧情概要", bookSummary.synopsis],
+          ["当前故事状态", bookSummary.endingState]
+        ].flatMap(([label, value]) => typeof value === "string" && value.trim() ? [{ label, value: value.trim() }] : []);
+        sections.push({
+          title: "全书概要",
+          totalCount: 1,
+          items: [{
+            title: String(bookSummary.title ?? "全书概要"),
+            description: oneSentence,
+            details: overviewDetails,
+            tags: Array.isArray(bookSummary.themes) ? bookSummary.themes.map(String).slice(0, 20) : [],
+            evidence: []
+          }],
+          emptyMessage: "没有可展示的全书概要。"
+        });
+        const volumeSummaries = this.taskResultObjects(bookSummary.volumeSummaries).map((item) => ({
+          title: String(item.volumeTitle ?? item.title ?? "未命名分卷"),
+          description: String(item.summary ?? ""),
+          tags: Array.isArray(item.turningPoints) ? item.turningPoints.map(String).slice(0, 20) : []
+        }));
+        sections.push(
+          section("分卷摘要", volumeSummaries, "没有可展示的分卷摘要。"),
+          section("主要故事线", bookSummary.mainArcs, "没有可展示的主要故事线。"),
+          section("未解决问题", bookSummary.unresolvedQuestions, "没有标记未解决问题。"),
+          section("原文依据", bookSummary.evidence, "没有可展示的原文依据。")
+        );
+      }
+      if (timelineIds.length > 0) sections.push(section("写入的时间轴事件", timelineEvents, "任务记录的时间轴事件当前均已不存在。"));
+      if (settingIds.length > 0) sections.push(section("写入的设定", settings, "任务记录的设定当前均已不存在。"));
+      if (raceIds.length > 0) sections.push(section("写入的种族", races, "任务记录的种族当前均已不存在。"));
+      if (organizationIds.length > 0) sections.push(section("写入的组织", organizations, "任务记录的组织当前均已不存在。"));
+      if (foreshadowIds.length > 0) sections.push(section("写入的伏笔", foreshadows, "任务记录的伏笔当前均已不存在。"));
+      if (correctedCharacterIds.length > 0) sections.push(section("修正后的角色", correctedCharacters, "任务记录的修正角色当前均已不存在。"));
+      if (Array.isArray(result.evidence)) sections.push(section("核验依据", result.evidence, "没有可展示的核验依据。"));
+    } else if (taskType === "relationship-analysis") {
+      const relationshipIds = idList(result.relationshipIds);
+      const missingRelationshipIds = idList(result.missingRelationshipIds);
+      const relationships = this.taskResultObjects(result.relationshipResults).map((relationship) => {
+        const actionLabels: Record<string, string> = { created: "已新建", updated: "已更新", unchanged: "已保留原记录" };
+        const categoryLabels: Record<string, string> = { family: "亲属", social: "社交", emotional: "情感", conflict: "冲突", uncertain: "未确定" };
+        const statusLabels: Record<string, string> = { active: "持续中", ongoing: "持续中", ended: "已结束", historical: "历史关系" };
+        const confirmationLabels: Record<string, string> = { pending: "待确认", confirmed: "已确认", rejected: "已否决" };
+        const fromName = String(relationship.fromCharacterName ?? relationship.fromCharacterId ?? "未知人物");
+        const toName = String(relationship.toCharacterName ?? relationship.toCharacterId ?? "未知人物");
+        const keywords = Array.isArray(relationship.keywords) ? relationship.keywords.map(String) : [];
+        return {
+          title: `${fromName} ${relationship.directed ? "→" : "↔"} ${toName}`,
+          subtitle: `${categoryLabels[String(relationship.category)] ?? String(relationship.category ?? "其他关系")} / ${String(relationship.subtype ?? "未细分")} · ${actionLabels[String(relationship.action)] ?? "已处理"}`,
+          description: [String(relationship.subtype ?? ""), keywords.join("、")].filter(Boolean).join("；"),
+          tags: keywords,
+          details: [
+            { label: "当前状态", value: statusLabels[String(relationship.currentStatus)] ?? String(relationship.currentStatus ?? "未说明") },
+            { label: "置信度", value: `${Math.round(Number(relationship.confidence ?? 0) * 100)}%` },
+            { label: "确认状态", value: confirmationLabels[String(relationship.confirmationStatus)] ?? String(relationship.confirmationStatus ?? "待确认") }
+          ],
+          evidence: this.taskResultEvidence(relationship.evidence)
+        };
+      });
+      const analysisTarget = result.analysisTarget && typeof result.analysisTarget === "object" && !Array.isArray(result.analysisTarget)
+        ? result.analysisTarget as Record<string, unknown>
+        : {};
+      const targetNames = Array.isArray(analysisTarget.characterNames) ? analysisTarget.characterNames.map(String) : [];
+      const targetSummary = analysisTarget.mode === "targeted-characters" && targetNames.length
+        ? `重点分析 ${targetNames.join("、")} 与其他已建档人物之间的关系`
+        : "分析范围内已建档人物之间的长期关系";
+      summary = missingRelationshipIds.length > 0
+        ? `${targetSummary}。任务结果记录 ${relationshipIds.length} 条关系，当前作品中保留 ${relationships.length} 条可展示关系，另有 ${missingRelationshipIds.length} 条已删除或合并。`
+        : `${targetSummary}，共形成 ${relationships.length} 条可展示结果。`;
+      const actionMetrics = [
+        ["新建", result.createdCount],
+        ["更新", result.updatedCount],
+        ["保留", result.unchangedCount]
+      ].flatMap(([label, value]) => typeof value === "number" ? [metric(String(label), value)] : []);
+      metrics = [
+        ...actionMetrics,
+        metric("任务记录", relationshipIds.length || relationships.length),
+        metric("当前可展示", relationships.length),
+        metric("已删除或合并", missingRelationshipIds.length),
+        metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0)
+      ];
+      storageTargets.unshift({
+        label: "人物关系",
+        entity: "人物关系库",
+        key: "relationships",
+        count: relationshipIds.length || relationships.length,
+        note: `任务记录 ${relationshipIds.length || relationships.length} 条关系，当前可读取 ${relationships.length} 条；关系候选需由作者确认。`
+      });
+      sections = [
+        { title: "分析出的关系", totalCount: relationships.length, items: relationships.slice(0, 100), emptyMessage: "没有形成可展示的人物关系。" },
+        section("未写入候选", result.skipped, "没有候选被跳过。")
+      ];
+    } else {
+      summary = typeof result.content === "string" && result.content.trim() ? result.content.trim() : "分析已完成，未生成可结构化展示的结论。";
+      metrics = [];
+      sections = [];
+    }
+
+    return {
+      title: `${analysisLabel}结果`,
+      analysisContent: `${analysisLabel}；范围：${String(task.scopeSummary ?? "未指定")}`,
+      summary,
+      metrics,
+      storageTargets: productStorageTargets(storageTargets),
+      sections
+    };
+  }
+
+  private taskResultForClient(result: Record<string, unknown>): Record<string, unknown> {
+    const sanitize = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(sanitize);
+      if (!value || typeof value !== "object") return value;
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !["storageTarget", "database", "table", "taskResultTable"].includes(key))
+        .map(([key, nestedValue]) => [key, sanitize(nestedValue)]));
+    };
+    return sanitize(result) as Record<string, unknown>;
+  }
+
+  private enrichRelationshipTaskResult(
+    workId: string,
+    taskType: string,
+    scope: Record<string, unknown>,
+    result: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (taskType !== "relationship-analysis") return result;
+    const relationshipIds = Array.isArray(result.relationshipIds)
+      ? result.relationshipIds.filter((value): value is string => typeof value === "string")
+      : [];
+    let relationshipResults = Array.isArray(result.relationshipResults) ? result.relationshipResults : null;
+    let missingRelationshipIds: string[] = [];
+    if (relationshipResults === null && relationshipIds.length > 0) {
+      const requestedIds = new Set(relationshipIds);
+      const rows = this.db.all(
+        `SELECT relationship.*, source.name AS from_character_name, target.name AS to_character_name
+         FROM relationships relationship
+         JOIN characters source ON source.id = relationship.from_character_id
+         JOIN characters target ON target.id = relationship.to_character_id
+         WHERE relationship.work_id = ?`,
+        workId
+      ).filter((row) => requestedIds.has(requiredString(row, "id")));
+      const foundIds = new Set(rows.map((row) => requiredString(row, "id")));
+      missingRelationshipIds = relationshipIds.filter((relationshipId) => !foundIds.has(relationshipId));
+      relationshipResults = rows.map((row) => {
+        const evidence = json<Array<Record<string, unknown>>>(requiredString(row, "evidence_json"), []);
+        return {
+          relationshipId: requiredString(row, "id"),
+          action: "created",
+          snapshotSource: "current-record",
+          fromCharacterId: requiredString(row, "from_character_id"),
+          fromCharacterName: requiredString(row, "from_character_name"),
+          toCharacterId: requiredString(row, "to_character_id"),
+          toCharacterName: requiredString(row, "to_character_name"),
+          category: requiredString(row, "category"),
+          subtype: requiredString(row, "subtype"),
+          keywords: json(requiredString(row, "keywords_json"), []),
+          directed: booleanValue(row, "directed"),
+          currentStatus: requiredString(row, "current_status"),
+          timeRange: json(requiredString(row, "time_range_json"), {}),
+          confidence: numberValue(row, "confidence"),
+          confirmationStatus: requiredString(row, "confirmation_status"),
+          evidenceCount: evidence.length,
+          evidence: evidence.slice(0, 3).map((item) => ({
+            chapterId: String(item.chapterId ?? ""),
+            chapterTitle: String(item.chapterTitle ?? ""),
+            quote: String(item.quote ?? ""),
+            supports: String(item.supports ?? "")
+          })),
+          evidenceTruncated: evidence.length > 3
+        };
+      });
+    }
+    const targetCharacters = Array.isArray(scope.targetCharacters)
+      ? scope.targetCharacters.filter((item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      : [];
+    return this.taskResultForClient({
+      ...result,
+      ...(relationshipResults === null ? {} : { relationshipResults }),
+      ...(missingRelationshipIds.length > 0 ? { missingRelationshipIds } : {}),
+      analysisTarget: result.analysisTarget ?? {
+        mode: targetCharacters.length > 0 ? "targeted-characters" : "all-relationships",
+        scopeType: String(scope.type ?? "book"),
+        characterIds: targetCharacters.map((character) => String(character.id ?? "")).filter(Boolean),
+        characterNames: targetCharacters.map((character) => String(character.name ?? "")).filter(Boolean),
+        coveredChapterCount: Number(result.coveredChapterCount ?? 0),
+        includeAllSettings: scope.includeAllSettings === true
+      },
+    });
+  }
+
   private mapTask(row: Row): Record<string, unknown> {
     const workId = requiredString(row, "work_id");
+    const taskType = requiredString(row, "task_type");
     const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
     const characterNames = this.taskCharacterNames(workId, [scope]);
+    const taskResult = this.enrichRelationshipTaskResult(
+      workId,
+      taskType,
+      scope,
+      json<Record<string, unknown>>(requiredString(row, "result_json"), {})
+    );
     return {
       id: requiredString(row, "id"),
       workId,
-      taskType: requiredString(row, "task_type"),
+      taskType,
       scope,
       scopeSummary: this.taskScopeSummary(workId, scope, characterNames),
       scopeSummaryWithoutCharacterNames: this.taskScopeSummary(workId, scope, new Map(), false),
       scopeDetails: this.taskScopeDetails(workId, scope),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
-      result: json(requiredString(row, "result_json"), {}),
+      result: taskResult,
       failures: json(requiredString(row, "failure_json"), []),
       sourceVersions: json(requiredString(row, "source_versions_json"), {}),
       createdAt: requiredString(row, "created_at"),
@@ -5545,6 +6282,11 @@ export class Store {
     }
     if (scope.type === "settings") return `仅设定集${targetedSuffix}`;
     if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 设定集" : "全书"}${targetedSuffix}`;
+    if (scope.type === "selection" && typeof scope.selection === "string" && scope.selection.trim()) {
+      const selection = scope.selection.trim().replace(/\s+/gu, " ");
+      return `选定内容：${selection.slice(0, 80)}${selection.length > 80 ? "……" : ""}${targetedSuffix}`;
+    }
+    if (scope.type === "none") return `无上下文${targetedSuffix}`;
     return "未指定范围";
   }
 
@@ -5575,6 +6317,11 @@ export class Store {
     }
     if (scope.type === "settings") return `仅设定集${targetedSuffix}`;
     if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 设定集" : "全书"}${targetedSuffix}`;
+    if (scope.type === "selection" && typeof scope.selection === "string" && scope.selection.trim()) {
+      const selection = scope.selection.trim().replace(/\s+/gu, " ");
+      return `选定内容：${selection.slice(0, 80)}${selection.length > 80 ? "……" : ""}${targetedSuffix}`;
+    }
+    if (scope.type === "none") return `无上下文${targetedSuffix}`;
     return "未指定范围";
   }
 
@@ -5676,6 +6423,10 @@ export class Store {
     if (scope.type === "settings") {
       return [{ type: "settings", title: "仅设定集" }];
     }
+    if (scope.type === "selection" && typeof scope.selection === "string") {
+      return [{ type: "selection", selection: scope.selection }];
+    }
+    if (scope.type === "none") return [{ type: "none" }];
     return [{ type: "unknown", scope }];
   }
 
