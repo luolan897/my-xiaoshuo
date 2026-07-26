@@ -2028,7 +2028,10 @@ export class AiManager {
     } catch (error) {
       if (this.store.getTask(taskId).status !== "running") return this.store.getTask(taskId);
       const message = error instanceof Error ? error.message : "分析失败";
-      this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [{ message }] });
+      const failure = error instanceof AppError
+        ? { message, code: error.code, ...(error.details === undefined ? {} : { details: error.details }) }
+        : { message };
+      this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [failure] });
       logger.error("ai.task.failed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000, error: aiErrorForLog(error) });
       throw error;
     } finally {
@@ -4377,6 +4380,7 @@ export class AiManager {
       String(character.code ?? ""),
       String(character.species ?? ""),
       String((character.race as Record<string, unknown> | null)?.name ?? ""),
+      String((character.attributes as Record<string, unknown> | null)?.identity ?? ""),
       ...(Array.isArray(character.organizations) ? character.organizations.map((item) => String((item as Record<string, unknown>).name ?? "")) : []),
       ...[...relatedIds].flatMap((relatedId) => {
         try {
@@ -4430,16 +4434,18 @@ export class AiManager {
     for (const character of targetCharacters) {
       const targetCharacterId = String(character.id);
       const exactReferences = [...new Set([String(character.name), ...(character.aliases as string[])].map((item) => item.trim()).filter(Boolean))];
+      const anchors = this.relationshipIdentityAnchors(workId, character);
       const fuzzyReferenceCount = exactReferences.filter((reference) => [...normalizeRelationshipSearchText(reference).trim()].length >= 2).length;
       if (fuzzyReferenceCount > RELATIONSHIP_MAX_FUZZY_REFERENCES) {
         throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "人物名称和别名过多，无法在安全预算内完成疑似写法匹配", {
           characterId: targetCharacterId,
+          reason: "registered-references",
           fuzzyReferenceCount,
-          maximumFuzzyReferences: RELATIONSHIP_MAX_FUZZY_REFERENCES
+          maximumFuzzyReferences: RELATIONSHIP_MAX_FUZZY_REFERENCES,
+          identityAnchorCount: anchors.length
         });
       }
       const normalizedExactReferences = new Set(exactReferences.map((item) => normalizeRelationshipSearchText(item).trim()));
-      const anchors = this.relationshipIdentityAnchors(workId, character);
       const anchorKeys = new Set<string>();
       for (const anchor of anchors) {
         for (const chapterId of this.relationshipChapterExactMatches(workId, anchor)) {
@@ -4458,19 +4464,25 @@ export class AiManager {
         if (includeSettings) for (const key of this.relationshipSettingExactMatches(workId, reference)) exactKeys.add(key);
         const referenceLength = [...normalizeRelationshipSearchText(reference).trim()].length;
         if (referenceLength < 2) continue;
-        const fuzzyIndexKeys = referenceLength === 2
+        const rawFuzzyIndexKeys = referenceLength === 2
           ? anchorKeys
           : this.relationshipFuzzyIndexMatches(workId, reference, includeSettings, scope);
+        const fuzzyIndexKeys = rawFuzzyIndexKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES && anchorKeys.size > 0
+          ? new Set([...rawFuzzyIndexKeys].filter((key) => anchorKeys.has(key)))
+          : rawFuzzyIndexKeys;
         for (const key of fuzzyIndexKeys) {
           const ref = this.relationshipIndexedSourceRef(key);
           if (ref.sourceType === "chapter" && !allowedChapterIds.has(ref.sourceId)) continue;
           if (ref.sourceType !== "chapter" && !includeSettings) continue;
+          if (exactKeys.has(key)) continue;
           targetIndexCandidateKeys.add(key);
           if (targetIndexCandidateKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) {
             throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名来源过多，请补充人物别名或身份资料后重试", {
               characterId: targetCharacterId,
+              reason: "candidate-sources",
               candidateCount: targetIndexCandidateKeys.size,
-              maximum: RELATIONSHIP_MAX_FUZZY_SOURCES
+              maximum: RELATIONSHIP_MAX_FUZZY_SOURCES,
+              identityAnchorCount: anchors.length
             });
           }
           let indexed = loadedSources.get(key);
@@ -4487,8 +4499,10 @@ export class AiManager {
           if (fuzzyScanCharacters > RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS) {
             throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名待核对文本过多，请缩小分析范围或补充人物别名", {
               characterId: targetCharacterId,
+              reason: "scan-characters",
               scannedCharacters: fuzzyScanCharacters,
-              maximumScannedCharacters: RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS
+              maximumScannedCharacters: RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS,
+              identityAnchorCount: anchors.length
             });
           }
           const referenceCharacters = [...normalizeRelationshipSearchText(reference).trim()];
@@ -4505,9 +4519,11 @@ export class AiManager {
             if (!(error instanceof RelationshipApproximateMatchLimitError)) throw error;
             throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "单个来源中的疑似人物名写法过多，请缩小分析范围或补充人物别名", {
               characterId: targetCharacterId,
+              reason: "source-matches",
               sourceType: indexed.sourceType,
               sourceId: indexed.sourceId,
-              maximumSourceMatches: error.maximumCandidates
+              maximumSourceMatches: error.maximumCandidates,
+              identityAnchorCount: anchors.length
             });
           }
           for (const match of approximateMatches) {
@@ -4525,8 +4541,10 @@ export class AiManager {
             if (fuzzyMatchCount > RELATIONSHIP_MAX_FUZZY_MATCHES) {
               throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名写法过多，请缩小分析范围或补充人物别名", {
                 characterId: targetCharacterId,
+                reason: "fuzzy-matches",
                 fuzzyMatchCount,
-                maximumFuzzyMatches: RELATIONSHIP_MAX_FUZZY_MATCHES
+                maximumFuzzyMatches: RELATIONSHIP_MAX_FUZZY_MATCHES,
+                identityAnchorCount: anchors.length
               });
             }
             targetFuzzySourceKeys.add(key);
@@ -4552,8 +4570,10 @@ export class AiManager {
       if (targetFuzzySourceKeys.size > RELATIONSHIP_MAX_FUZZY_SOURCES) {
         throw new AppError(409, "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED", "疑似人物名来源过多，请补充人物别名或身份资料后重试", {
           characterId: targetCharacterId,
+          reason: "candidate-sources",
           candidateCount: targetFuzzySourceKeys.size,
-          maximum: RELATIONSHIP_MAX_FUZZY_SOURCES
+          maximum: RELATIONSHIP_MAX_FUZZY_SOURCES,
+          identityAnchorCount: anchors.length
         });
       }
     }

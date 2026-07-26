@@ -1304,6 +1304,72 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).not.toContain("人物名称变体确认器");
   });
 
+  it("来源候选超限时保存结构化诊断并可通过身份资料修复", async () => {
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "[]" } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId } = await seedWork(runtime);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    (runtime.ai as unknown as { relationshipFuzzyIndexMatches: () => Set<string> }).relationshipFuzzyIndexMatches = () =>
+      new Set(Array.from({ length: 201 }, (_, index) => `setting:diagnostic_${index}`));
+
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      modelId
+    }).expect(201);
+    const failed = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({}).expect(409);
+    expect(failed.body.error).toMatchObject({
+      code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
+      details: {
+        characterId: target.body.data.id,
+        reason: "candidate-sources",
+        candidateCount: 201,
+        maximum: 200,
+        identityAnchorCount: 0
+      }
+    });
+    const detail = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/detail`).expect(200);
+    expect(detail.body.data.failures).toEqual([expect.objectContaining({
+      code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
+      message: "疑似人物名来源过多，请补充人物别名或身份资料后重试",
+      details: expect.objectContaining({
+        characterId: target.body.data.id,
+        reason: "candidate-sources",
+        candidateCount: 201,
+        identityAnchorCount: 0
+      })
+    })]);
+
+    const repaired = await request(runtime.app).patch(`/api/characters/${target.body.data.id}`).send({
+      aliases: ["摩斯拉"],
+      code: "TITAN-M01",
+      attributes: { identity: "生态守护泰坦" },
+      expectedVersionNo: target.body.data.versionNo,
+      changeNote: "修复人物关系来源匹配"
+    }).expect(200);
+    expect(repaired.body.data).toMatchObject({
+      aliases: ["摩斯拉"],
+      code: "TITAN-M01",
+      attributes: { identity: "生态守护泰坦" }
+    });
+
+    const retry = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      modelId
+    }).expect(201);
+    const completed = await request(runtime.app).post(`/api/tasks/${retry.body.data.id}/run`).send({}).expect(200);
+    expect(completed.body.data.result).toMatchObject({
+      preFilterRelationshipSources: true,
+      sourceSelection: expect.objectContaining({ exactSourceCount: expect.any(Number) })
+    });
+    expect(completed.body.data.result.sourceSelection.exactSourceCount).toBeGreaterThan(0);
+  });
+
   it("通过拼音疑似写法确认来源并并发安全地去重审核项", async () => {
     const userPrompts: string[] = [];
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {

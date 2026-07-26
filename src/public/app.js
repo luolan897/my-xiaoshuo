@@ -4429,6 +4429,93 @@ function bindTaskResultActions(container) {
   }));
 }
 
+function relationshipIdentityRepairFailure(task) {
+  if (task?.taskType !== "relationship-analysis" || !Array.isArray(task.failures)) return null;
+  return task.failures.find((failure) =>
+    failure?.code === "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED"
+    && failure.details
+    && typeof failure.details === "object"
+    && typeof failure.details.characterId === "string"
+  ) ?? null;
+}
+
+function relationshipIdentityRepairMetrics(details) {
+  const metrics = [];
+  if (Number.isFinite(Number(details.candidateCount))) {
+    metrics.push(["疑似来源", `${Number(details.candidateCount)} / 上限 ${Number(details.maximum)}`]);
+  }
+  if (Number.isFinite(Number(details.fuzzyReferenceCount))) {
+    metrics.push(["名称与别名", `${Number(details.fuzzyReferenceCount)} / 上限 ${Number(details.maximumFuzzyReferences)}`]);
+  }
+  if (Number.isFinite(Number(details.scannedCharacters))) {
+    metrics.push(["待核对文本", `${Number(details.scannedCharacters).toLocaleString("zh-CN")} / 上限 ${Number(details.maximumScannedCharacters).toLocaleString("zh-CN")} 字符`]);
+  }
+  if (Number.isFinite(Number(details.fuzzyMatchCount))) {
+    metrics.push(["疑似写法", `${Number(details.fuzzyMatchCount)} / 上限 ${Number(details.maximumFuzzyMatches)}`]);
+  }
+  metrics.push(["身份锚点", `${Number(details.identityAnchorCount ?? 0)} 个`]);
+  return metrics;
+}
+
+async function openRelationshipIdentityRepairDialog(task, failure) {
+  const details = failure.details && typeof failure.details === "object" ? failure.details : {};
+  const character = await api(`/api/characters/${encodeURIComponent(details.characterId)}`);
+  const anchors = [
+    character.code,
+    character.attributes?.identity,
+    character.race?.name || character.species,
+    ...(Array.isArray(character.organizations) ? character.organizations.map((organization) => organization.name) : [])
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  const metrics = relationshipIdentityRepairMetrics(details);
+  const metricHtml = metrics.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join("");
+  const anchorHtml = anchors.length
+    ? anchors.map((anchor) => `<span>${esc(anchor)}</span>`).join("")
+    : "<em>尚未登记可用于消歧的身份锚点</em>";
+  openDialog("修复人物身份资料",
+    `<section class="relationship-identity-repair-summary">
+      <div><span>匹配诊断</span><h3>${esc(character.name)}</h3><p>${esc(failure.message)}</p></div>
+      <dl>${metricHtml}</dl>
+      <div class="relationship-identity-anchor-list"><strong>当前身份锚点</strong><div>${anchorHtml}</div></div>
+    </section>
+    <p class="relationship-identity-repair-guidance">把原文中确实指向该人物的稳定称呼登记为别名；编号和身份定位应填写会在正文或设定中共同出现的辨识词。保存后，别名命中会转为精确匹配，身份锚点可收窄过多的拼音疑似来源。</p>
+    <label>角色标准名<input type="text" value="${esc(character.name)}" readonly></label>
+    ${field("aliases", "确认别名", "item-list", character.aliases ?? [])}
+    ${field("code", "人物编号或代号", "text", character.code)}
+    ${field("identity", "身份与定位", "text", character.attributes?.identity)}
+    <button class="ghost-button relationship-identity-full-profile" type="button" data-open-identity-character-profile>打开完整人物档案</button>`,
+    async (form) => {
+      const aliases = form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean);
+      const code = String(form.get("code") ?? "").trim();
+      const identity = String(form.get("identity") ?? "").trim();
+      const saved = await api(`/api/characters/${encodeURIComponent(character.id)}`, {
+        method: "PATCH",
+        body: {
+          aliases,
+          code,
+          attributes: { ...(character.attributes ?? {}), identity },
+          expectedVersionNo: character.versionNo,
+          changeNote: `修复人物关系来源匹配：${failure.message}`.slice(0, 500)
+        }
+      });
+      await loadAiReferences();
+      if (state.module === "tasks") await renderTasks(taskListPage);
+      toast(`“${saved.name}”的身份资料已保存为 v${saved.versionNo}，可重新运行原分析配置`);
+    },
+    "人物关系匹配修复",
+    {
+      submitLabel: "保存身份修复",
+      pendingLabel: "保存中…",
+      pendingMessage: "正在保存人物身份资料",
+      errorPrefix: "身份修复失败：",
+      wide: true
+    });
+  $("#dialog-fields").querySelector("[data-open-identity-character-profile]")?.addEventListener("click", async () => {
+    $("#form-dialog").close();
+    await openCharacterEditor(character);
+    activateCharacterEditorTab("profile");
+  });
+}
+
 function openTaskDetailDialog(task, trace) {
   if (!task) return;
   const details = Array.isArray(task.scopeDetails) ? task.scopeDetails : [];
@@ -4455,6 +4542,15 @@ function openTaskDetailDialog(task, trace) {
   const failureHtml = failures.length
     ? `<ul>${failures.map((item) => `<li>${esc(item.message || JSON.stringify(item))}</li>`).join("")}</ul>`
     : "<p>无</p>";
+  const identityRepairFailure = relationshipIdentityRepairFailure(task);
+  const identityRepairHtml = identityRepairFailure
+    ? `<section class="relationship-identity-repair-entry">
+        <div><strong>可修复的人物身份匹配问题</strong><p>系统已定位到触发来源超限的角色。补充准确别名或身份锚点后，再按原配置重试。</p></div>
+        ${canEditModule("characters")
+          ? '<button class="primary-button" type="button" data-task-identity-repair>修复人物身份资料</button>'
+          : "<small>当前账户没有人物模块编辑权限。</small>"}
+      </section>`
+    : "";
   const resultPreview = renderTaskResult(task);
   openDialog("任务详情",
     `<div class="task-detail">
@@ -4465,7 +4561,7 @@ function openTaskDetailDialog(task, trace) {
         <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
         <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
-        <div><strong>失败信息</strong>${failureHtml}</div>
+        <div><strong>失败信息</strong>${failureHtml}${identityRepairHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
@@ -4475,6 +4571,16 @@ function openTaskDetailDialog(task, trace) {
     { submitLabel: "关闭", wide: true, trace: true });
   bindTaskTraceCallActions($("#dialog-fields"));
   bindTaskResultActions($("#dialog-fields"));
+  $("#dialog-fields").querySelector("[data-task-identity-repair]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    $("#form-dialog").close();
+    try {
+      await openRelationshipIdentityRepairDialog(task, identityRepairFailure);
+    } catch (error) {
+      toast(`身份修复向导加载失败：${error.message}`, "error");
+    }
+  });
 }
 
 function renderProviderCards(providers, models) {
