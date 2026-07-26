@@ -518,6 +518,25 @@ function redactOrganizationMembers(record: Record<string, unknown>, permissions:
   return permissions.characters === "none" ? { ...record, memberIds: [], members: [] } : record;
 }
 
+const taskResultPermissionModules: Partial<Record<string, keyof WorkModulePermissions>> = {
+  "chapter-analysis": "prose",
+  "character-extraction": "characters",
+  "character-summary": "characters",
+  "character-identity-audit": "reviews",
+  "timeline-analysis": "timeline",
+  "relationship-analysis": "relationships",
+  "worldview-analysis": "settings",
+  "setting-extraction": "settings",
+  "consistency-check": "reviews",
+  "book-analysis": "prose",
+  structure: "outlines",
+  "report-update": "prose"
+};
+
+function requiredTaskResultModule(taskType: unknown): keyof WorkModulePermissions | undefined {
+  return taskResultPermissionModules[String(taskType)];
+}
+
 function redactTaskCharacterNames(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
   const { scopeSummaryWithoutCharacterNames, ...result } = record;
   const proseRestricted = permissions.prose === "none";
@@ -571,20 +590,7 @@ function redactTaskCharacterNames(record: Record<string, unknown>, permissions: 
   const resultSummary = recordValue(result.resultSummary);
   const characterSensitiveTask = ["character-extraction", "character-summary", "character-identity-audit", "relationship-analysis"]
     .includes(String(result.taskType));
-  const requiredResultModule = {
-    "chapter-analysis": "prose",
-    "character-extraction": "characters",
-    "character-summary": "characters",
-    "character-identity-audit": "reviews",
-    "timeline-analysis": "timeline",
-    "relationship-analysis": "relationships",
-    "worldview-analysis": "settings",
-    "setting-extraction": "settings",
-    "consistency-check": "reviews",
-    "book-analysis": "prose",
-    structure: "outlines",
-    "report-update": "prose"
-  }[String(result.taskType)] as keyof WorkModulePermissions | undefined;
+  const requiredResultModule = requiredTaskResultModule(result.taskType);
   const resultRestricted = requiredResultModule !== undefined && permissions[requiredResultModule] === "none";
   if (resultSummary && (resultRestricted || (characterRestricted && characterSensitiveTask))) {
     result.resultSummary = {
@@ -1535,9 +1541,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   ));
   app.get("/api/tasks/:taskId/result", (request, response) => {
     const task = store.getTaskResultPayload(request.params.taskId);
+    const permissions = requestPermissions(request);
+    const requiredModule = requiredTaskResultModule(task.taskType);
+    if (requiredModule && permissions[requiredModule] === "none") {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该分析结果对应资料模块的权限");
+    }
     const redacted = redactTaskCharacterNames(
       task,
-      requestPermissions(request)
+      permissions
     );
     data(response, { taskId: task.id, result: redacted.result });
   });

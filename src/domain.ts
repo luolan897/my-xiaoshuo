@@ -64,4 +64,5 @@ export type ContextScope = {
   additionalPrompt?: string;
   replaceExistingRelationships?: boolean;
   excludeRelationshipConstraints?: boolean;
+  suppressAutomaticContext?: boolean;
 };
