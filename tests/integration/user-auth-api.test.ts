@@ -1000,11 +1000,56 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const ownerTrace = await owner.agent.get(`/api/tasks/${taskId}/trace`).expect(200);
     expect(JSON.stringify(ownerTrace.body.data)).toContain("TOP_SECRET_PROSE");
 
+    const secretCharacter = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "TOP_SECRET_CHARACTER" })
+      .expect(201);
+    const targetedTask = await owner.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        taskType: "relationship-analysis",
+        scope: { type: "book", characterIds: [secretCharacter.body.data.id] }
+      })
+      .expect(201);
+    expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER");
+
     const noContentPermissions = Object.fromEntries(Object.keys(basePermissions).map((module) => [module, "none"]));
     await owner.agent.patch(`/api/works/${workId}/members/${analysisOnly.user.userId}`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ permissions: { ...noContentPermissions, "ai-analysis": "write" } })
       .expect(200);
+    await analysisOnly.agent.get(`/api/works/${workId}/characters`).expect(403);
+    const protectedTasks = await analysisOnly.agent.get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
+    const protectedTaskSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === targetedTask.body.data.id);
+    expect(protectedTaskSummary.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(JSON.stringify(protectedTaskSummary)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}`).expect(200);
+    expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskDetail.body.data.scope.targetCharacters).toBeUndefined();
+    expect(JSON.stringify(protectedTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({})
+      .expect(200);
+    expect(protectedTaskCancellation.body.data.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskCancellation.body.data.scope.targetCharacters).toBeUndefined();
+    expect(JSON.stringify(protectedTaskCancellation.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const targetedTaskDenied = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({
+        taskType: "relationship-analysis",
+        scope: { type: "book", characterIds: [secretCharacter.body.data.id] }
+      })
+      .expect(403);
+    expect(targetedTaskDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const trailingSlashTaskDenied = await analysisOnly.agent.post(`/api/works/${workId}/tasks/`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({
+        taskType: "relationship-analysis",
+        scope: { type: "book", characterIds: [secretCharacter.body.data.id] }
+      })
+      .expect(403);
+    expect(trailingSlashTaskDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     await analysisOnly.agent.get(`/api/tasks/${taskId}`).expect(200);
     const protectedTrace = await analysisOnly.agent.get(`/api/tasks/${taskId}/trace`).expect(403);
     expect(protectedTrace.body.error.code).toBe("WORK_MODULE_READ_DENIED");

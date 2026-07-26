@@ -5294,14 +5294,17 @@ export class Store {
     this.getWork(workId);
     const taskId = id("task");
     const timestamp = now();
-    const scope = input.scope ?? { type: "book" };
+    const scope = { ...(input.scope ?? { type: "book" }) };
     const sourceVersions: Record<string, number> = {};
+    const targetCharacters: Array<{ id: string; name: string }> = [];
     if (Array.isArray(scope.characterIds)) {
       for (const characterId of scope.characterIds) {
         if (typeof characterId !== "string") throw new AppError(400, "CHARACTER_REQUIRED", "被分析角色标识无效");
         const character = this.getCharacter(characterId);
         if (character.workId !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
+        targetCharacters.push({ id: characterId, name: String(character.name) });
       }
+      if (targetCharacters.length > 0) scope.targetCharacters = targetCharacters;
     }
     if (typeof scope.chapterId === "string") {
       const chapter = this.getChapter(scope.chapterId);
@@ -5368,8 +5371,11 @@ export class Store {
       "SELECT id, title FROM volumes WHERE work_id = ?",
       workId
     ).map((row) => [requiredString(row, "id"), requiredString(row, "title")] as const));
+    const characterNames = this.taskCharacterNames(workId, rows.map((row) =>
+      json<Record<string, unknown>>(requiredString(row, "scope_json"), {})
+    ));
     return {
-      ...paginated(rows.map((row) => this.mapTaskSummary(row, chapterSummaries, volumeTitles)), pagination, total),
+      ...paginated(rows.map((row) => this.mapTaskSummary(row, chapterSummaries, volumeTitles, characterNames)), pagination, total),
       stats: {
         total,
         pendingCount: numberValue(statsRow, "pending_count"),
@@ -5474,12 +5480,14 @@ export class Store {
   private mapTask(row: Row): Record<string, unknown> {
     const workId = requiredString(row, "work_id");
     const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
+    const characterNames = this.taskCharacterNames(workId, [scope]);
     return {
       id: requiredString(row, "id"),
       workId,
       taskType: requiredString(row, "task_type"),
       scope,
-      scopeSummary: this.taskScopeSummary(workId, scope),
+      scopeSummary: this.taskScopeSummary(workId, scope, characterNames),
+      scopeSummaryWithoutCharacterNames: this.taskScopeSummary(workId, scope, new Map(), false),
       scopeDetails: this.taskScopeDetails(workId, scope),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
@@ -5491,12 +5499,18 @@ export class Store {
     };
   }
 
-  private mapTaskSummary(row: Row, chapterSummaries: Map<string, string>, volumeTitles: Map<string, string>): Record<string, unknown> {
+  private mapTaskSummary(
+    row: Row,
+    chapterSummaries: Map<string, string>,
+    volumeTitles: Map<string, string>,
+    characterNames: Map<string, string>
+  ): Record<string, unknown> {
     const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
     return {
       id: requiredString(row, "id"),
       taskType: requiredString(row, "task_type"),
-      scopeSummary: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles),
+      scopeSummary: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, characterNames),
+      scopeSummaryWithoutCharacterNames: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, new Map(), false),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
       createdAt: requiredString(row, "created_at"),
@@ -5504,23 +5518,30 @@ export class Store {
     };
   }
 
-  private taskScopeSummaryFromMaps(scope: Record<string, unknown>, chapterSummaries: Map<string, string>, volumeTitles: Map<string, string>): string {
-    const targetedSuffix = Array.isArray(scope.characterIds) && scope.characterIds.length
-      ? ` · 定向 ${scope.characterIds.length} 人${scope.replaceExistingRelationships === true ? " · 覆盖已有关系" : ""}`
-      : "";
+  private taskScopeSummaryFromMaps(
+    scope: Record<string, unknown>,
+    chapterSummaries: Map<string, string>,
+    volumeTitles: Map<string, string>,
+    characterNames: Map<string, string>,
+    includeCharacterNames = true
+  ): string {
+    const targetedSuffix = this.taskTargetedSuffix(scope, characterNames, includeCharacterNames);
     if (typeof scope.chapterId === "string") return `${chapterSummaries.get(scope.chapterId) ?? "章节已删除"}${targetedSuffix}`;
     if (scope.type === "volume" && typeof scope.volumeId === "string") {
       const title = volumeTitles.get(scope.volumeId);
-      return title ? `分卷 · ${title}${targetedSuffix}` : "分卷已删除";
+      return `${title ? `分卷 · ${title}` : "分卷已删除"}${targetedSuffix}`;
     }
     if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 所有设定" : "全书"}${targetedSuffix}`;
     return "未指定范围";
   }
 
-  private taskScopeSummary(workId: string, scope: Record<string, unknown>): string {
-    const targetedSuffix = Array.isArray(scope.characterIds) && scope.characterIds.length
-      ? ` · 定向 ${scope.characterIds.length} 人${scope.replaceExistingRelationships === true ? " · 覆盖已有关系" : ""}`
-      : "";
+  private taskScopeSummary(
+    workId: string,
+    scope: Record<string, unknown>,
+    characterNames: Map<string, string>,
+    includeCharacterNames = true
+  ): string {
+    const targetedSuffix = this.taskTargetedSuffix(scope, characterNames, includeCharacterNames);
     if (typeof scope.chapterId === "string") {
       const chapter = this.db.get(
         `SELECT chapter.title AS title, volume.title AS volume_title
@@ -5530,17 +5551,70 @@ export class Store {
         scope.chapterId,
         workId
       );
-      if (!chapter) return "章节已删除";
+      if (!chapter) return `章节已删除${targetedSuffix}`;
       const title = requiredString(chapter, "title");
       const volumeTitle = requiredString(chapter, "volume_title");
       return `${volumeTitle} · ${title}${targetedSuffix}`;
     }
     if (scope.type === "volume" && typeof scope.volumeId === "string") {
       const volume = this.db.get("SELECT title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);
-      return volume ? `分卷 · ${requiredString(volume, "title")}${targetedSuffix}` : "分卷已删除";
+      return `${volume ? `分卷 · ${requiredString(volume, "title")}` : "分卷已删除"}${targetedSuffix}`;
     }
     if (scope.type === "book" || Object.keys(scope).length === 0) return `${scope.includeAllSettings === true ? "全书 + 所有设定" : "全书"}${targetedSuffix}`;
     return "未指定范围";
+  }
+
+  private taskCharacterNames(workId: string, scopes: Record<string, unknown>[]): Map<string, string> {
+    const characterIds = [...new Set(scopes.flatMap((scope) => {
+      const snapshotNames = this.taskCharacterSnapshotNames(scope);
+      return Array.isArray(scope.characterIds)
+        ? scope.characterIds.filter((characterId): characterId is string =>
+          typeof characterId === "string" && !snapshotNames.has(characterId))
+        : [];
+    }))];
+    const characterNames = new Map<string, string>();
+    for (let offset = 0; offset < characterIds.length; offset += 400) {
+      const batch = characterIds.slice(offset, offset + 400);
+      const placeholders = batch.map(() => "?").join(", ");
+      for (const row of this.db.all(
+        `SELECT id, name FROM characters WHERE work_id = ? AND id IN (${placeholders})`,
+        workId,
+        ...batch
+      )) {
+        characterNames.set(requiredString(row, "id"), requiredString(row, "name"));
+      }
+    }
+    return characterNames;
+  }
+
+  private taskTargetedSuffix(
+    scope: Record<string, unknown>,
+    characterNames: Map<string, string>,
+    includeCharacterNames = true
+  ): string {
+    const characterIds = Array.isArray(scope.characterIds)
+      ? scope.characterIds.filter((characterId): characterId is string => typeof characterId === "string")
+      : [];
+    if (characterIds.length === 0) return "";
+    const overwriteSuffix = scope.replaceExistingRelationships === true ? " · 覆盖已有关系" : "";
+    if (!includeCharacterNames) return ` · 定向 ${characterIds.length} 人${overwriteSuffix}`;
+    const snapshotNames = this.taskCharacterSnapshotNames(scope);
+    const names = characterIds.map((characterId) => snapshotNames.get(characterId) ?? characterNames.get(characterId) ?? "已删除角色");
+    return ` · 定向 ${characterIds.length} 人：${names.join("、")}${overwriteSuffix}`;
+  }
+
+  private taskCharacterSnapshotNames(scope: Record<string, unknown>): Map<string, string> {
+    const snapshotNames = new Map<string, string>();
+    if (Array.isArray(scope.targetCharacters)) {
+      for (const item of scope.targetCharacters) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        const target = item as Record<string, unknown>;
+        if (typeof target.id === "string" && typeof target.name === "string" && target.name.trim()) {
+          snapshotNames.set(target.id, target.name);
+        }
+      }
+    }
+    return snapshotNames;
   }
 
   private taskScopeDetails(workId: string, scope: Record<string, unknown>): Record<string, unknown>[] {
