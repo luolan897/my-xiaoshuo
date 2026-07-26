@@ -49,4 +49,21 @@ describe("作品工作台按需加载", () => {
     expect(renderRacesSource).not.toContain('/characters');
     expect(openKnowledgeEditorSource).toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
   });
+
+  it("角色分页不覆盖跨模块全量引用缓存", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderCharactersSource = application.slice(
+      application.indexOf("async function renderCharacters("),
+      application.indexOf("async function renderRaces(")
+    );
+    const openCharacterEditorSource = application.slice(
+      application.indexOf("async function openCharacterEditor("),
+      application.indexOf("async function openRaceDialog(")
+    );
+
+    expect(renderCharactersSource).toContain("const pageCharacters = characterPage.items;");
+    expect(renderCharactersSource).not.toContain("state.characters = characterPage.items");
+    expect(renderCharactersSource).toContain('openCharacterEditor(pageCharacters.find((item) => item.id === id)');
+    expect(openCharacterEditorSource).toContain('canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`)');
+  });
 });

@@ -83,3 +83,38 @@ export function buildRaceForest(races) {
   };
   return sort(roots);
 }
+
+export function paginateRaceForest(races, page, limit) {
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 1));
+  const forest = buildRaceForest(races);
+  const pages = [];
+  let currentItems = [];
+  let currentItemCount = 0;
+  const subtreeSize = (node) => 1 + node.children.reduce((total, child) => total + subtreeSize(child), 0);
+
+  for (const root of forest) {
+    const rootItemCount = subtreeSize(root);
+    if (currentItems.length && currentItemCount + rootItemCount > safeLimit) {
+      pages.push({ items: currentItems, itemCount: currentItemCount });
+      currentItems = [];
+      currentItemCount = 0;
+    }
+    currentItems.push(root);
+    currentItemCount += rootItemCount;
+  }
+  if (currentItems.length || !pages.length) pages.push({ items: currentItems, itemCount: currentItemCount });
+
+  const pageCount = pages.length;
+  const safePage = Math.min(Math.max(1, Number(page) || 1), pageCount);
+  const selectedPage = pages[safePage - 1];
+  return {
+    items: selectedPage.items,
+    itemCount: selectedPage.itemCount,
+    page: safePage,
+    limit: safeLimit,
+    total: races.length,
+    pageCount,
+    hasMore: safePage < pageCount,
+    nextPage: safePage < pageCount ? safePage + 1 : null
+  };
+}
