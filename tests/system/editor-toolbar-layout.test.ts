@@ -69,7 +69,7 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain('$("#form-dialog").close();');
     expect(application.text).toContain("resetWorkScopedUiCaches();");
     expect(application.text).toContain("if (state.dirty) scheduleChapterAutoSave();");
-    expect(application.text).toContain('apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25)');
+    expect(application.text).toContain('apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, pageSizeFor("fileVersions"))');
     expect(styles.text).toContain('@container (max-width: 120px)');
     expect(styles.text).toContain('@container (max-width: 88px)');
     expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');

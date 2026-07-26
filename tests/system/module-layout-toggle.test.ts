@@ -83,6 +83,8 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain(".editor-view.is-read-only #tidy-blank-lines-button");
     expect(styles.text).toContain(".editor-view.is-read-only #save-button");
     expect(application.text).toContain('aria-label="角色列表分页"');
+    expect(application.text).toContain('const pageSize = pageSizeFor("characters")');
+    expect(application.text).toContain('paginateCharacters(filterCharacters(characterSource, characterFilters), page, pageSize)');
     expect(application.text).toContain("data-character-page");
     expect(application.text).toContain("上一页");
     expect(application.text).toContain("下一页");
