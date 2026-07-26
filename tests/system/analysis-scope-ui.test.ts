@@ -33,9 +33,13 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('data-relationship-character-clear');
     expect(application).toContain('input[name="characterIds"]');
     expect(application).toContain('class="relationship-analysis-helper"');
+    expect(application).toContain('name="preFilterRelationshipSources" type="checkbox" checked disabled');
+    expect(application).toContain("无差别发送所选范围内的全部章节和设定来源");
+    expect(application).toContain('form.get("preFilterRelationshipSources") === "on"');
+    expect(application).toContain("preFilterRelationships.disabled = !hasSelectedCharacters");
     expect(application).toContain("默认仅追加不存在的关系，不修改或删除已有关系");
     expect(application).toContain("不勾选则只追加新关系");
-    expect(application).toContain('class="relationship-overwrite-card hidden"');
+    expect(application).toContain('class="relationship-overwrite-card relationship-existing-overwrite-card hidden"');
     expect(application).toContain('name="replaceExistingRelationships" type="checkbox" disabled');
     expect(application).toContain('relationshipOptions.classList.toggle("hidden", !enabled)');
     expect(application).toContain("relationshipCharacterInputs.some((input) => input.checked)");

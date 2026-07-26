@@ -1230,7 +1230,9 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({
       coveredChapterCount: 1,
-      targetedCharacterIds: [target.body.data.id]
+      targetedCharacterIds: [target.body.data.id],
+      preFilterRelationshipSources: true,
+      analysisTarget: { preFilterRelationshipSources: true }
     });
     const sent = userPrompts.join("\n");
     expect(sent).toContain("阿宁在旧港查看完整航海日志。");
@@ -1241,6 +1243,65 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).not.toContain("绝密旁观者自动注入标记");
     expect(sent).not.toContain("无关组织自动注入标记");
     expect(sent).toContain('title="组织设定：守望会"');
+  });
+
+  it("关闭前置过滤时定向人物关系分析发送范围内全部章节和设定", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在旧港查看完整航海日志。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: "无关正文甲也必须发送。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[2].id}`).send({
+      content: "无关正文乙也必须发送。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "纪宁", aliases: ["阿宁"] }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾川" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "旧港盟约",
+      category: "人物关系",
+      content: "阿宁与顾川在旧港订立了长期守望盟约。"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "无关天文规则",
+      category: "世界规则",
+      content: "无关设定也必须发送。"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        characterIds: [target.body.data.id],
+        preFilterRelationshipSources: false
+      }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toBe("全书 + 设定集 · 定向 1 人：纪宁 · 未前置过滤");
+
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      coveredChapterCount: 3,
+      targetedCharacterIds: [target.body.data.id],
+      preFilterRelationshipSources: false,
+      analysisTarget: { preFilterRelationshipSources: false }
+    });
+    expect(result.body.data.result.sourceSelection).toBeUndefined();
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("阿宁在旧港查看完整航海日志。");
+    expect(sent).toContain("无关正文甲也必须发送。");
+    expect(sent).toContain("无关正文乙也必须发送。");
+    expect(sent).toContain("阿宁与顾川在旧港订立了长期守望盟约。");
+    expect(sent).toContain("无关设定也必须发送。");
+    expect(sent).not.toContain("人物名称变体确认器");
   });
 
   it("通过拼音疑似写法确认来源并并发安全地去重审核项", async () => {
@@ -1619,8 +1680,16 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       scope: { type: "book", replaceExistingRelationships: true }
     }).expect(400);
     await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", preFilterRelationshipSources: false }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "timeline-analysis",
       scope: { type: "book", characterIds: ["character_not_allowed"] }
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "timeline-analysis",
+      scope: { type: "book", preFilterRelationshipSources: false }
     }).expect(400);
   });
 

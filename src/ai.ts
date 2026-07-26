@@ -3895,6 +3895,115 @@ export class AiManager {
     await Promise.allSettled(workIds.map((workId) => this.ensureRelationshipSearchIndex(workId)));
   }
 
+  getRelationshipSearchIndexStatus(workId: string): Record<string, unknown> {
+    this.store.getWork(workId);
+    const row = this.store.db.get(
+      "SELECT status, generation, error, updated_at FROM relationship_source_index_state WHERE work_id = ?",
+      workId
+    );
+    const queuedSources = this.store.db.all(
+      `SELECT source_type, COUNT(*) AS count, MIN(queued_at) AS oldest_queued_at
+       FROM relationship_source_index_queue WHERE work_id = ?
+       GROUP BY source_type ORDER BY source_type`,
+      workId
+    ).map((item) => ({
+      sourceType: String(item.source_type),
+      count: Number(item.count ?? 0),
+      oldestQueuedAt: String(item.oldest_queued_at ?? "")
+    }));
+    const queuedSourceCount = queuedSources.reduce((total, item) => total + item.count, 0);
+    const storedStatus = String(row?.status ?? "");
+    const status = storedStatus === "building"
+      ? "building"
+      : queuedSourceCount > 0
+        ? "queued"
+        : storedStatus || "ready";
+    return {
+      workId,
+      status,
+      generation: Number(row?.generation ?? 0),
+      queuedSourceCount,
+      queuedSources,
+      indexedSourceCount: Number(this.store.db.get(
+        "SELECT COUNT(*) AS count FROM relationship_source_search WHERE work_id = ?",
+        workId
+      )?.count ?? 0),
+      indexedParagraphCount: Number(this.store.db.get(
+        `SELECT COUNT(*) AS count FROM chapter_paragraph_pinyin_fts pinyin
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = pinyin.rowid
+         WHERE paragraph.work_id = ?`,
+        workId
+      )?.count ?? 0),
+      error: String(row?.error ?? ""),
+      updatedAt: String(row?.updated_at ?? "")
+    };
+  }
+
+  syncRelationshipSearchIndex(workId: string): Record<string, unknown> {
+    const status = this.getRelationshipSearchIndexStatus(workId);
+    if (Number(status.queuedSourceCount ?? 0) > 0 || status.status === "building") {
+      void this.ensureRelationshipSearchIndex(workId).catch(() => undefined);
+    }
+    return status;
+  }
+
+  rebuildRelationshipSearchIndex(workId: string): Record<string, unknown> {
+    this.store.getWork(workId);
+    const timestamp = now();
+    const queueSources: Array<{ table: string; sourceType: string; idColumn: string }> = [
+      { table: "works", sourceType: "work", idColumn: "id" },
+      { table: "chapters", sourceType: "chapter", idColumn: "id" },
+      { table: "settings", sourceType: "setting", idColumn: "id" },
+      { table: "characters", sourceType: "character", idColumn: "id" },
+      { table: "races", sourceType: "race", idColumn: "id" },
+      { table: "organizations", sourceType: "organization", idColumn: "id" },
+      { table: "timeline_tracks", sourceType: "timeline-track", idColumn: "id" },
+      { table: "timeline_events", sourceType: "timeline-event", idColumn: "id" },
+      { table: "relationships", sourceType: "relationship", idColumn: "id" },
+      { table: "foreshadows", sourceType: "foreshadow", idColumn: "id" },
+      { table: "review_items", sourceType: "review", idColumn: "id" }
+    ];
+    this.store.db.transaction(() => {
+      this.store.db.run(
+        `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+         SELECT work_id, source_type, source_id, ? FROM relationship_source_search WHERE work_id = ?
+         ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+        timestamp,
+        workId
+      );
+      for (const source of queueSources) {
+        const workColumn = source.table === "works" ? "id" : "work_id";
+        this.store.db.run(
+          `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+           SELECT ${workColumn}, ?, ${source.idColumn}, ? FROM ${source.table} WHERE ${workColumn} = ?
+           ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+          source.sourceType,
+          timestamp,
+          workId
+        );
+      }
+      this.store.db.run(
+        `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+         SELECT chapter.work_id, 'chapter-outline', outline.chapter_id, ?
+         FROM chapter_outlines outline JOIN chapters chapter ON chapter.id = outline.chapter_id
+         WHERE chapter.work_id = ?
+         ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+        timestamp,
+        workId
+      );
+      this.store.db.run(
+        `INSERT INTO relationship_source_index_state(work_id, status, generation, error, updated_at)
+         VALUES (?, 'queued', 0, '', ?)
+         ON CONFLICT(work_id) DO UPDATE SET status = 'queued', error = '', updated_at = excluded.updated_at`,
+        workId,
+        timestamp
+      );
+    });
+    const status = this.getRelationshipSearchIndexStatus(workId);
+    void this.ensureRelationshipSearchIndex(workId).catch(() => undefined);
+    return status;
+  }
+
   private ensureRelationshipSearchIndex(workId: string): Promise<number> {
     const existing = this.relationshipIndexBuilds.get(workId);
     if (existing) return existing;
@@ -4800,16 +4909,17 @@ export class AiManager {
       if (!character) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
     }
     const targeted = selectedCharacterIds.size > 0;
+    const preFilterRelationshipSources = targeted && scope.preFilterRelationshipSources !== false;
     const targetedRoster = characters
       .filter((character) => selectedCharacterIds.has(String(character.id)))
       .map((character) => `${String(character.id)} | ${String(character.name)}`)
       .join("\n");
-    const sourceSelection = targeted
+    const sourceSelection = preFilterRelationshipSources
       ? await this.selectRelationshipSources(workId, scope, characters, selectedCharacterIds, modelId, taskId)
       : null;
-    const scopedChapters = targeted ? [] : settingsOnly ? [] : this.getScopeChapters(workId, scope);
+    const scopedChapters = preFilterRelationshipSources || settingsOnly ? [] : this.getScopeChapters(workId, scope);
     const chapters = sourceSelection?.chapters ?? scopedChapters;
-    const availableSettings = targeted ? [] : settingsOnly || scope.includeAllSettings === true
+    const availableSettings = !preFilterRelationshipSources && (settingsOnly || scope.includeAllSettings === true)
       ? this.relationshipSettingSources(workId, characters)
       : [];
     const settings = sourceSelection?.settings ?? availableSettings;
@@ -4826,7 +4936,9 @@ export class AiManager {
         relationshipIds: [],
         candidateCount: 0,
         rawCandidateCount: 0,
-        skipped: [{ index: -1, reason: "没有章节或设定数据命中被分析角色的名称或别名" }],
+        skipped: [{ index: -1, reason: preFilterRelationshipSources
+          ? "没有章节或设定数据命中被分析角色的名称或别名"
+          : "人物关系分析范围内没有章节或设定数据" }],
         batchCount: 0,
         coveredChapterCount: 0,
         coveredSettingCount: 0,
@@ -4836,6 +4948,7 @@ export class AiManager {
         targetedEvidenceCount: 0,
         aggregationBatchCount: 0,
         replacedRelationshipCount: 0,
+        preFilterRelationshipSources,
         sourceSelection: sourceSelection?.summary,
         callIds: sourceSelection?.verificationCallIds ?? []
       };
@@ -5532,7 +5645,8 @@ export class AiManager {
       targetedCharacterCount: selectedCharacterIds.size,
       targetedEvidenceCount,
       aggregationBatchCount,
-      replacedRelationshipCount
+      replacedRelationshipCount,
+      preFilterRelationshipSources
     });
     return {
       relationshipIds,
@@ -5549,7 +5663,8 @@ export class AiManager {
           .filter((character) => selectedCharacterIds.has(String(character.id)))
           .map((character) => String(character.name)),
         coveredChapterCount: chapters.length,
-        includeAllSettings: scope.includeAllSettings === true
+        includeAllSettings: scope.includeAllSettings === true,
+        preFilterRelationshipSources
       },
       rawCandidateCount: rawCandidates.length,
       skipped,
@@ -5562,6 +5677,7 @@ export class AiManager {
       targetedEvidenceCount,
       aggregationBatchCount,
       replacedRelationshipCount,
+      preFilterRelationshipSources,
       ...(sourceSelection ? { sourceSelection: sourceSelection.summary } : {}),
       callIds
     };
