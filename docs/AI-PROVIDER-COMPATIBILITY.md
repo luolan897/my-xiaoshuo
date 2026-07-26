@@ -1,14 +1,15 @@
 # AI 供应商兼容性与配置
 
-本文记录叙界（Scriverse）当前已经验证的 OpenAI Chat Completions 兼容服务商、配置填写方式和已知差异。
+本文记录叙界（Scriverse）当前已经验证的 OpenAI Chat Completions、Anthropic Messages 兼容服务商、配置填写方式和已知差异。
 
-验证日期：2026-07-23。
+验证日期：2026-07-26。
 
 ## 通用填写规则
 
 在 AI 管理中分别填写供应商和模型：
 
-- 供应商地址填写 Chat Completions 的基础地址，不要填写完整的 `/chat/completions` 路径。系统会自动追加该路径。
+- 先选择接口协议。OpenAI Chat Completions 会自动追加 `/chat/completions`；Anthropic Messages 会自动补全 `/v1/messages`。
+- 供应商地址可以填写基础地址，也可以填写完整端点；系统会规范化已知的末尾资源路径。
 - API 密钥只填写密钥本身，不要带 `Bearer ` 前缀。
 - 模型标识符必须填写供应商 API 接受的精确值，不要复制其他客户端附加的上下文或路由标记。
 - 保存供应商后先点击“测试连接”，确认 `/models` 请求成功，再启用模型或设置任务默认模型。
@@ -16,11 +17,11 @@
 
 ## 已验证配置
 
-| 供应商 | Chat Completions 基础地址 | 模型标识符 | 验证内容 |
+| 供应商 | 协议与基础地址 | 模型标识符 | 验证内容 |
 | --- | --- | --- | --- |
 | DeepSeek | `https://api.deepseek.com` | `deepseek-v4-pro`、`deepseek-v4-flash` | 支持普通请求、Thinking、SSE 流式和工具调用 |
 | SiliconFlow | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-8B` | 普通请求、Thinking、SSE 流式、工具调用和项目自身调用链 |
-| LongCat | `https://api.longcat.chat/openai/v1` | `LongCat-2.0` | OpenAI Chat Completions、Thinking 和 SSE 流式 |
+| LongCat | OpenAI：`https://api.longcat.chat/openai/v1`；Anthropic：`https://api.longcat.chat/anthropic` | `LongCat-2.0` | Chat Completions；Messages 普通响应、Thinking、SSE 和工具格式自动化测试 |
 | Kimi Coding | `https://api.kimi.com/coding/v1` | `kimi-for-coding`、`kimi-for-coding-highspeed` | 普通请求、Thinking、SSE 流式和工具调用；默认温度为 1 |
 
 ### DeepSeek
@@ -43,7 +44,7 @@ https://api.deepseek.com/anthropic
 deepseek-v4-pro[1m]
 ```
 
-前者是 Anthropic 协议地址，不是本项目使用的 OpenAI Chat Completions 地址；后者包含客户端上下文标记，DeepSeek OpenAI 接口只接受 `deepseek-v4-pro` 或 `deepseek-v4-flash`。
+前者必须配合 Anthropic Messages 协议使用，不能作为 OpenAI Chat Completions 地址；后者包含客户端上下文标记，DeepSeek OpenAI 接口只接受 `deepseek-v4-pro` 或 `deepseek-v4-flash`。
 
 官方资料：[首次 API 调用](https://api-docs.deepseek.com/guides/reasoning_model)、[Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)、[工具调用](https://api-docs.deepseek.com/guides/tool_calls/)。
 
@@ -70,14 +71,17 @@ Thinking：按需要开启
 
 ```text
 显示名称：LongCat
-Chat Completions 基础地址：https://api.longcat.chat/openai/v1
+接口协议：Anthropic Messages
+API 基础地址：https://api.longcat.chat/anthropic
 模型标识符：LongCat-2.0
 Thinking：开启
 ```
 
-本项目应填写 LongCat 的 OpenAI 兼容入口 `https://api.longcat.chat/openai/v1`。不要填写 `https://api.longcat.chat/anthropic`；该地址对应另一套消息协议。
+Anthropic 配置会调用 `https://api.longcat.chat/anthropic/v1/messages`，并携带 `Authorization: Bearer`、`x-api-key` 与 `anthropic-version: 2023-06-01`。LongCat 的模型列表位于根级 `/v1/models`；连接测试会在协议路径未提供模型列表时自动回退到该地址。
 
-官方资料：[API 概述](https://longcat.chat/platform/docs/APIDocs.html)、[Chat Completions](https://longcat.chat/platform/docs/api/chat.html)、[中文快速开始](https://longcat.chat/platform/docs/zh/)。
+若要继续使用 OpenAI 格式，请把接口协议改为 OpenAI Chat Completions，并填写 `https://api.longcat.chat/openai/v1`。
+
+官方资料：[API 概述](https://longcat.chat/platform/docs/APIDocs.html)、[Anthropic Messages](https://longcat.chat/platform/docs/api/messages)、[中文快速开始](https://longcat.chat/platform/docs/zh/)。
 
 ### Kimi Coding
 
@@ -114,13 +118,15 @@ Gemini 不接受本项目原先通用发送的 `thinking` 字段。本项目现�
 
 ## 已知兼容性边界
 
-本项目采用 OpenAI Chat Completions 的共同子集，并额外读取以下响应字段：
+OpenAI Chat Completions 适配读取以下响应字段：
 
 - 普通响应：`choices[0].message.content`
 - Thinking 响应：`choices[0].message.reasoning_content`
 - 工具调用：`choices[0].message.tool_calls`
 - 流式响应：SSE 的 `data:` 数据、`delta.content`、`delta.reasoning_content` 和 `[DONE]`
 
-不同供应商的扩展参数并不通用。当前 Gemini 会跳过 `thinking`；其他供应商仍按项目现有兼容字段发送。新增供应商时，应至少验证普通请求、流式请求、关闭 Thinking 和工具调用四条路径。
+Anthropic Messages 适配会把系统消息移到顶层 `system`，转换工具定义，并处理 `text`、`thinking`、`tool_use`、`tool_result` 内容块和 Messages SSE 事件。工具调用后的 thinking 签名会原样回传，以满足多轮工具调用要求。
+
+不同供应商的扩展参数并不通用。当前 Gemini 会跳过 `thinking`；LongCat Messages 使用其官方支持的 `{"type":"enabled"}` 或 `{"type":"disabled"}`。其他 Anthropic Messages 供应商默认不注入 thinking 参数，避免不同 Claude 模型的手动预算与自适应思考模式冲突。新增供应商时，应至少验证普通请求、流式请求、关闭 Thinking 和工具调用四条路径。
 
 如果看到 `This operation was aborted`，优先检查基础地址、模型标识符、浏览器是否中断了 SSE，以及请求是否超过项目当前的上游超时；不要先把它判断为 OpenAI 协议不兼容。

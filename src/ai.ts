@@ -1,4 +1,16 @@
 import type { AiMessage, ContextScope, TaskType } from "./domain.js";
+import {
+  buildCompletionRequestBody,
+  normalizeProviderBaseUrl,
+  parseCompletionPayload,
+  providerCompletionEndpoint,
+  providerModelEndpoints,
+  providerRequestHeaders,
+  type AiProviderProtocol,
+  type CompletionMessage,
+  type CompletionPayload,
+  type CompletionToolCall
+} from "./ai-protocol.js";
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
@@ -18,13 +30,14 @@ import {
   relationshipPinyinTokenText,
   relationshipPinyinTokens
 } from "./relationship-search.js";
-import { clamp, id, json, maskSecret, normalizeBaseUrl, now } from "./utils.js";
+import { clamp, id, json, maskSecret, now } from "./utils.js";
 import { z } from "zod";
 
 type ProviderInput = {
   name: string;
   baseUrl: string;
   apiKey: string;
+  protocol?: AiProviderProtocol;
   status?: "enabled" | "disabled";
   note?: string;
   concurrencyLimit?: number;
@@ -59,6 +72,7 @@ type ProviderRow = Row & {
   work_id: string;
   name: string;
   base_url: string;
+  protocol: string;
   encrypted_key: string;
   key_iv: string;
   key_tag: string;
@@ -172,15 +186,26 @@ function isKimiModelId(modelId: string): boolean {
   return modelId.toLowerCase().includes("kimi");
 }
 
+function providerProtocol(provider: Row): AiProviderProtocol {
+  return stringValue(provider, "protocol") === "anthropic-messages" ? "anthropic-messages" : "openai-chat-completions";
+}
+
+function isLongCatProvider(provider: Row): boolean {
+  try {
+    return new URL(stringValue(provider, "base_url")).hostname.toLowerCase() === "api.longcat.chat";
+  } catch {
+    return false;
+  }
+}
+
 function thinkingParameters(provider: Row, model: Row): Record<string, unknown> {
   if (isGeminiProviderOrModel(provider, model)) return {};
+  if (providerProtocol(provider) === "anthropic-messages" && !isLongCatProvider(provider)) return {};
   return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
 }
 
 const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
-type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
-type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
 
 type AiCallTraceAttempt = {
   attempt: number;
@@ -1269,14 +1294,17 @@ export class AiManager {
     const providerId = id("provider");
     const encrypted = this.vault.encrypt(input.apiKey);
     const timestamp = now();
+    const protocol = input.protocol ?? "openai-chat-completions";
+    const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
     this.store.db.run(
-      `INSERT INTO providers (id, work_id, name, base_url, encrypted_key, key_iv, key_tag, key_hint, status,
+      `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
        connection_status, concurrency_limit, rpm_limit, max_tokens, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
-      normalizeBaseUrl(input.baseUrl),
+      baseUrl,
+      protocol,
       encrypted.encrypted,
       encrypted.iv,
       encrypted.tag,
@@ -1289,7 +1317,7 @@ export class AiManager {
       timestamp,
       timestamp
     );
-    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl: normalizeBaseUrl(input.baseUrl) });
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol });
     return this.getProvider(providerId);
   }
 
@@ -1322,12 +1350,14 @@ export class AiManager {
       keyHint = maskSecret(input.apiKey);
       connectionStatus = "unchecked";
     }
-    if (input.baseUrl && normalizeBaseUrl(input.baseUrl) !== stringValue(row, "base_url")) connectionStatus = "unchecked";
+    if (input.baseUrl && normalizeProviderBaseUrl(input.baseUrl) !== stringValue(row, "base_url")) connectionStatus = "unchecked";
+    if (input.protocol && input.protocol !== providerProtocol(row)) connectionStatus = "unchecked";
     this.store.db.run(
-      `UPDATE providers SET name = ?, base_url = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
+      `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
        status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
-      input.baseUrl ? normalizeBaseUrl(input.baseUrl) : stringValue(row, "base_url"),
+      input.baseUrl ? normalizeProviderBaseUrl(input.baseUrl) : stringValue(row, "base_url"),
+      input.protocol ?? providerProtocol(row),
       encryptedKey,
       keyIv,
       keyTag,
@@ -1371,21 +1401,31 @@ export class AiManager {
   async testProvider(providerId: string): Promise<Record<string, unknown>> {
     const row = this.getProviderRow(providerId);
     const apiKey = this.decryptKey(row);
+    const protocol = providerProtocol(row);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     const startedAt = process.hrtime.bigint();
     logger.info("ai.provider_test.started", { providerId });
     try {
-      const endpoint = `${normalizeBaseUrl(stringValue(row, "base_url"))}/models`;
-      const response = await this.outboundFetch(endpoint, {
-        headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-        signal: controller.signal
-      });
-      if (!response.ok) {
+      let payload: { data?: Array<{ id?: string }> } | null = null;
+      let lastFailure = "AI 供应商没有返回模型列表";
+      const endpoints = providerModelEndpoints(stringValue(row, "base_url"), protocol);
+      for (let index = 0; index < endpoints.length; index += 1) {
+        const endpoint = endpoints[index];
+        if (!endpoint) continue;
+        const response = await this.outboundFetch(endpoint, {
+          headers: providerRequestHeaders(protocol, apiKey, "application/json"),
+          signal: controller.signal
+        });
+        if (response.ok) {
+          payload = (await response.json()) as { data?: Array<{ id?: string }> };
+          break;
+        }
         const message = await response.text();
-        throw new Error(`HTTP ${response.status}: ${message.slice(0, 300)}`);
+        lastFailure = `HTTP ${response.status}: ${message.slice(0, 300)}`;
+        if (response.status !== 404 || index === endpoints.length - 1) break;
       }
-      const payload = (await response.json()) as { data?: Array<{ id?: string }> };
+      if (!payload) throw new Error(lastFailure);
       const availableModels = Array.isArray(payload.data) ? payload.data.map((item) => item.id).filter(Boolean) : [];
       const timestamp = now();
       this.store.db.run(
@@ -1396,13 +1436,14 @@ export class AiManager {
       );
       logger.info("ai.provider_test.completed", {
         providerId,
+        protocol,
         ok: true,
         availableModelCount: availableModels.length,
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
       return { ok: true, availableModels, provider: this.getProvider(providerId) };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "连接失败";
+      const message = error instanceof Error ? redactProviderSecret(error.message, apiKey) : "连接失败";
       this.store.db.run(
         "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
         message,
@@ -1411,6 +1452,7 @@ export class AiManager {
       );
       logger.warn("ai.provider_test.completed", {
         providerId,
+        protocol,
         ok: false,
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
         error: aiErrorForLog(error)
@@ -2478,12 +2520,14 @@ export class AiManager {
       );
     };
     const callStartedAt = process.hrtime.bigint();
+    const protocol = providerProtocol(provider);
     logger.info("ai.call.started", {
       callId,
       workId: input.workId,
       taskType: input.taskType,
       providerId: stringValue(provider, "id"),
       modelId: stringValue(model, "id"),
+      protocol,
       streaming: false,
       contextChars: context.length,
       instructionChars: input.instruction.length,
@@ -2493,16 +2537,9 @@ export class AiManager {
     try {
       const apiKey = this.decryptKey(provider);
       activeApiKey = apiKey;
-      const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
+      const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      type CompletionPayload = {
-        usage?: Record<string, unknown>;
-        choices?: Array<{
-          finish_reason?: string | null;
-          message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: CompletionToolCall[] };
-        }>;
-      };
       type CompletionChoice = NonNullable<CompletionPayload["choices"]>[number];
       let completionRequestCount = 0;
       let cacheUsageComplete = true;
@@ -2546,13 +2583,15 @@ export class AiManager {
               try {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
-                  headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-                  body: JSON.stringify({
+                  headers: providerRequestHeaders(protocol, apiKey, "application/json"),
+                  body: JSON.stringify(buildCompletionRequestBody({
+                    protocol,
                     model: stringValue(model, "model_id"),
                     messages: completionMessages,
-                    ...parameters,
-                    ...(tools.length && toolChoice === "auto" ? { tools, tool_choice: "auto" } : {})
-                  }),
+                    parameters,
+                    tools,
+                    toolChoice
+                  })),
                   signal: controller.signal
                 });
                 return { ok: response.ok, status: response.status, body: await response.text() };
@@ -2570,7 +2609,7 @@ export class AiManager {
             });
             if (candidate.ok) {
               try {
-                const parsed = redactProviderSecrets(JSON.parse(candidate.body), apiKey) as CompletionPayload;
+                const parsed = parseCompletionPayload(protocol, redactProviderSecrets(JSON.parse(candidate.body), apiKey));
                 traceAttempt.completedAt = now();
                 traceAttempt.status = "completed";
                 traceAttempt.httpStatus = candidate.status;
@@ -2585,7 +2624,7 @@ export class AiManager {
                 }
                 return parsed;
               } catch {
-                throw new Error(`Chat Completions returned invalid JSON: ${candidate.body.slice(0, 500)}`);
+                throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} returned invalid JSON: ${candidate.body.slice(0, 500)}`);
               }
             }
             lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
@@ -2660,7 +2699,8 @@ export class AiManager {
           role: "assistant",
           content: choice.message.content ?? null,
           reasoning_content: choice.message.reasoning_content ?? null,
-          tool_calls: normalizedToolCalls
+          tool_calls: normalizedToolCalls,
+          ...(choice.message.anthropic_content?.length ? { anthropic_content: choice.message.anthropic_content } : {})
         });
         for (const toolCall of toolCalls) {
           const execution = this.executeAgentTool(input.workId, toolCall);
@@ -2693,7 +2733,7 @@ export class AiManager {
         const suffix = choice?.finish_reason === "length" || reasoningLength > 0
           ? `；模型已生成 ${reasoningLength} 个推理字符，请提高 max_tokens 输出预算`
           : "";
-        throw new Error(`Chat Completions 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
+        throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
       }
       this.store.db.run(
         "UPDATE ai_calls SET status = 'completed', output_chars = ?, completed_at = ? WHERE id = ?",
@@ -2756,19 +2796,23 @@ export class AiManager {
       currentRequestActor()?.userId ?? null
     );
     const callStartedAt = process.hrtime.bigint();
+    const protocol = providerProtocol(provider);
     logger.info("ai.call.started", {
       callId,
       workId: input.workId,
       taskType: input.taskType,
       providerId: stringValue(provider, "id"),
       modelId: stringValue(model, "id"),
+      protocol,
       streaming: true,
       contextChars: context.length,
       instructionChars: input.instruction.length
     });
+    let activeApiKey = "";
     try {
       const apiKey = this.decryptKey(provider);
-      const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
+      activeApiKey = apiKey;
+      const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       let streamedResult: { content: string; reasoning: string; outputTokens: number; cacheHitPercent?: number } | null = null;
       let lastFailure: unknown = null;
@@ -2788,13 +2832,20 @@ export class AiManager {
             try {
               const response = await this.outboundFetch(endpoint, {
                 method: "POST",
-                headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "text/event-stream" },
-                body: JSON.stringify({ model: stringValue(model, "model_id"), messages, ...parameters, stream: true, stream_options: { include_usage: true } }),
+                headers: providerRequestHeaders(protocol, apiKey, "text/event-stream"),
+                body: JSON.stringify(buildCompletionRequestBody({
+                  protocol,
+                  model: stringValue(model, "model_id"),
+                  messages,
+                  parameters,
+                  stream: true
+                })),
                 signal: controller.signal
               });
               if (!response.ok) return { ok: false as const, status: response.status, body: await response.text() };
               const streamed = await this.readCompletionStream(
                 response,
+                protocol,
                 (delta) => {
                   emitted = true;
                   onDelta(delta);
@@ -2860,7 +2911,7 @@ export class AiManager {
       });
       return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "AI 流式调用失败";
+      const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
       logger.error("ai.call.failed", {
         callId,
@@ -2876,10 +2927,12 @@ export class AiManager {
 
   private async readCompletionStream(
     response: Response,
+    protocol: AiProviderProtocol,
     onDelta: (delta: string) => void,
     onThinkingDelta: (delta: string) => void
   ): Promise<{ content: string; reasoning: string; outputTokens: number; cacheHitPercent?: number }> {
-    if (!response.body) throw new Error("Chat Completions 流式响应缺少正文");
+    const protocolLabel = protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions";
+    if (!response.body) throw new Error(`${protocolLabel} 流式响应缺少正文`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -2894,21 +2947,56 @@ export class AiManager {
         .join("\n")
         .trim();
       if (!data || data === "[DONE]") return;
-      const payload = JSON.parse(data) as {
-        error?: { message?: string };
-        usage?: Record<string, unknown>;
-        choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null } }>;
-      };
-      if (payload.error) throw new Error(payload.error.message || "上游流式响应返回错误");
-      if (payload.usage) usage = payload.usage;
-      const choice = payload.choices?.[0];
-      if (choice?.finish_reason) finishReason = choice.finish_reason;
-      const thinkingDelta = choice?.delta?.reasoning_content;
+      const payload = JSON.parse(data) as Record<string, unknown>;
+      const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
+        ? payload.error as Record<string, unknown>
+        : null;
+      if (error) throw new Error(typeof error.message === "string" ? error.message : "上游流式响应返回错误");
+      if (protocol === "anthropic-messages") {
+        const eventUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
+          ? payload.usage as Record<string, unknown>
+          : null;
+        const message = payload.message && typeof payload.message === "object" && !Array.isArray(payload.message)
+          ? payload.message as Record<string, unknown>
+          : null;
+        const messageUsage = message?.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
+          ? message.usage as Record<string, unknown>
+          : null;
+        if (eventUsage || messageUsage) {
+          usage = { ...(usage && typeof usage === "object" ? usage : {}), ...(messageUsage ?? {}), ...(eventUsage ?? {}) };
+        }
+        const eventDelta = payload.delta && typeof payload.delta === "object" && !Array.isArray(payload.delta)
+          ? payload.delta as Record<string, unknown>
+          : {};
+        if (typeof eventDelta.stop_reason === "string") finishReason = eventDelta.stop_reason;
+        if (eventDelta.type === "thinking_delta" && typeof eventDelta.thinking === "string" && eventDelta.thinking.length > 0) {
+          reasoning += eventDelta.thinking;
+          onThinkingDelta(eventDelta.thinking);
+        }
+        if (eventDelta.type === "text_delta" && typeof eventDelta.text === "string" && eventDelta.text.length > 0) {
+          content += eventDelta.text;
+          onDelta(eventDelta.text);
+        }
+        return;
+      }
+      const streamUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
+        ? payload.usage as Record<string, unknown>
+        : null;
+      if (streamUsage) usage = streamUsage;
+      const choices = Array.isArray(payload.choices) ? payload.choices : [];
+      const choice = choices[0] && typeof choices[0] === "object" && !Array.isArray(choices[0])
+        ? choices[0] as Record<string, unknown>
+        : null;
+      if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
+      const deltaRecord = choice?.delta && typeof choice.delta === "object" && !Array.isArray(choice.delta)
+        ? choice.delta as Record<string, unknown>
+        : {};
+      const thinkingDelta = deltaRecord.reasoning_content;
       if (typeof thinkingDelta === "string" && thinkingDelta.length > 0) {
         reasoning += thinkingDelta;
         onThinkingDelta(thinkingDelta);
       }
-      const delta = choice?.delta?.content;
+      const delta = deltaRecord.content;
       if (typeof delta === "string" && delta.length > 0) {
         content += delta;
         onDelta(delta);
@@ -2923,7 +3011,7 @@ export class AiManager {
       if (chunk.done) break;
     }
     if (buffer.trim()) consumeEvent(buffer);
-    if (!content.trim()) throw new Error(`Chat Completions 流式响应缺少可用正文，finish_reason=${finishReason}`);
+    if (!content.trim()) throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
     const cacheHitPercent = resolveCacheHitPercent(usage);
     return { content, reasoning, outputTokens: resolveOutputTokens(usage, content), ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }) };
   }
@@ -6118,6 +6206,7 @@ export class AiManager {
       scope: "platform",
       name: stringValue(row, "name"),
       baseUrl: stringValue(row, "base_url"),
+      protocol: providerProtocol(row),
       apiKey: stringValue(row, "key_hint"),
       status: stringValue(row, "status"),
       connectionStatus: stringValue(row, "connection_status"),

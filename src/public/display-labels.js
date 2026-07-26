@@ -65,6 +65,13 @@ export function providerConnectionLabel(value) {
   return enumLabel({ unchecked: "未测试", success: "连接正常", failed: "连接失败" }, value, "未知连接状态");
 }
 
+export function providerProtocolLabel(value) {
+  return enumLabel({
+    "openai-chat-completions": "OpenAI Chat Completions",
+    "anthropic-messages": "Anthropic Messages"
+  }, value, "未知接口协议");
+}
+
 export function chapterVersionSourceLabel(value) {
   return enumLabel({ manual: "人工保存", auto: "自动保存", "ai-suggestion": "AI 建议", restore: "历史恢复", import: "文件导入", create: "初始版本" }, value, "其他来源");
 }
