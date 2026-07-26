@@ -37,6 +37,7 @@ export function reviewItemTypeLabel(value) {
   return enumLabel({
     consistency: "一致性问题",
     "character-duplicate": "角色重复",
+    "character-name-variant": "疑似人物名错字",
     "timeline-conflict": "时间线冲突",
     "setting-conflict": "设定冲突",
     "relationship-conflict": "关系冲突",

@@ -316,6 +316,7 @@ export type VersionedEntityType = typeof versionedEntityTypes[number];
 
 type ReviewInput = {
   itemType: string;
+  dedupeKey?: string;
   severity?: string;
   title: string;
   description?: string;
@@ -4898,12 +4899,13 @@ export class Store {
     this.getWork(workId);
     const reviewId = id("review");
     const timestamp = now();
-    this.db.run(
-      `INSERT INTO review_items (id, work_id, item_type, severity, title, description, entity_refs_json, evidence_json,
-       suggestion, status, resolution_note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    const result = this.db.run(
+      `INSERT OR IGNORE INTO review_items (id, work_id, item_type, dedupe_key, severity, title, description, entity_refs_json, evidence_json,
+       suggestion, status, resolution_note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       reviewId,
       workId,
       input.itemType,
+      input.dedupeKey ?? "",
       input.severity ?? "medium",
       input.title,
       input.description ?? "",
@@ -4915,6 +4917,15 @@ export class Store {
       timestamp,
       timestamp
     );
+    if (result.changes === 0 && input.dedupeKey) {
+      const existing = this.db.get(
+        "SELECT * FROM review_items WHERE work_id = ? AND item_type = ? AND dedupe_key = ?",
+        workId,
+        input.itemType,
+        input.dedupeKey
+      );
+      if (existing) return this.mapReviewItem(existing);
+    }
     return this.getReviewItem(reviewId);
   }
 
@@ -6146,9 +6157,15 @@ export class Store {
       const targetSummary = analysisTarget.mode === "targeted-characters" && targetNames.length
         ? `重点分析 ${targetNames.join("、")} 与其他已建档人物之间的关系`
         : "分析范围内已建档人物之间的长期关系";
+      const sourceSelection = result.sourceSelection && typeof result.sourceSelection === "object" && !Array.isArray(result.sourceSelection)
+        ? result.sourceSelection as Record<string, unknown>
+        : null;
       summary = missingRelationshipIds.length > 0
         ? `${targetSummary}。任务结果记录 ${relationshipIds.length} 条关系，当前作品中保留 ${relationships.length} 条可展示关系，另有 ${missingRelationshipIds.length} 条已删除或合并。`
         : `${targetSummary}，共形成 ${relationships.length} 条可展示结果。`;
+      if (sourceSelection) {
+        summary += ` 来源筛选命中 ${Number(sourceSelection.exactSourceCount ?? 0)} 个精确来源，确认 ${Number(sourceSelection.confirmedSourceCount ?? 0)} 个疑似来源。`;
+      }
       const actionMetrics = [
         ["新建", result.createdCount],
         ["更新", result.updatedCount],
@@ -6159,7 +6176,14 @@ export class Store {
         metric("任务记录", relationshipIds.length || relationships.length),
         metric("当前可展示", relationships.length),
         metric("已删除或合并", missingRelationshipIds.length),
-        metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0)
+        metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0),
+        ...(sourceSelection ? [
+          metric("精确来源", Number(sourceSelection.exactSourceCount ?? 0)),
+          metric("模糊候选", Number(sourceSelection.fuzzyCandidateCount ?? 0)),
+          metric("确认来源", Number(sourceSelection.confirmedSourceCount ?? 0)),
+          metric("排除", Number(sourceSelection.rejectedSourceCount ?? 0)),
+          metric("不确定", Number(sourceSelection.uncertainSourceCount ?? 0))
+        ] : [])
       ];
       storageTargets.unshift({
         label: "人物关系",
@@ -6167,6 +6191,14 @@ export class Store {
         key: "relationships",
         count: relationshipIds.length || relationships.length,
         note: `任务记录 ${relationshipIds.length || relationships.length} 条关系，当前可读取 ${relationships.length} 条；关系候选需由作者确认。`
+      });
+      const variantReviewIds = sourceSelection && Array.isArray(sourceSelection.reviewIds) ? sourceSelection.reviewIds.map(String) : [];
+      if (variantReviewIds.length > 0) storageTargets.unshift({
+        label: "疑似人物名错字",
+        entity: "审核中心",
+        key: "reviews",
+        count: variantReviewIds.length,
+        note: "仅生成待处理审核项，不会修改正文或人物别名。"
       });
       sections = [
         { title: "分析出的关系", totalCount: relationships.length, items: relationships.slice(0, 100), emptyMessage: "没有形成可展示的人物关系。" },
