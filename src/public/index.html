@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260726-relationship-index-queue-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260726-background-task-center-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -88,6 +88,10 @@
             <button id="account-settings-button" type="button" role="menuitem">账户设置</button>
             <button id="logout-button" type="button" role="menuitem">退出登录</button>
           </div>
+          <button id="background-task-button" class="topbar-icon-button background-task-button hidden" type="button" aria-label="后台任务中心" title="后台任务中心" aria-haspopup="dialog" aria-controls="background-task-dialog">
+            <svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h16M4 12h16M4 16.5h10"/><circle cx="18" cy="16.5" r="2.5"/></svg>
+            <span id="background-task-count" class="background-task-count hidden" aria-hidden="true">0</span>
+          </button>
           <button id="top-search-button" class="topbar-icon-button" type="button" aria-label="全文检索" title="全文检索（Command/Ctrl+F）" disabled>
             <svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16.2 16.2 4.3 4.3"/></svg>
           </button>
@@ -313,6 +317,21 @@
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
     <input id="avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
+
+    <dialog id="background-task-dialog" class="dialog wide-dialog background-task-dialog" aria-labelledby="background-task-dialog-title">
+      <form method="dialog">
+        <div class="dialog-header">
+          <div><span class="eyebrow">全局进度</span><h2 id="background-task-dialog-title">后台任务中心</h2><p id="background-task-dialog-meta" class="dialog-header-meta">当前作品的分析任务与索引队列</p></div>
+          <button class="dialog-close" value="cancel" aria-label="关闭后台任务中心" type="submit">×</button>
+        </div>
+        <div id="background-task-content" class="background-task-content" role="region" aria-label="后台任务状态"></div>
+        <div class="dialog-actions background-task-actions">
+          <button id="background-task-open-analysis" class="ghost-button" type="button">前往 AI 分析中心</button>
+          <button id="background-task-refresh" class="primary-button" type="button">刷新状态</button>
+          <button class="ghost-button" value="cancel" type="submit">关闭</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="onboarding-dialog" class="onboarding-dialog" aria-labelledby="onboarding-dialog-title" aria-describedby="onboarding-dialog-description" data-testid="first-use-onboarding">
       <div id="onboarding-spotlight" class="onboarding-spotlight" aria-hidden="true"></div>
@@ -751,6 +770,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260726-relationship-index-queue-v1"></script>
+    <script type="module" src="/app.js?v=20260726-background-task-center-v1"></script>
   </body>
 </html>
