@@ -233,6 +233,7 @@ type AiCallTraceRound = {
 
 type RelationshipSettingSource = {
   id: string;
+  sourceId: string;
   title: string;
   sourceType: string;
   content: string;
@@ -279,6 +280,7 @@ type RelationshipSourceSelection = {
   generation: number;
   chapters: Record<string, unknown>[];
   settings: RelationshipSettingSource[];
+  matchKinds: Record<string, "exact" | "fuzzy">;
   variantDecisions: RelationshipVariantDecision[];
   verificationCallIds: string[];
   summary: {
@@ -4713,10 +4715,13 @@ export class AiManager {
     ).map((row, index) => [String(row.id), index]));
     chapters.sort((left, right) => (chapterOrder.get(String(left.id)) ?? Number.MAX_SAFE_INTEGER) - (chapterOrder.get(String(right.id)) ?? Number.MAX_SAFE_INTEGER));
     settings.sort((left, right) => `${left.sourceType}:${left.id}`.localeCompare(`${right.sourceType}:${right.id}`, "zh-CN"));
+    const matchKinds: Record<string, "exact" | "fuzzy"> = {};
+    for (const key of selectedKeys) matchKinds[key] = local.exactKeys.includes(key) ? "exact" : "fuzzy";
     return {
       generation,
       chapters,
       settings,
+      matchKinds,
       variantDecisions: verified.decisions,
       verificationCallIds: verified.callIds,
       summary: {
@@ -4742,6 +4747,7 @@ export class AiManager {
     const serialize = (value: Record<string, unknown>): string => JSON.stringify(cleanStrings(value), null, 2);
     const source = (title: string, value: Record<string, unknown>, version: unknown): RelationshipSettingSource => ({
       id: sourceType === "setting" ? sourceId : `${sourceType}:${sourceId}`,
+      sourceId,
       title,
       sourceType,
       content: serialize(value),
@@ -4899,6 +4905,84 @@ export class AiManager {
     });
   }
 
+  private relationshipSourcesFromRefs(
+    workId: string,
+    scope: ContextScope,
+    characters: Record<string, unknown>[],
+    refs: Array<{ sourceType: string; sourceId: string }>
+  ): { chapters: Record<string, unknown>[]; settings: RelationshipSettingSource[] } {
+    const requestedKeys = new Set(refs.map((ref) => this.relationshipIndexedSourceKey(ref.sourceType, ref.sourceId)));
+    const chapters = scope.type === "settings"
+      ? []
+      : this.getScopeChapters(workId, scope).filter((chapter) =>
+        requestedKeys.has(this.relationshipIndexedSourceKey("chapter", String(chapter.id)))
+      );
+    const includeSettings = scope.type === "settings" || scope.includeAllSettings === true;
+    const settings = includeSettings
+      ? this.relationshipSettingSources(workId, characters).filter((source) =>
+        requestedKeys.has(this.relationshipIndexedSourceKey(source.sourceType, source.sourceId))
+      )
+      : [];
+    return { chapters, settings };
+  }
+
+  async previewRelationshipSources(workId: string, scope: ContextScope, modelId?: string): Promise<Record<string, unknown>> {
+    const characters = this.store.listCharacters(workId);
+    if (characters.length < 2) throw new AppError(409, "CHARACTERS_REQUIRED", "人物关系分析至少需要两个角色档案");
+    const selectedCharacterIds = new Set(scope.characterIds ?? []);
+    if (selectedCharacterIds.size === 0) {
+      throw new AppError(400, "RELATIONSHIP_PREVIEW_CHARACTERS_REQUIRED", "请先选择需要定向分析的角色");
+    }
+    for (const characterId of selectedCharacterIds) {
+      if (!characters.some((character) => String(character.id) === characterId)) {
+        throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
+      }
+    }
+    const preFilterRelationshipSources = scope.preFilterRelationshipSources !== false;
+    const sourceSelection = preFilterRelationshipSources
+      ? await this.selectRelationshipSources(workId, scope, characters, selectedCharacterIds, modelId)
+      : null;
+    const chapters = sourceSelection?.chapters
+      ?? (scope.type === "settings" ? [] : this.getScopeChapters(workId, scope));
+    const settings = sourceSelection?.settings
+      ?? (scope.type === "settings" || scope.includeAllSettings === true
+        ? this.relationshipSettingSources(workId, characters)
+        : []);
+    const sources = [
+      ...chapters.map((chapter) => ({
+        sourceType: "chapter",
+        sourceId: String(chapter.id),
+        title: String(chapter.title),
+        version: String(chapter.versionNo ?? ""),
+        characterCount: String(chapter.content ?? "").length,
+        matchType: sourceSelection?.matchKinds[this.relationshipIndexedSourceKey("chapter", String(chapter.id))] ?? "scope"
+      })),
+      ...settings.map((setting) => ({
+        sourceType: setting.sourceType,
+        sourceId: setting.sourceId,
+        title: setting.title,
+        version: setting.version,
+        characterCount: setting.content.length,
+        matchType: sourceSelection?.matchKinds[this.relationshipIndexedSourceKey(setting.sourceType, setting.sourceId)] ?? "scope"
+      }))
+    ];
+    if (sources.length > 5_000) {
+      throw new AppError(409, "RELATIONSHIP_SOURCE_PREVIEW_TOO_LARGE", "预检来源超过 5000 条，请缩小分析范围");
+    }
+    return {
+      preFilterRelationshipSources,
+      chapterCount: chapters.length,
+      settingCount: settings.length,
+      sourceCount: sources.length,
+      totalCharacters: sources.reduce((total, source) => total + source.characterCount, 0),
+      estimatedBatchCount: this.buildChapterChunks(chapters, 12_000).length + this.buildSettingChunks(settings, 12_000).length,
+      sources,
+      indexGeneration: sourceSelection?.generation ?? null,
+      selectionSummary: sourceSelection?.summary ?? null,
+      verificationCallCount: sourceSelection?.verificationCallIds.length ?? 0
+    };
+  }
+
   private async runRelationshipAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const characters = this.store.listCharacters(workId);
     if (characters.length < 2) throw new AppError(409, "CHARACTERS_REQUIRED", "人物关系分析至少需要两个角色档案");
@@ -4914,15 +4998,18 @@ export class AiManager {
       .filter((character) => selectedCharacterIds.has(String(character.id)))
       .map((character) => `${String(character.id)} | ${String(character.name)}`)
       .join("\n");
-    const sourceSelection = preFilterRelationshipSources
+    const previewedSources = Array.isArray(scope.relationshipSourceRefs)
+      ? this.relationshipSourcesFromRefs(workId, scope, characters, scope.relationshipSourceRefs)
+      : null;
+    const sourceSelection = !previewedSources && preFilterRelationshipSources
       ? await this.selectRelationshipSources(workId, scope, characters, selectedCharacterIds, modelId, taskId)
       : null;
     const scopedChapters = preFilterRelationshipSources || settingsOnly ? [] : this.getScopeChapters(workId, scope);
-    const chapters = sourceSelection?.chapters ?? scopedChapters;
+    const chapters = previewedSources?.chapters ?? sourceSelection?.chapters ?? scopedChapters;
     const availableSettings = !preFilterRelationshipSources && (settingsOnly || scope.includeAllSettings === true)
       ? this.relationshipSettingSources(workId, characters)
       : [];
-    const settings = sourceSelection?.settings ?? availableSettings;
+    const settings = previewedSources?.settings ?? sourceSelection?.settings ?? availableSettings;
     if (!targeted && settingsOnly && availableSettings.length === 0) throw new AppError(409, "SETTINGS_REQUIRED", "人物关系分析范围内没有设定数据");
     if (!targeted && !settingsOnly && scopedChapters.length === 0 && availableSettings.length === 0) {
       throw new AppError(409, "RELATIONSHIP_SOURCES_REQUIRED", "人物关系分析范围内没有章节或设定数据");
@@ -4949,6 +5036,7 @@ export class AiManager {
         aggregationBatchCount: 0,
         replacedRelationshipCount: 0,
         preFilterRelationshipSources,
+        sourcePreviewApplied: Boolean(previewedSources),
         sourceSelection: sourceSelection?.summary,
         callIds: sourceSelection?.verificationCallIds ?? []
       };
@@ -5678,6 +5766,7 @@ export class AiManager {
       aggregationBatchCount,
       replacedRelationshipCount,
       preFilterRelationshipSources,
+      sourcePreviewApplied: Boolean(previewedSources),
       ...(sourceSelection ? { sourceSelection: sourceSelection.summary } : {}),
       callIds
     };

@@ -409,6 +409,10 @@ const contextSchema = z.object({
 });
 
 const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
+const relationshipSourceRefSchema = z.object({
+  sourceType: z.string().trim().min(1).max(50).regex(/^[a-z][a-z-]*$/u),
+  sourceId: identifier
+}).strict();
 const relationshipAnalysisScopeSchema = z.object({
   type: z.enum(["chapter", "book", "settings"]),
   chapterId: identifier.optional(),
@@ -416,6 +420,7 @@ const relationshipAnalysisScopeSchema = z.object({
   additionalPrompt: z.string().trim().max(10_000).optional(),
   characterIds: z.array(identifier).max(20).optional(),
   preFilterRelationshipSources: z.boolean().optional(),
+  relationshipSourceRefs: z.array(relationshipSourceRefSchema).max(5_000).optional(),
   replaceExistingRelationships: z.boolean().optional()
 }).strict().superRefine((scope, context) => {
   if (scope.type === "chapter" && !scope.chapterId) {
@@ -433,6 +438,15 @@ const relationshipAnalysisScopeSchema = z.object({
   if (scope.preFilterRelationshipSources !== undefined && !scope.characterIds?.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["preFilterRelationshipSources"], message: "来源前置过滤仅支持定向人物关系分析" });
   }
+  if (scope.relationshipSourceRefs !== undefined && !scope.characterIds?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["relationshipSourceRefs"], message: "预检来源仅支持定向人物关系分析" });
+  }
+  if (scope.relationshipSourceRefs) {
+    const keys = scope.relationshipSourceRefs.map((ref) => `${ref.sourceType}:${ref.sourceId}`);
+    if (new Set(keys).size !== keys.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["relationshipSourceRefs"], message: "预检来源不能重复" });
+    }
+  }
 });
 const analysisTaskSchema = z.union([
   z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional(), modelId: identifier.optional() }).strict(),
@@ -445,6 +459,9 @@ const analysisTaskSchema = z.union([
     }
     if (input.scope?.preFilterRelationshipSources !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "preFilterRelationshipSources"], message: "来源前置过滤仅支持人物关系分析" });
+    }
+    if (input.scope?.relationshipSourceRefs !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "relationshipSourceRefs"], message: "预检来源仅支持人物关系分析" });
     }
     if (input.scope?.characterIds !== undefined || input.scope?.replaceExistingRelationships !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "characterIds"], message: "被分析角色仅支持人物关系分析" });
@@ -1551,6 +1568,24 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       request.params.workId,
       parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 }
     ), (task) => redactTaskCharacterNames(task, permissions)));
+  });
+  app.post("/api/works/:workId/tasks/relationship-source-preview", async (request, response) => {
+    const input = parse(z.object({
+      scope: relationshipAnalysisScopeSchema,
+      modelId: identifier.optional()
+    }).strict(), request.body);
+    const permissions = requestPermissions(request, request.params.workId);
+    const deniedModules = relationshipAnalysisReadModules(input.scope).filter((module) => permissions[module] === "none");
+    if (deniedModules.length > 0) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取人物关系来源预检所需资料模块的权限", {
+        modules: deniedModules
+      });
+    }
+    data(response, await ai.previewRelationshipSources(
+      request.params.workId,
+      input.scope as ContextScope,
+      input.modelId
+    ));
   });
   app.post("/api/works/:workId/tasks", (request, response) => {
     const input = parse(analysisTaskSchema, request.body);

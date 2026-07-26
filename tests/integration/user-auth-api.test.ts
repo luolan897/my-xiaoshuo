@@ -1169,6 +1169,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({})
       .expect(403);
     expect(protectedAutoRun.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const protectedSourcePreview = await analysisOnly.agent.post(`/api/works/${workId}/tasks/relationship-source-preview`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({ scope: { type: "book", characterIds: [secretCharacter.body.data.id] } })
+      .expect(403);
+    expect(protectedSourcePreview.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     await expect(runtime.ai.runTask(String(collaboratorTargetedTask.body.data.id))).rejects.toMatchObject({
       code: "WORK_MODULE_READ_DENIED"
     });
