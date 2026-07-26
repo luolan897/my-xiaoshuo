@@ -153,6 +153,44 @@ describe("人物关系来源增量索引", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("编辑停顿两秒后自动消费增量索引队列", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "魔斯拉守护森林。");
+    const workId = String(seeded.work.id);
+    const setting = runtime.store.createSetting(workId, {
+      title: "泰坦记录",
+      category: "人物",
+      content: "魔斯拉负责守护生态。"
+    });
+    const ai = runtime.ai as unknown as { ensureRelationshipSearchIndex(workId: string): Promise<number> };
+    await ai.ensureRelationshipSearchIndex(workId);
+    const before = Number(runtime.database.get(
+      "SELECT generation FROM relationship_source_index_state WHERE work_id = ?",
+      workId
+    )?.generation ?? 0);
+
+    runtime.store.updateSetting(String(setting.id), { content: "拉顿负责守护火山。" });
+    expect(runtime.ai.getRelationshipSearchIndexStatus(workId)).toMatchObject({
+      status: "queued",
+      generation: before,
+      queuedSourceCount: 1
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    await ai.ensureRelationshipSearchIndex(workId);
+    expect(runtime.ai.getRelationshipSearchIndexStatus(workId)).toMatchObject({
+      status: "ready",
+      generation: before + 1,
+      queuedSourceCount: 0
+    });
+    expect(runtime.database.all(
+      `SELECT source.source_id FROM relationship_source_pinyin_fts
+       JOIN relationship_source_search source ON source.id = relationship_source_pinyin_fts.rowid
+       WHERE relationship_source_pinyin_fts MATCH ?`,
+      ftsPhrase(relationshipPinyinTokens("拉顿"))
+    )).toContainEqual({ source_id: setting.id });
+  });
+
   it("父种族更新会重建后代种族和成员的人物关系索引", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "无关正文。");
