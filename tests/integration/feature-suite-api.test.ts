@@ -1303,6 +1303,31 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(repeatedTaskPrompts.every((prompt) => !prompt.includes("审核项：疑似人物名错字"))).toBe(true);
   });
 
+  it("疑似写法确认结果不完整时不写入关系和审核项", async () => {
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "[]" } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "摩斯拉在旧港追踪拉顿。"
+    }).expect(200);
+    const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [target.body.data.id] }
+    }).expect(201);
+
+    const failed = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(502);
+    expect(failed.body.error.code).toBe("RELATIONSHIP_VARIANT_VERIFICATION_FAILED");
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toEqual([]);
+    const reviews = await request(runtime.app).get(`/api/works/${workId}/reviews`).expect(200);
+    expect(reviews.body.data.filter((item: { itemType: string }) => item.itemType === "character-name-variant")).toEqual([]);
+  });
+
   it("两字人物疑似写法只召回同时命中身份锚点的来源", async () => {
     const userPrompts: string[] = [];
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
