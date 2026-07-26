@@ -5477,21 +5477,107 @@ export class Store {
     return this.getTask(taskId);
   }
 
+  private enrichRelationshipTaskResult(
+    workId: string,
+    taskType: string,
+    scope: Record<string, unknown>,
+    result: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (taskType !== "relationship-analysis") return result;
+    const relationshipIds = Array.isArray(result.relationshipIds)
+      ? result.relationshipIds.filter((value): value is string => typeof value === "string")
+      : [];
+    let relationshipResults = Array.isArray(result.relationshipResults) ? result.relationshipResults : null;
+    let missingRelationshipIds: string[] = [];
+    if (relationshipResults === null && relationshipIds.length > 0) {
+      const requestedIds = new Set(relationshipIds);
+      const rows = this.db.all(
+        `SELECT relationship.*, source.name AS from_character_name, target.name AS to_character_name
+         FROM relationships relationship
+         JOIN characters source ON source.id = relationship.from_character_id
+         JOIN characters target ON target.id = relationship.to_character_id
+         WHERE relationship.work_id = ?`,
+        workId
+      ).filter((row) => requestedIds.has(requiredString(row, "id")));
+      const foundIds = new Set(rows.map((row) => requiredString(row, "id")));
+      missingRelationshipIds = relationshipIds.filter((relationshipId) => !foundIds.has(relationshipId));
+      relationshipResults = rows.map((row) => {
+        const evidence = json<Array<Record<string, unknown>>>(requiredString(row, "evidence_json"), []);
+        return {
+          relationshipId: requiredString(row, "id"),
+          action: "created",
+          snapshotSource: "current-record",
+          fromCharacterId: requiredString(row, "from_character_id"),
+          fromCharacterName: requiredString(row, "from_character_name"),
+          toCharacterId: requiredString(row, "to_character_id"),
+          toCharacterName: requiredString(row, "to_character_name"),
+          category: requiredString(row, "category"),
+          subtype: requiredString(row, "subtype"),
+          keywords: json(requiredString(row, "keywords_json"), []),
+          directed: booleanValue(row, "directed"),
+          currentStatus: requiredString(row, "current_status"),
+          timeRange: json(requiredString(row, "time_range_json"), {}),
+          confidence: numberValue(row, "confidence"),
+          confirmationStatus: requiredString(row, "confirmation_status"),
+          evidenceCount: evidence.length,
+          evidence: evidence.slice(0, 3).map((item) => ({
+            chapterId: String(item.chapterId ?? ""),
+            chapterTitle: String(item.chapterTitle ?? ""),
+            quote: String(item.quote ?? ""),
+            supports: String(item.supports ?? "")
+          })),
+          evidenceTruncated: evidence.length > 3
+        };
+      });
+    }
+    const targetCharacters = Array.isArray(scope.targetCharacters)
+      ? scope.targetCharacters.filter((item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      : [];
+    return {
+      ...result,
+      ...(relationshipResults === null ? {} : { relationshipResults }),
+      ...(missingRelationshipIds.length > 0 ? { missingRelationshipIds } : {}),
+      analysisTarget: result.analysisTarget ?? {
+        mode: targetCharacters.length > 0 ? "targeted-characters" : "all-relationships",
+        scopeType: String(scope.type ?? "book"),
+        characterIds: targetCharacters.map((character) => String(character.id ?? "")).filter(Boolean),
+        characterNames: targetCharacters.map((character) => String(character.name ?? "")).filter(Boolean),
+        coveredChapterCount: Number(result.coveredChapterCount ?? 0),
+        includeAllSettings: scope.includeAllSettings === true
+      },
+      storageTarget: result.storageTarget ?? {
+        database: "当前作品 SQLite 数据库",
+        entity: "人物关系",
+        table: "relationships",
+        taskResultTable: "analysis_tasks",
+        workId
+      }
+    };
+  }
+
   private mapTask(row: Row): Record<string, unknown> {
     const workId = requiredString(row, "work_id");
+    const taskType = requiredString(row, "task_type");
     const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
     const characterNames = this.taskCharacterNames(workId, [scope]);
+    const taskResult = this.enrichRelationshipTaskResult(
+      workId,
+      taskType,
+      scope,
+      json<Record<string, unknown>>(requiredString(row, "result_json"), {})
+    );
     return {
       id: requiredString(row, "id"),
       workId,
-      taskType: requiredString(row, "task_type"),
+      taskType,
       scope,
       scopeSummary: this.taskScopeSummary(workId, scope, characterNames),
       scopeSummaryWithoutCharacterNames: this.taskScopeSummary(workId, scope, new Map(), false),
       scopeDetails: this.taskScopeDetails(workId, scope),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
-      result: json(requiredString(row, "result_json"), {}),
+      result: taskResult,
       failures: json(requiredString(row, "failure_json"), []),
       sourceVersions: json(requiredString(row, "source_versions_json"), {}),
       createdAt: requiredString(row, "created_at"),

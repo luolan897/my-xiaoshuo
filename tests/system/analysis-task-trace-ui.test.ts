@@ -34,7 +34,18 @@ describe("AI 分析全流程追踪界面", () => {
     expect(application).toContain("调用内容尚未加载");
     expect(application).toContain("全部消息合计最多传输");
     expect(application).toContain("options.trace");
+    expect(application).toContain("function renderRelationshipTaskResult(task)");
+    expect(application).toContain("<h4>本次分析</h4>");
+    expect(application).toContain("<h4>数据写入位置</h4>");
+    expect(application).toContain("分析出的关系（${relationships.length}）");
+    expect(application).toContain("relationship.fromCharacterName || relationship.fromCharacterId");
+    expect(application).toContain("关系内容</strong>");
+    expect(application).toContain("storageTarget.table || \"relationships\"");
+    expect(application).toContain("storageTarget.taskResultTable || \"analysis_tasks\"");
     expect(styles).toContain(".trace-dialog { width: min(1180px, 94vw);");
+    expect(styles).toContain(".task-result-readable {");
+    expect(styles).toContain(".task-result-relationship {");
+    expect(styles).toContain(".task-result-metrics {");
     expect(styles).toContain(".task-trace-metrics {");
     expect(styles).toContain(".task-trace-round {");
     expect(styles).toContain(".task-trace-load-state {");

@@ -1014,6 +1014,25 @@ describe("用户、作品权限与操作者追踪 API", () => {
       })
       .expect(201);
     expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER");
+    runtime.database.run(
+      "UPDATE analysis_tasks SET result_json = ? WHERE id = ?",
+      JSON.stringify({
+        relationshipResults: [{
+          relationshipId: "relationship_secret",
+          fromCharacterId: secretCharacter.body.data.id,
+          fromCharacterName: "TOP_SECRET_CHARACTER",
+          toCharacterId: "character_other",
+          toCharacterName: "TOP_SECRET_OTHER",
+          subtype: "盟友"
+        }],
+        analysisTarget: {
+          mode: "targeted-characters",
+          characterIds: [secretCharacter.body.data.id],
+          characterNames: ["TOP_SECRET_CHARACTER"]
+        }
+      }),
+      targetedTask.body.data.id
+    );
 
     const noContentPermissions = Object.fromEntries(Object.keys(basePermissions).map((module) => [module, "none"]));
     await owner.agent.patch(`/api/works/${workId}/members/${analysisOnly.user.userId}`)
@@ -1028,6 +1047,9 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const protectedTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}`).expect(200);
     expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人");
     expect(protectedTaskDetail.body.data.scope.targetCharacters).toBeUndefined();
+    expect(protectedTaskDetail.body.data.result.relationshipResults[0].fromCharacterName).toBeUndefined();
+    expect(protectedTaskDetail.body.data.result.relationshipResults[0].toCharacterName).toBeUndefined();
+    expect(protectedTaskDetail.body.data.result.analysisTarget.characterNames).toBeUndefined();
     expect(JSON.stringify(protectedTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
     const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)

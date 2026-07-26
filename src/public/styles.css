@@ -1308,6 +1308,34 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   font-size: 10px;
   white-space: pre-wrap;
 }
+.task-result-readable { display: grid; gap: 10px; margin-top: 7px !important; }
+.task-result-section { display: grid; gap: 7px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.task-result-section h4 { margin: 0 0 2px; color: var(--ink); font-size: 13px; }
+.task-result-section code { overflow-wrap: anywhere; }
+.task-result-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; margin-top: 3px !important; border: 1px solid var(--line); border-radius: 5px; background: var(--line); }
+.task-result-metrics span { display: flex; gap: 5px; align-items: baseline; padding: 8px 10px; background: var(--surface-soft); color: var(--muted); }
+.task-result-metrics strong { color: var(--accent-dark); font-family: var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 15px; }
+.task-result-relationship { display: grid; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.task-result-relationship + .task-result-relationship { margin-top: 3px; }
+.task-result-relationship > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.task-result-relationship > header > div { display: grid; gap: 2px; min-width: 0; }
+.task-result-relationship > header strong { overflow-wrap: anywhere; font-size: 13px; }
+.task-result-relationship > header small { color: var(--muted); }
+.task-result-action { flex: none; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--line) 76%, var(--accent)); border-radius: 999px; color: var(--muted); font-size: 9px; }
+.task-result-action.is-created, .task-result-action.is-updated { border-color: color-mix(in srgb, var(--accent) 46%, var(--line)); color: var(--accent-dark); }
+.task-result-relationship-content { display: grid; gap: 3px; }
+.task-result-relationship-content p strong { display: inline-block; min-width: 58px; color: var(--muted); font-size: 10px; font-weight: 600; }
+.task-result-relationship details, .task-result-technical { border-top: 1px solid var(--line); padding-top: 7px; }
+.task-result-relationship summary, .task-result-technical > summary { width: fit-content; cursor: pointer; color: var(--accent-dark); font-size: 10px; }
+.task-result-evidence { display: grid; gap: 7px; margin-top: 8px !important; padding-left: 17px !important; }
+.task-result-evidence li { padding-left: 2px; }
+.task-result-evidence li strong, .task-result-evidence li q, .task-result-evidence li small { display: block; }
+.task-result-evidence li strong { font-size: 10px; }
+.task-result-evidence li q { margin-top: 2px; color: var(--ink); }
+.task-result-evidence li small, .task-result-muted { color: var(--muted); }
+.task-result-empty, .task-result-warning { padding: 9px; border-radius: 5px; background: var(--surface-soft); color: var(--muted); }
+.task-result-warning { border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); color: var(--ink); }
+.task-result-technical { margin-top: 2px; }
 .task-trace-section { display: grid; gap: 16px; min-width: 0; margin-top: 6px; }
 .task-trace-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding-top: 8px; }
 .task-trace-heading h3 { margin: 3px 0 0; font-size: 19px; font-weight: 600; }
@@ -2587,6 +2615,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list { padding-inline: 16px; }
   .task-detail-overview { grid-template-columns: minmax(0, 1fr); padding: 12px; }
   .task-detail-overview > * { grid-column: 1 !important; }
+  .task-result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-result-relationship > header { align-items: stretch; flex-direction: column; }
+  .task-result-action { align-self: flex-start; }
   .task-trace-heading { align-items: start; flex-direction: column; gap: 5px; }
   .task-trace-heading p { text-align: left; }
   .task-trace-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

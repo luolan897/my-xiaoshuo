@@ -527,6 +527,28 @@ function redactTaskCharacterNames(record: Record<string, unknown>, permissions: 
     const { targetCharacters: _targetCharacters, ...redactedScope } = scope;
     result.scope = redactedScope;
   }
+  const taskResult = recordValue(result.result);
+  if (taskResult) {
+    const redactedTaskResult = { ...taskResult };
+    if (Array.isArray(taskResult.relationshipResults)) {
+      redactedTaskResult.relationshipResults = taskResult.relationshipResults.map((value) => {
+        const relationship = recordValue(value);
+        if (!relationship) return value;
+        const {
+          fromCharacterName: _fromCharacterName,
+          toCharacterName: _toCharacterName,
+          ...redactedRelationship
+        } = relationship;
+        return redactedRelationship;
+      });
+    }
+    const analysisTarget = recordValue(taskResult.analysisTarget);
+    if (analysisTarget) {
+      const { characterNames: _characterNames, ...redactedAnalysisTarget } = analysisTarget;
+      redactedTaskResult.analysisTarget = redactedAnalysisTarget;
+    }
+    result.result = redactedTaskResult;
+  }
   return result;
 }
 
