@@ -351,6 +351,7 @@ let workScopedUiGeneration = 0;
 let importHistoryRecords = [];
 let importHistoryNextPage = null;
 let importHistoryRequestId = 0;
+let chapterInsightRequestId = 0;
 
 const shelfOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
@@ -2111,6 +2112,16 @@ function raiseToastRegion() {
   region.showPopover();
 }
 
+function dismissChapterInsightToast() {
+  chapterInsightRequestId += 1;
+  const region = $("#toast-region");
+  region.querySelector(".chapter-insight-toast")?.remove();
+  $("#insight-button").setAttribute("aria-expanded", "false");
+  if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+    region.hidePopover();
+  }
+}
+
 function toast(message, type = "info") {
   const region = $("#toast-region");
   const element = document.createElement("div");
@@ -2479,6 +2490,7 @@ async function initializePage() {
 
 function showShelf() {
   stopBackgroundTaskCenter();
+  dismissChapterInsightToast();
   state.dirty = false;
   settingsReturnContext = null;
   updateDocumentTitle();
@@ -2751,6 +2763,7 @@ async function showSettingsHub() {
     settingsReturnContext = captureSettingsReturnContext();
     state.dirty = false;
   }
+  dismissChapterInsightToast();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -2793,6 +2806,7 @@ async function returnFromSettings() {
 async function showPlatformAi() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
+  dismissChapterInsightToast();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -2997,7 +3011,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   $("#chapter-content").value = normalizedContent;
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
-  $("#chapter-insight").classList.add("hidden");
+  dismissChapterInsightToast();
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
   else if (chapterEditorReadOnly) setSaveState("阅读模式");
@@ -3032,6 +3046,7 @@ function tidyChapterBlankLines() {
 }
 
 function showWelcome(hasWork = false) {
+  dismissChapterInsightToast();
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#welcome-view").classList.remove("hidden");
@@ -3082,6 +3097,7 @@ async function showModule(module) {
     }
     return;
   }
+  dismissChapterInsightToast();
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.remove("hidden");
@@ -7054,8 +7070,12 @@ async function openTaskDialog() {
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     await refreshBackgroundTaskCenter({ announce: false });
     taskListPage = 1;
-    toast("分析任务已创建，已进入任务队列");
-    void renderTasks(1).catch((error) => toast(`任务已创建，但列表刷新失败：${error.message}`, "error"));
+    try {
+      await renderTasks(1);
+      toast("分析任务已创建，已进入任务队列");
+    } catch (error) {
+      toast(`任务已创建，但列表刷新失败：${error.message}`, "error");
+    }
   }, "AI 分析", {
     submitLabel: "创建任务",
     pendingLabel: "创建中…",
@@ -7693,17 +7713,72 @@ async function openImportHistory() {
 
 async function showChapterInsight() {
   if (!state.chapter) return;
-  const panel = $("#chapter-insight");
-  const insights = await api(`/api/chapters/${state.chapter.id}/insights`);
+  const chapterId = state.chapter.id;
+  dismissChapterInsightToast();
+  const requestId = ++chapterInsightRequestId;
+  const insights = await api(`/api/chapters/${chapterId}/insights`);
+  if (requestId !== chapterInsightRequestId || state.chapter?.id !== chapterId || $("#editor-view").classList.contains("hidden")) return;
   const insight = insights.find((item) => item.chapterVersion === state.chapter.versionNo) ?? insights[0];
-  panel.classList.remove("hidden");
-  if (!insight) {
-    panel.innerHTML = "<strong>尚无章节概览</strong>请在“AI 分析”中运行章节理解，完成后可在此查看结果。";
-    return;
+  const region = $("#toast-region");
+  const element = document.createElement("section");
+  element.id = "chapter-insight-toast";
+  element.className = "toast chapter-insight-toast";
+  element.setAttribute("role", "region");
+  element.setAttribute("aria-label", "章节概览");
+  const header = document.createElement("header");
+  header.className = "chapter-insight-toast-header";
+  const heading = document.createElement("div");
+  heading.className = "chapter-insight-toast-heading";
+  const title = document.createElement("strong");
+  title.textContent = "章节概览";
+  heading.append(title);
+  if (insight && insight.chapterVersion !== state.chapter.versionNo) {
+    const stale = document.createElement("span");
+    stale.textContent = `基于旧版本 v${insight.chapterVersion}`;
+    heading.append(stale);
   }
-  const eventNames = insight.events.map((event) => typeof event === "string" ? event : (event.name ?? event.description ?? "未命名事件"));
-  const stale = insight.chapterVersion !== state.chapter.versionNo ? `；基于旧版本 v${insight.chapterVersion}` : "";
-  panel.innerHTML = `<strong>章节概览${esc(stale)}</strong>${esc(insight.summary || "暂无梗概")}${eventNames.length ? `<br><strong>事件</strong>${esc(eventNames.join("；"))}` : ""}${insight.uncertainties.length ? `<br><strong>待确认</strong>${esc(insight.uncertainties.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("；"))}` : ""}`;
+  const close = document.createElement("button");
+  close.className = "ghost-button chapter-insight-toast-close";
+  close.type = "button";
+  close.textContent = "关闭";
+  close.setAttribute("aria-label", "关闭章节概览");
+  header.append(heading, close);
+  const body = document.createElement("div");
+  body.className = "chapter-insight-toast-body";
+  if (!insight) {
+    const empty = document.createElement("p");
+    empty.className = "chapter-insight-toast-empty";
+    empty.textContent = "尚无章节概览。请在“AI 分析”中运行章节理解，完成后可在此查看结果。";
+    body.append(empty);
+  } else {
+    const summary = document.createElement("p");
+    summary.textContent = insight.summary || "暂无梗概";
+    body.append(summary);
+    const eventNames = insight.events.map((event) => typeof event === "string" ? event : (event.name ?? event.description ?? "未命名事件"));
+    const uncertainties = insight.uncertainties.map((item) => typeof item === "string" ? item : JSON.stringify(item));
+    [["事件", eventNames], ["待确认", uncertainties]].forEach(([label, items]) => {
+      if (!items.length) return;
+      const detail = document.createElement("div");
+      detail.className = "chapter-insight-toast-detail";
+      const detailLabel = document.createElement("strong");
+      detailLabel.textContent = label;
+      const detailContent = document.createElement("p");
+      detailContent.textContent = items.join("；");
+      detail.append(detailLabel, detailContent);
+      body.append(detail);
+    });
+  }
+  element.append(header, body);
+  close.addEventListener("click", dismissChapterInsightToast, { once: true });
+  element.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    dismissChapterInsightToast();
+    $("#insight-button").focus();
+  });
+  region.append(element);
+  $("#insight-button").setAttribute("aria-expanded", "true");
+  raiseToastRegion();
 }
 
 $("#home-button").addEventListener("click", async () => {
