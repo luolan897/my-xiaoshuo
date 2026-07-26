@@ -7077,8 +7077,12 @@ async function openTaskDialog() {
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     await refreshBackgroundTaskCenter({ announce: false });
     taskListPage = 1;
-    toast("分析任务已创建，已进入任务队列");
-    void renderTasks(1).catch((error) => toast(`任务已创建，但列表刷新失败：${error.message}`, "error"));
+    try {
+      await renderTasks(1);
+      toast("分析任务已创建，已进入任务队列");
+    } catch (error) {
+      toast(`任务已创建，但列表刷新失败：${error.message}`, "error");
+    }
   }, "AI 分析", {
     submitLabel: "创建任务",
     pendingLabel: "创建中…",
