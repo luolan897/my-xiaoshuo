@@ -1096,6 +1096,91 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     )).toBe(true);
   });
 
+  it("未勾选覆盖时保留已有关系且只追加不存在的关系", async () => {
+    let chapterId = "";
+    let linId = "";
+    let shenId = "";
+    let qiaoId = "";
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+      fromCharacterId: linId,
+      toCharacterId: shenId,
+      category: "social",
+      subtype: "朋友",
+      keywords: ["模型新关键词"],
+      directed: false,
+      currentStatus: "模型新状态",
+      confidence: 0.98,
+      timeRange: {},
+      evidence: [{ chapterId, quote: "林舟和沈星一直是朋友", supports: "明确朋友关系" }]
+    }, {
+      fromCharacterId: linId,
+      toCharacterId: qiaoId,
+      category: "social",
+      subtype: "盟友",
+      keywords: ["正式结盟", "共同守望"],
+      directed: false,
+      currentStatus: "active",
+      confidence: 0.92,
+      timeRange: {},
+      evidence: [{ chapterId, quote: "林舟与乔安正式结盟", supports: "明确联盟关系" }]
+    }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    chapterId = String(chapters[0].id);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
+      content: "林舟和沈星一直是朋友。林舟与乔安正式结盟。"
+    }).expect(200);
+    const lin = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const shen = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const qiao = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "乔安" }).expect(201);
+    const ye = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "叶宁" }).expect(201);
+    linId = lin.body.data.id as string;
+    shenId = shen.body.data.id as string;
+    qiaoId = qiao.body.data.id as string;
+    const existingFriend = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: linId,
+      toCharacterId: shenId,
+      category: "social",
+      subtype: "朋友",
+      keywords: ["作者原关键词"],
+      directed: false,
+      currentStatus: "作者原状态",
+      confidence: 0.7,
+      confirmationStatus: "pending"
+    }).expect(201);
+    const unrelatedPending = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: qiaoId,
+      toCharacterId: ye.body.data.id,
+      category: "conflict",
+      subtype: "竞争者",
+      directed: false,
+      confirmationStatus: "pending"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book" }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result.candidateCount).toBe(1);
+    expect(result.body.data.result.skipped.some((item: { reason: string }) => item.reason.includes("追加模式不更新"))).toBe(true);
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(3);
+    expect(relationships.body.data.find((item: { id: string }) => item.id === existingFriend.body.data.id)).toMatchObject({
+      keywords: ["作者原关键词"],
+      currentStatus: "作者原状态",
+      confidence: 0.7,
+      evidence: [],
+      versionNo: 1
+    });
+    expect(relationships.body.data.some((item: { id: string }) => item.id === unrelatedPending.body.data.id)).toBe(true);
+    expect(relationships.body.data.some((item: { fromCharacterId: string; toCharacterId: string; subtype: string }) =>
+      new Set([item.fromCharacterId, item.toCharacterId]).has(linId)
+      && new Set([item.fromCharacterId, item.toCharacterId]).has(qiaoId)
+      && item.subtype === "盟友"
+    )).toBe(true);
+  });
+
   it("覆盖定向角色关系并在归纳失败时保留全部旧关系", async () => {
     let linId = "";
     let shenId = "";
@@ -1495,7 +1580,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data.filter((item: { subtype: string }) => item.subtype === "朋友")).toHaveLength(2);
   });
 
-  it("新强关系原地升级已有待确认弱关系", async () => {
+  it("追加模式把新强关系新增为独立边并保留已有弱关系", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
       fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
@@ -1516,9 +1601,17 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "chapter", chapterId } }).expect(201);
     await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
-    expect(relationships.body.data).toHaveLength(1);
-    expect(relationships.body.data[0]).toMatchObject({ id: weaker.body.data.id, subtype: "盟友", confidence: 0.95 });
-    expect(relationships.body.data[0].keywords).toEqual(["旧有信任", "正式结盟", "共同守望"]);
+    expect(relationships.body.data).toHaveLength(2);
+    expect(relationships.body.data.find((item: { id: string }) => item.id === weaker.body.data.id)).toMatchObject({
+      subtype: "朋友",
+      confidence: 0.5,
+      keywords: ["旧有信任"],
+      versionNo: 1
+    });
+    expect(relationships.body.data.find((item: { subtype: string }) => item.subtype === "盟友")).toMatchObject({
+      confidence: 0.95,
+      keywords: ["正式结盟", "共同守望"]
+    });
   });
 
   it("同义社会关系不能绕过长期证据且明示结盟可通过", async () => {
@@ -1545,7 +1638,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0]).toMatchObject({ subtype: "盟友" });
   });
 
-  it("目标强边已存在时先合并强边再清理弱边", async () => {
+  it("追加模式遇到已有强边时不合并证据也不清理弱边", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
       fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
@@ -1570,11 +1663,19 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "chapter", chapterId } }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data).toMatchObject({ status: "review" });
+    expect(result.body.data.result.candidateCount).toBe(0);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
-    expect(relationships.body.data).toHaveLength(1);
-    expect(relationships.body.data[0]).toMatchObject({ id: stronger.body.data.id, subtype: "盟友", confidence: 0.97 });
-    expect(relationships.body.data[0].evidence).toHaveLength(1);
-    expect(relationships.body.data.some((item: { id: string }) => item.id === weaker.body.data.id)).toBe(false);
+    expect(relationships.body.data).toHaveLength(2);
+    expect(relationships.body.data.find((item: { id: string }) => item.id === stronger.body.data.id)).toMatchObject({
+      subtype: "盟友",
+      confidence: 0.5,
+      evidence: [],
+      versionNo: 1
+    });
+    expect(relationships.body.data.find((item: { id: string }) => item.id === weaker.body.data.id)).toMatchObject({
+      subtype: "朋友",
+      versionNo: 1
+    });
   });
 
   it("拒绝礼称君臣和救援血亲，并把单场宿敌降级为战时敌对", async () => {

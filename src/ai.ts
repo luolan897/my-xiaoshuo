@@ -4084,12 +4084,6 @@ export class AiManager {
     const relationshipIds: string[] = [];
     let replacedRelationshipCount = 0;
     this.store.db.transaction(() => {
-      if (!targeted && scope.type === "book") {
-        this.store.db.run(
-          "DELETE FROM relationships WHERE work_id = ? AND confirmation_status = 'pending' AND locked = 0",
-          workId
-        );
-      }
       if (targeted && scope.replaceExistingRelationships === true) {
         const relationshipsToReplace = this.store.listRelationships(workId).filter((relationship) =>
           selectedCharacterIds.has(String(relationship.fromCharacterId)) || selectedCharacterIds.has(String(relationship.toCharacterId))
@@ -4098,6 +4092,7 @@ export class AiManager {
         replacedRelationshipCount = relationshipsToReplace.length;
       }
       const existing = this.store.listRelationships(workId).filter((relationship) => relationship.confirmationStatus !== "rejected");
+      const appendOnly = scope.replaceExistingRelationships !== true;
       const unorderedPairKey = (fromCharacterId: unknown, toCharacterId: unknown): string => {
         const pair = [String(fromCharacterId), String(toCharacterId)].sort((left, right) => left.localeCompare(right));
         return `${pair[0]}|${pair[1]}`;
@@ -4204,6 +4199,10 @@ export class AiManager {
         });
         if (duplicateIndex >= 0) {
           const duplicate = existing[duplicateIndex] as Record<string, unknown>;
+          if (appendOnly) {
+            skipped.push({ index: -1, reason: `已有相同的“${candidate.subtype}”关系，追加模式不更新` });
+            continue;
+          }
           if (duplicate.confirmationStatus === "pending" && duplicate.locked !== true) {
             const mergedEvidence = [...(duplicate.evidence as Array<Record<string, unknown>> ?? [])];
             const seenEvidence = new Set(mergedEvidence.map(relationshipEvidenceKey));
@@ -4248,7 +4247,7 @@ export class AiManager {
             && peerSocialStrength(relationship) > 0
             && peerSocialStrength(relationship) < candidatePeerStrength)
           : -1;
-        if (weakerExistingPeerIndex >= 0) {
+        if (weakerExistingPeerIndex >= 0 && !appendOnly) {
           const weaker = existing[weakerExistingPeerIndex] as Record<string, unknown>;
           const mergedEvidence = [...(weaker.evidence as Array<Record<string, unknown>> ?? [])];
           const seenEvidence = new Set(mergedEvidence.map(relationshipEvidenceKey));
