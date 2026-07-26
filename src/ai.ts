@@ -3898,13 +3898,20 @@ export class AiManager {
   getRelationshipSearchIndexStatus(workId: string): Record<string, unknown> {
     this.store.getWork(workId);
     const row = this.store.db.get(
-      "SELECT status, generation, updated_at FROM relationship_source_index_state WHERE work_id = ?",
+      "SELECT status, generation, error, updated_at FROM relationship_source_index_state WHERE work_id = ?",
       workId
     );
-    const queuedSourceCount = Number(this.store.db.get(
-      "SELECT COUNT(*) AS count FROM relationship_source_index_queue WHERE work_id = ?",
+    const queuedSources = this.store.db.all(
+      `SELECT source_type, COUNT(*) AS count, MIN(queued_at) AS oldest_queued_at
+       FROM relationship_source_index_queue WHERE work_id = ?
+       GROUP BY source_type ORDER BY source_type`,
       workId
-    )?.count ?? 0);
+    ).map((item) => ({
+      sourceType: String(item.source_type),
+      count: Number(item.count ?? 0),
+      oldestQueuedAt: String(item.oldest_queued_at ?? "")
+    }));
+    const queuedSourceCount = queuedSources.reduce((total, item) => total + item.count, 0);
     const storedStatus = String(row?.status ?? "");
     const status = storedStatus === "building"
       ? "building"
@@ -3916,6 +3923,7 @@ export class AiManager {
       status,
       generation: Number(row?.generation ?? 0),
       queuedSourceCount,
+      queuedSources,
       indexedSourceCount: Number(this.store.db.get(
         "SELECT COUNT(*) AS count FROM relationship_source_search WHERE work_id = ?",
         workId
@@ -3926,8 +3934,17 @@ export class AiManager {
          WHERE paragraph.work_id = ?`,
         workId
       )?.count ?? 0),
+      error: String(row?.error ?? ""),
       updatedAt: String(row?.updated_at ?? "")
     };
+  }
+
+  syncRelationshipSearchIndex(workId: string): Record<string, unknown> {
+    const status = this.getRelationshipSearchIndexStatus(workId);
+    if (Number(status.queuedSourceCount ?? 0) > 0 || status.status === "building") {
+      void this.ensureRelationshipSearchIndex(workId).catch(() => undefined);
+    }
+    return status;
   }
 
   rebuildRelationshipSearchIndex(workId: string): Record<string, unknown> {

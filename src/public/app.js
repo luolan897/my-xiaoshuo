@@ -127,6 +127,7 @@ let collaborationAutoSaveDisabled = false;
 
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
+let relationshipSearchIndexRefreshTimer = null;
 const taskProgressRefreshInterval = 2_500;
 const taskStatusSnapshots = new Map();
 
@@ -4518,6 +4519,46 @@ function renderTaskDefaults(models, providers, taskDefaults) {
   </section>` : emptyModule("尚未配置平台模型", "请先在平台 AI 管理中添加并测试供应商模型。");
 }
 
+const relationshipIndexStatusLabels = Object.freeze({
+  queued: "等待同步",
+  building: "正在同步",
+  ready: "已就绪",
+  failed: "同步失败"
+});
+
+const relationshipIndexSourceLabels = Object.freeze({
+  work: "作品资料",
+  chapter: "正文",
+  setting: "设定",
+  character: "人物",
+  race: "种族",
+  organization: "组织",
+  "timeline-track": "时间轴",
+  "timeline-event": "时间线事件",
+  relationship: "人物关系",
+  "chapter-outline": "章节大纲",
+  foreshadow: "伏笔",
+  review: "审核项"
+});
+
+function relationshipIndexStatusMarkup(status) {
+  const queuedSources = Array.isArray(status.queuedSources) ? status.queuedSources : [];
+  const statusName = relationshipIndexStatusLabels[status.status] ?? "状态未知";
+  const queueMarkup = queuedSources.length
+    ? queuedSources.map((item) => `<span class="relationship-index-queue-chip"><span>${esc(relationshipIndexSourceLabels[item.sourceType] ?? item.sourceType)}</span><strong>${esc(String(item.count))}</strong></span>`).join("")
+    : '<span class="relationship-index-queue-empty">队列为空</span>';
+  const updatedAt = formatDateTime(status.updatedAt) || "尚未构建";
+  const errorMarkup = status.error
+    ? `<p class="relationship-index-error">${esc(status.error)}</p>`
+    : "";
+  return `<div class="relationship-index-summary">
+    <div class="relationship-index-state-row"><span class="relationship-index-state is-${esc(String(status.status ?? "unknown"))}">${esc(statusName)}</span><span>索引代次 <strong>${esc(String(status.generation ?? 0))}</strong></span><span>最后更新 <strong>${esc(updatedAt)}</strong></span></div>
+    <dl class="relationship-index-metrics"><div><dt>待同步任务</dt><dd>${esc(String(status.queuedSourceCount ?? 0))}</dd></div><div><dt>正文段落</dt><dd>${esc(String(status.indexedParagraphCount ?? 0))}</dd></div><div><dt>设定来源</dt><dd>${esc(String(status.indexedSourceCount ?? 0))}</dd></div></dl>
+    <div class="relationship-index-queue"><div class="relationship-index-queue-heading"><strong>增量任务队列</strong><span>仅包含新增、修改或删除后待同步的来源</span></div><div class="relationship-index-queue-list">${queueMarkup}</div></div>
+    ${errorMarkup}
+  </div>`;
+}
+
 async function renderPlatformAiConfig() {
   const [providers, models, settings] = await Promise.all([
     api("/api/platform/ai/providers"),
@@ -4542,6 +4583,10 @@ async function renderPlatformAiConfig() {
 }
 
 async function renderBookAiSettings() {
+  if (relationshipSearchIndexRefreshTimer) {
+    clearTimeout(relationshipSearchIndexRefreshTimer);
+    relationshipSearchIndexRefreshTimer = null;
+  }
   const [settings, providers, models, taskDefaults, relationshipIndex] = await Promise.all([
     api(`/api/works/${state.work.id}/ai-settings`),
     api("/api/platform/ai/providers"),
@@ -4550,10 +4595,9 @@ async function renderBookAiSettings() {
     api(`/api/works/${state.work.id}/ai-settings/relationship-search-index`)
   ]);
   const host = $("#module-content");
+  const workId = String(state.work.id);
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
-  const relationshipIndexStatusLabels = { queued: "等待构建", building: "正在构建", ready: "已就绪", failed: "构建失败" };
-  const relationshipIndexStatusText = (status) => `${relationshipIndexStatusLabels[status.status] ?? "状态未知"} · 代次 ${status.generation} · 待处理 ${status.queuedSourceCount} 项 · 已索引 ${status.indexedParagraphCount} 个正文段落 / ${status.indexedSourceCount} 项设定来源`;
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>存量作品升级后会自动在后台构建；如历史数据未命中拼音近似匹配，可手动将本书正文和设定来源全部重新加入索引队列。</p></div></div><div class="config-inline-save"><output id="relationship-search-index-status" aria-live="polite">${esc(relationshipIndexStatusText(relationshipIndex))}</output><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">重建拼音索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
     `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
@@ -4566,6 +4610,33 @@ async function renderBookAiSettings() {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
     host.querySelectorAll(".config-save-button").forEach((button) => button.classList.add("permission-hidden"));
   }
+  const isCurrentRelationshipIndexPanel = () => state.module === "ai-settings"
+    && String(state.work?.id ?? "") === workId
+    && Boolean($("#relationship-search-index-status"));
+  const updateRelationshipIndexStatus = (status) => {
+    const statusHost = $("#relationship-search-index-status");
+    if (!statusHost) return;
+    statusHost.innerHTML = relationshipIndexStatusMarkup(status);
+    if (relationshipSearchIndexRefreshTimer) clearTimeout(relationshipSearchIndexRefreshTimer);
+    relationshipSearchIndexRefreshTimer = null;
+    if (!["queued", "building"].includes(String(status.status))) return;
+    relationshipSearchIndexRefreshTimer = setTimeout(async () => {
+      relationshipSearchIndexRefreshTimer = null;
+      if (!isCurrentRelationshipIndexPanel()) return;
+      try {
+        const nextStatus = await api(`/api/works/${workId}/ai-settings/relationship-search-index`);
+        if (isCurrentRelationshipIndexPanel()) updateRelationshipIndexStatus(nextStatus);
+      } catch {
+        // 后台轮询失败时保留当前状态，用户仍可手动刷新。
+      }
+    }, 1_200);
+  };
+  const refreshRelationshipIndexStatus = async () => {
+    const status = await api(`/api/works/${workId}/ai-settings/relationship-search-index`);
+    updateRelationshipIndexStatus(status);
+    return status;
+  };
+  updateRelationshipIndexStatus(relationshipIndex);
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
@@ -4579,13 +4650,40 @@ async function renderBookAiSettings() {
       button.disabled = false;
     }
   });
+  $("#sync-relationship-search-index").addEventListener("click", async () => {
+    const button = $("#sync-relationship-search-index");
+    button.disabled = true;
+    try {
+      const status = await api(`/api/works/${workId}/ai-settings/relationship-search-index/sync`, { method: "POST" });
+      updateRelationshipIndexStatus(status);
+      toast(Number(status.queuedSourceCount) > 0
+        ? `开始同步 ${status.queuedSourceCount} 项增量任务`
+        : "增量任务队列为空，索引已是最新状态");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#refresh-relationship-search-index").addEventListener("click", async () => {
+    const button = $("#refresh-relationship-search-index");
+    button.disabled = true;
+    try {
+      await refreshRelationshipIndexStatus();
+      toast("索引状态已刷新", "info");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
   $("#rebuild-relationship-search-index").addEventListener("click", async () => {
     const button = $("#rebuild-relationship-search-index");
     button.disabled = true;
     try {
-      const status = await api(`/api/works/${state.work.id}/ai-settings/relationship-search-index/rebuild`, { method: "POST" });
-      $("#relationship-search-index-status").textContent = relationshipIndexStatusText(status);
-      toast(`拼音索引已加入后台队列，共 ${status.queuedSourceCount} 项`);
+      const status = await api(`/api/works/${workId}/ai-settings/relationship-search-index/rebuild`, { method: "POST" });
+      updateRelationshipIndexStatus(status);
+      toast(`已将全部来源加入索引队列，共 ${status.queuedSourceCount} 项`);
     } catch (error) {
       toast(error.message, "error");
     } finally {

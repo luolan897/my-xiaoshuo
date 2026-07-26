@@ -1742,6 +1742,27 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-inline-save { display: flex; align-items: flex-end; gap: 10px; margin: 14px 0 4px; flex-wrap: wrap; }
 .config-inline-save .book-summary-context-percent-field,
 .config-inline-save .context-compact-threshold-field { display: grid; gap: 6px; width: auto; margin: 0; color: var(--muted); font-size: 10px; }
+.relationship-index-summary { display: grid; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.relationship-index-state-row { display: flex; align-items: center; gap: 12px 18px; flex-wrap: wrap; color: var(--muted); font-size: 10px; }
+.relationship-index-state-row strong { color: var(--ink); font-family: var(--font-latin), monospace; font-weight: 600; }
+.relationship-index-state { display: inline-flex; align-items: center; min-height: 23px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--muted); font-size: 10px; font-weight: 650; }
+.relationship-index-state.is-ready { border-color: color-mix(in srgb, var(--green) 42%, var(--line)); background: color-mix(in srgb, var(--green) 9%, var(--surface)); color: var(--green); }
+.relationship-index-state.is-building { border-color: color-mix(in srgb, var(--task-running) 45%, var(--line)); background: color-mix(in srgb, var(--task-running) 9%, var(--surface)); color: var(--task-running); }
+.relationship-index-state.is-queued { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--accent-dark); }
+.relationship-index-state.is-failed { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); color: var(--accent-dark); }
+.relationship-index-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.relationship-index-metrics > div { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.relationship-index-metrics dt { color: var(--muted); font-size: 9px; }
+.relationship-index-metrics dd { margin: 0; color: var(--ink); font-family: var(--font-latin), monospace; font-size: 18px; font-weight: 650; line-height: 1.2; }
+.relationship-index-queue { display: grid; gap: 8px; }
+.relationship-index-queue-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
+.relationship-index-queue-heading strong { font-size: 11px; font-weight: 600; }
+.relationship-index-queue-heading span, .relationship-index-queue-empty { color: var(--muted); font-size: 9px; }
+.relationship-index-queue-list { display: flex; align-items: center; gap: 6px; min-height: 27px; flex-wrap: wrap; }
+.relationship-index-queue-chip { display: inline-flex; align-items: center; gap: 7px; min-height: 25px; padding: 3px 4px 3px 8px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); color: var(--muted); font-size: 9px; }
+.relationship-index-queue-chip strong { display: inline-grid; min-width: 18px; height: 18px; padding: 0 4px; place-items: center; border-radius: 9px; background: var(--paper-deep); color: var(--ink); font-family: var(--font-latin), monospace; font-size: 9px; }
+.relationship-index-error { margin: 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); color: var(--accent-dark); font-size: 10px; }
+.relationship-index-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .config-section .config-save-button { min-height: 32px; padding: 5px 11px; font-size: 11px; }
 .config-section .card-actions { margin-top: 12px; }
 .config-section .card-actions .config-save-button { border: 1px solid var(--line); background: transparent; color: var(--ink); }

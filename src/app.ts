@@ -1644,6 +1644,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/ai-settings/relationship-search-index", (request, response) => {
     data(response, ai.getRelationshipSearchIndexStatus(request.params.workId));
   });
+  app.post("/api/works/:workId/ai-settings/relationship-search-index/sync", (request, response) => {
+    const workId = request.params.workId;
+    const result = ai.syncRelationshipSearchIndex(workId);
+    store.audit(workId, "relationship.search-index.incremental-sync-queued", "work-ai-settings", workId, {
+      queuedSourceCount: result.queuedSourceCount
+    });
+    data(response, result, 202);
+  });
   app.post("/api/works/:workId/ai-settings/relationship-search-index/rebuild", (request, response) => {
     const workId = request.params.workId;
     const result = ai.rebuildRelationshipSearchIndex(workId);

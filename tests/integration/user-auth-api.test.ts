@@ -230,6 +230,44 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("人物关系增量索引同步校验登录、CSRF 和 AI 设置写权限", async () => {
+    const owner = await register(runtime, "relationship_index_owner");
+    const viewer = await register(runtime, "relationship_index_viewer");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "索引同步权限测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+
+    await request(runtime.app)
+      .get(`/api/works/${workId}/ai-settings/relationship-search-index`)
+      .expect(401);
+    await viewer.agent
+      .get(`/api/works/${workId}/ai-settings/relationship-search-index`)
+      .expect(200);
+    const viewerWrite = await viewer.agent
+      .post(`/api/works/${workId}/ai-settings/relationship-search-index/sync`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({})
+      .expect(403);
+    expect(viewerWrite.body.error.code).toBe("WORK_EDIT_DENIED");
+    const missingCsrf = await owner.agent
+      .post(`/api/works/${workId}/ai-settings/relationship-search-index/sync`)
+      .send({})
+      .expect(403);
+    expect(missingCsrf.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    await owner.agent
+      .post(`/api/works/${workId}/ai-settings/relationship-search-index/sync`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({})
+      .expect(202);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("按用户在数据库中记录新手引导完成状态", async () => {
     const firstUser = await register(runtime, "onboarding_first");
     const secondUser = await register(runtime, "onboarding_second");
