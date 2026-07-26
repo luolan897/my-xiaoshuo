@@ -7,6 +7,7 @@ import { paginated, paginationSql, type PaginatedResult, type Pagination } from 
 import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { Store, type AiConversationContext } from "./store.js";
+import { relationshipCharacterTokenText, relationshipPinyinTokenText } from "./relationship-search.js";
 import { clamp, id, json, maskSecret, normalizeBaseUrl, now } from "./utils.js";
 import { z } from "zod";
 
@@ -190,6 +191,7 @@ type RelationshipSettingSource = {
   title: string;
   sourceType: string;
   content: string;
+  version: string;
 };
 
 type RelationshipAnalysisChunk = {
@@ -1053,6 +1055,10 @@ export class AiManager {
   private readonly taskControllers = new Map<string, AbortController>();
   private readonly autoRunBatches = new Map<string, { claimed: number; starting: Set<string> }>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly relationshipIndexBuilds = new Map<string, Promise<number>>();
+  private relationshipIndexSerial: Promise<void> = Promise.resolve();
+  private relationshipIndexTimer: ReturnType<typeof setTimeout> | null = null;
+  private relationshipIndexDisposed = false;
   private readonly providerSchedules = new Map<string, {
     active: number;
     starts: number[];
@@ -1076,6 +1082,10 @@ export class AiManager {
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
+    this.relationshipIndexTimer = setTimeout(() => {
+      this.relationshipIndexTimer = null;
+      void this.schedulePendingRelationshipIndexes();
+    }, 0);
     logger.info("ai.manager.ready");
   }
 
@@ -1127,6 +1137,9 @@ export class AiManager {
     for (const timer of this.autoRunTimers.values()) clearTimeout(timer);
     this.autoRunTimers.clear();
     this.autoRunBatches.clear();
+    this.relationshipIndexDisposed = true;
+    if (this.relationshipIndexTimer) clearTimeout(this.relationshipIndexTimer);
+    this.relationshipIndexTimer = null;
     this.store.setAnalysisTaskQueuedHandler(null);
     logger.info("ai.manager.disposed");
   }
@@ -3709,8 +3722,167 @@ export class AiManager {
     };
   }
 
-  private relationshipSettingSources(workId: string, characters: Record<string, unknown>[]): RelationshipSettingSource[] {
-    const characterNameById = new Map(characters.map((character) => [String(character.id), String(character.name)]));
+  private async schedulePendingRelationshipIndexes(): Promise<void> {
+    if (this.relationshipIndexDisposed) return;
+    const workIds = this.store.db.all(
+      "SELECT DISTINCT work_id FROM relationship_source_index_queue ORDER BY work_id"
+    ).map((row) => String(row.work_id));
+    await Promise.allSettled(workIds.map((workId) => this.ensureRelationshipSearchIndex(workId)));
+  }
+
+  private ensureRelationshipSearchIndex(workId: string): Promise<number> {
+    const existing = this.relationshipIndexBuilds.get(workId);
+    if (existing) return existing;
+    const build = this.relationshipIndexSerial.then(async () => this.drainRelationshipSearchIndex(workId));
+    this.relationshipIndexSerial = build.then(() => undefined, () => undefined);
+    this.relationshipIndexBuilds.set(workId, build);
+    void build.finally(() => {
+      if (this.relationshipIndexBuilds.get(workId) === build) this.relationshipIndexBuilds.delete(workId);
+    }).catch(() => undefined);
+    return build;
+  }
+
+  private async drainRelationshipSearchIndex(workId: string): Promise<number> {
+    if (this.relationshipIndexDisposed) return 0;
+    const timestamp = now();
+    this.store.db.run(
+      `INSERT INTO relationship_source_index_state(work_id, status, generation, error, updated_at)
+       VALUES (?, 'building', 0, '', ?)
+       ON CONFLICT(work_id) DO UPDATE SET status = 'building', error = '', updated_at = excluded.updated_at`,
+      workId,
+      timestamp
+    );
+    let processed = 0;
+    try {
+      while (!this.relationshipIndexDisposed) {
+        const queued = this.store.db.all(
+          `SELECT source_type, source_id, queued_at FROM relationship_source_index_queue
+           WHERE work_id = ? ORDER BY queued_at, source_type, source_id LIMIT 50`,
+          workId
+        );
+        if (queued.length === 0) break;
+        for (const item of queued) {
+          const sourceType = String(item.source_type);
+          const sourceId = String(item.source_id);
+          const queuedAt = String(item.queued_at);
+          this.store.db.transaction(() => {
+            if (sourceType === "chapter") this.indexRelationshipChapter(workId, sourceId);
+            else this.indexRelationshipSettingSource(workId, sourceType, sourceId);
+            this.store.db.run(
+              `DELETE FROM relationship_source_index_queue
+               WHERE work_id = ? AND source_type = ? AND source_id = ? AND queued_at = ?`,
+              workId,
+              sourceType,
+              sourceId,
+              queuedAt
+            );
+          });
+          processed += 1;
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (this.relationshipIndexDisposed) {
+        this.store.db.run(
+          "UPDATE relationship_source_index_state SET status = 'queued', updated_at = ? WHERE work_id = ?",
+          now(),
+          workId
+        );
+        return 0;
+      }
+      this.store.db.run(
+        `UPDATE relationship_source_index_state
+         SET status = 'ready', generation = generation + ?, error = '', updated_at = ? WHERE work_id = ?`,
+        processed > 0 ? 1 : 0,
+        now(),
+        workId
+      );
+      const generation = Number(this.store.db.get(
+        "SELECT generation FROM relationship_source_index_state WHERE work_id = ?",
+        workId
+      )?.generation ?? 0);
+      logger.info("relationship.search_index.ready", { workId, generation, processed });
+      return generation;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "索引构建失败";
+      this.store.db.run(
+        "UPDATE relationship_source_index_state SET status = 'failed', error = ?, updated_at = ? WHERE work_id = ?",
+        message.slice(0, 2_000),
+        now(),
+        workId
+      );
+      logger.error("relationship.search_index.failed", { workId, processed, error: sanitizeError(error) });
+      throw error;
+    }
+  }
+
+  private indexRelationshipChapter(workId: string, chapterId: string): void {
+    const chapter = this.store.db.get("SELECT id FROM chapters WHERE id = ? AND work_id = ?", chapterId, workId);
+    if (!chapter) return;
+    const paragraphs = this.store.db.all(
+      "SELECT id, search_content FROM chapter_paragraph_search WHERE chapter_id = ? ORDER BY paragraph_order",
+      chapterId
+    );
+    for (const paragraph of paragraphs) {
+      const rowId = Number(paragraph.id);
+      this.store.db.run("DELETE FROM chapter_paragraph_pinyin_fts WHERE rowid = ?", rowId);
+      this.store.db.run(
+        "INSERT INTO chapter_paragraph_pinyin_fts(rowid, pinyin_tokens) VALUES (?, ?)",
+        rowId,
+        relationshipPinyinTokenText(String(paragraph.search_content))
+      );
+    }
+  }
+
+  private indexRelationshipSettingSource(workId: string, sourceType: string, sourceId: string): void {
+    const materialized = this.relationshipSettingSource(workId, sourceType, sourceId);
+    const existing = this.store.db.get(
+      "SELECT id FROM relationship_source_search WHERE work_id = ? AND source_type = ? AND source_id = ?",
+      workId,
+      sourceType,
+      sourceId
+    );
+    if (!materialized) {
+      if (existing) this.store.db.run("DELETE FROM relationship_source_search WHERE id = ?", Number(existing.id));
+      return;
+    }
+    const searchable = `${materialized.title}\n${materialized.content}`;
+    const contentHash = this.store.hashContent(searchable);
+    let rowId = Number(existing?.id ?? 0);
+    if (existing) {
+      this.store.db.run(
+        `UPDATE relationship_source_search SET source_version = ?, content_hash = ?, updated_at = ? WHERE id = ?`,
+        materialized.version,
+        contentHash,
+        now(),
+        rowId
+      );
+      this.store.db.run("DELETE FROM relationship_source_exact_fts WHERE rowid = ?", rowId);
+      this.store.db.run("DELETE FROM relationship_source_pinyin_fts WHERE rowid = ?", rowId);
+    } else {
+      rowId = Number(this.store.db.run(
+        `INSERT INTO relationship_source_search(work_id, source_type, source_id, source_version, content_hash, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        workId,
+        sourceType,
+        sourceId,
+        materialized.version,
+        contentHash,
+        now()
+      ).lastInsertRowid);
+    }
+    this.store.db.run(
+      "INSERT INTO relationship_source_exact_fts(rowid, character_tokens) VALUES (?, ?)",
+      rowId,
+      relationshipCharacterTokenText(searchable)
+    );
+    this.store.db.run(
+      "INSERT INTO relationship_source_pinyin_fts(rowid, pinyin_tokens) VALUES (?, ?)",
+      rowId,
+      relationshipPinyinTokenText(searchable)
+    );
+  }
+
+  private relationshipSettingSource(workId: string, sourceType: string, sourceId: string): RelationshipSettingSource | null {
     const cleanStrings = (value: unknown): unknown => {
       if (typeof value === "string") return collapseAiBlankLines(value);
       if (Array.isArray(value)) return value.map(cleanStrings);
@@ -3718,115 +3890,163 @@ export class AiManager {
       return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cleanStrings(item)]));
     };
     const serialize = (value: Record<string, unknown>): string => JSON.stringify(cleanStrings(value), null, 2);
-    const source = (sourceType: string, sourceId: unknown, title: string, value: Record<string, unknown>): RelationshipSettingSource => ({
-      id: sourceType === "setting" ? String(sourceId) : `${sourceType}:${String(sourceId)}`,
+    const source = (title: string, value: Record<string, unknown>, version: unknown): RelationshipSettingSource => ({
+      id: sourceType === "setting" ? sourceId : `${sourceType}:${sourceId}`,
       title,
       sourceType,
-      content: serialize(value)
+      content: serialize(value),
+      version: String(version ?? "")
     });
-    const work = this.store.getWork(workId);
-    const settings = this.store.listSettings(workId).map((item) => source("setting", item.id, String(item.title), {
-      category: item.category,
-      content: item.content,
-      tags: item.tags,
-      status: item.status,
-      authorNote: item.authorNote
-    }));
-    const characterSources = this.store.listCharacters(workId, true).map((item) => source("character", item.id, `人物档案：${String(item.name)}`, {
-      name: item.name,
-      aliases: item.aliases,
-      code: item.code,
-      species: item.species,
-      race: item.race,
-      organizations: item.organizations,
-      attributes: item.attributes,
-      profile: item.profile,
-      currentState: item.currentState,
-      lockedFields: item.lockedFields
-    }));
-    const races = this.store.listRaces(workId).map((item) => source("race", item.id, `种族设定：${String(item.name)}`, {
-      name: item.name,
-      description: item.description,
-      lineage: item.lineage,
-      settings: item.settings,
-      effectiveSettings: item.effectiveSettings,
-      members: item.members
-    }));
-    const organizations = this.store.listOrganizations(workId).map((item) => source("organization", item.id, `组织设定：${String(item.name)}`, {
-      name: item.name,
-      description: item.description,
-      settings: item.settings,
-      members: item.members
-    }));
-    const tracks = this.store.listTimelineTracks(workId).map((item) => source("timeline-track", item.id, `时间轴：${String(item.name)}`, {
-      name: item.name,
-      description: item.description
-    }));
-    const timeline = this.store.listTimelineEvents(workId).map((item) => source("timeline-event", item.id, `时间线事件：${String(item.name)}`, {
-      name: item.name,
-      description: item.description,
-      eventType: item.eventType,
-      timeLabel: item.timeLabel,
-      participants: (Array.isArray(item.participantIds) ? item.participantIds : []).map((characterId) => ({
-        characterId,
-        name: characterNameById.get(String(characterId)) ?? "已删除角色"
-      })),
-      location: item.location,
-      causes: item.causes,
-      impactScope: item.impactScope,
-      evidence: item.evidence,
-      status: item.status
-    }));
-    const relationships = this.store.listRelationships(workId).map((item) => source("relationship", item.id,
-      `人物关系：${characterNameById.get(String(item.fromCharacterId)) ?? "已删除角色"} / ${characterNameById.get(String(item.toCharacterId)) ?? "已删除角色"}`,
-      {
-        fromCharacter: { id: item.fromCharacterId, name: characterNameById.get(String(item.fromCharacterId)) ?? "已删除角色" },
-        toCharacter: { id: item.toCharacterId, name: characterNameById.get(String(item.toCharacterId)) ?? "已删除角色" },
-        category: item.category,
-        subtype: item.subtype,
-        keywords: item.keywords,
-        directed: item.directed,
-        currentStatus: item.currentStatus,
-        timeRange: item.timeRange,
-        confidence: item.confidence,
-        evidence: item.evidence,
-        confirmationStatus: item.confirmationStatus,
-        locked: item.locked
+    try {
+      if (sourceType === "work") {
+        const item = this.store.getWork(sourceId);
+        if (String(item.id) !== workId) return null;
+        return source(`作品资料：${String(item.title)}`, {
+          title: item.title, author: item.author, description: item.description, language: item.language
+        }, item.versionNo);
       }
-    ));
-    const outlines = this.store.listChapterOutlines(workId).map((item) => source("chapter-outline", item.chapterId, `章节大纲：${String(item.volumeTitle)} / ${String(item.chapterTitle)}`, {
-      chapterTitle: item.chapterTitle,
-      volumeTitle: item.volumeTitle,
-      goal: item.goal,
-      conflict: item.conflict,
-      turningPoint: item.turningPoint,
-      notes: item.notes,
-      status: item.status
-    }));
-    const foreshadows = this.store.listForeshadows(workId).map((item) => source("foreshadow", item.id, `伏笔：${String(item.title)}`, {
-      title: item.title,
-      description: item.description,
-      status: item.status,
-      importance: item.importance,
-      resolutionNote: item.resolutionNote,
-      occurrences: item.occurrences
-    }));
-    const reviews = this.store.listReviewItems(workId).map((item) => source("review", item.id, `审核项：${String(item.title)}`, {
-      itemType: item.itemType,
-      severity: item.severity,
-      title: item.title,
-      description: item.description,
-      evidence: item.evidence,
-      suggestion: item.suggestion,
-      status: item.status,
-      resolutionNote: item.resolutionNote
-    }));
-    return [source("work", work.id, `作品资料：${String(work.title)}`, {
-      title: work.title,
-      author: work.author,
-      description: work.description,
-      language: work.language
-    }), ...settings, ...characterSources, ...races, ...organizations, ...tracks, ...timeline, ...relationships, ...outlines, ...foreshadows, ...reviews];
+      if (sourceType === "setting") {
+        const item = this.store.getSetting(sourceId);
+        if (String(item.workId) !== workId) return null;
+        return source(String(item.title), {
+          category: item.category, content: item.content, tags: item.tags, status: item.status, authorNote: item.authorNote
+        }, item.versionNo ?? item.updatedAt);
+      }
+      if (sourceType === "character") {
+        const item = this.store.getCharacter(sourceId);
+        if (String(item.workId) !== workId) return null;
+        return source(`人物档案：${String(item.name)}`, {
+          name: item.name, aliases: item.aliases, code: item.code, species: item.species, race: item.race,
+          organizations: item.organizations, attributes: item.attributes, profile: item.profile,
+          currentState: item.currentState, lockedFields: item.lockedFields
+        }, item.versionNo);
+      }
+      if (sourceType === "race") {
+        const item = this.store.getRace(sourceId);
+        if (String(item.workId) !== workId) return null;
+        return source(`种族设定：${String(item.name)}`, {
+          name: item.name, description: item.description, lineage: item.lineage, settings: item.settings,
+          effectiveSettings: item.effectiveSettings, members: item.members
+        }, item.versionNo);
+      }
+      if (sourceType === "organization") {
+        const item = this.store.getOrganization(sourceId);
+        if (String(item.workId) !== workId) return null;
+        return source(`组织设定：${String(item.name)}`, {
+          name: item.name, description: item.description, settings: item.settings, members: item.members
+        }, item.versionNo);
+      }
+      if (sourceType === "timeline-track") {
+        const item = this.store.getTimelineTrack(sourceId);
+        if (String(item.workId) !== workId) return null;
+        return source(`时间轴：${String(item.name)}`, { name: item.name, description: item.description }, item.versionNo);
+      }
+      if (sourceType === "timeline-event") {
+        const item = this.store.getTimelineEvent(sourceId);
+        if (String(item.workId) !== workId) return null;
+        return source(`时间线事件：${String(item.name)}`, {
+          name: item.name,
+          description: item.description,
+          eventType: item.eventType,
+          timeLabel: item.timeLabel,
+          participants: (Array.isArray(item.participantIds) ? item.participantIds : []).map((characterId) => {
+            try {
+              return { characterId, name: this.store.getCharacter(String(characterId)).name };
+            } catch {
+              return { characterId, name: "已删除角色" };
+            }
+          }),
+          location: item.location,
+          causes: item.causes,
+          impactScope: item.impactScope,
+          evidence: item.evidence,
+          status: item.status
+        }, item.versionNo);
+      }
+      if (sourceType === "relationship") {
+        const item = this.store.getRelationship(sourceId);
+        if (String(item.workId) !== workId) return null;
+        const fromName = String(this.store.getCharacter(String(item.fromCharacterId)).name);
+        const toName = String(this.store.getCharacter(String(item.toCharacterId)).name);
+        return source(`人物关系：${fromName} / ${toName}`, {
+          fromCharacter: { id: item.fromCharacterId, name: fromName },
+          toCharacter: { id: item.toCharacterId, name: toName },
+          category: item.category,
+          subtype: item.subtype,
+          keywords: item.keywords,
+          directed: item.directed,
+          currentStatus: item.currentStatus,
+          timeRange: item.timeRange,
+          confidence: item.confidence,
+          evidence: item.evidence,
+          confirmationStatus: item.confirmationStatus,
+          locked: item.locked
+        }, item.versionNo);
+      }
+      if (sourceType === "chapter-outline") {
+        const item = this.store.getChapterOutline(sourceId);
+        if (!item || String(item.workId) !== workId) return null;
+        const volumeTitle = String(this.store.getVolume(String(item.volumeId)).title);
+        return source(`章节大纲：${volumeTitle} / ${String(item.chapterTitle)}`, {
+          chapterTitle: item.chapterTitle,
+          volumeTitle,
+          goal: item.goal,
+          conflict: item.conflict,
+          turningPoint: item.turningPoint,
+          notes: item.notes,
+          status: item.status
+        }, item.versionNo ?? item.updatedAt);
+      }
+      if (sourceType === "foreshadow") {
+        const item = this.store.getForeshadow(sourceId);
+        if (String(item.workId) !== workId) return null;
+        return source(`伏笔：${String(item.title)}`, {
+          title: item.title,
+          description: item.description,
+          status: item.status,
+          importance: item.importance,
+          resolutionNote: item.resolutionNote,
+          occurrences: item.occurrences
+        }, item.versionNo);
+      }
+      if (sourceType === "review") {
+        const item = this.store.getReviewItem(sourceId);
+        if (String(item.workId) !== workId) return null;
+        return source(`审核项：${String(item.title)}`, {
+          itemType: item.itemType,
+          severity: item.severity,
+          title: item.title,
+          description: item.description,
+          evidence: item.evidence,
+          suggestion: item.suggestion,
+          status: item.status,
+          resolutionNote: item.resolutionNote
+        }, item.updatedAt);
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  private relationshipSettingSources(workId: string, characters: Record<string, unknown>[]): RelationshipSettingSource[] {
+    const refs: Array<[string, string]> = [
+      ["work", workId],
+      ...this.store.listSettings(workId).map((item) => ["setting", String(item.id)] as [string, string]),
+      ...characters.map((item) => ["character", String(item.id)] as [string, string]),
+      ...this.store.listRaces(workId).map((item) => ["race", String(item.id)] as [string, string]),
+      ...this.store.listOrganizations(workId).map((item) => ["organization", String(item.id)] as [string, string]),
+      ...this.store.listTimelineTracks(workId).map((item) => ["timeline-track", String(item.id)] as [string, string]),
+      ...this.store.listTimelineEvents(workId).map((item) => ["timeline-event", String(item.id)] as [string, string]),
+      ...this.store.listRelationships(workId).map((item) => ["relationship", String(item.id)] as [string, string]),
+      ...this.store.listChapterOutlines(workId).map((item) => ["chapter-outline", String(item.chapterId)] as [string, string]),
+      ...this.store.listForeshadows(workId).map((item) => ["foreshadow", String(item.id)] as [string, string]),
+      ...this.store.listReviewItems(workId).map((item) => ["review", String(item.id)] as [string, string])
+    ];
+    return refs.flatMap(([sourceType, sourceId]) => {
+      const materialized = this.relationshipSettingSource(workId, sourceType, sourceId);
+      return materialized ? [materialized] : [];
+    });
   }
 
   private relationshipSearchKeywords(characters: Record<string, unknown>[], selectedCharacterIds: Set<string>): string[] {

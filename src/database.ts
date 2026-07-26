@@ -1876,6 +1876,80 @@ export class Database {
             FROM foreshadows foreshadow WHERE foreshadow.id = old.foreshadow_id
             ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
           END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_memberships_ai AFTER INSERT ON character_organization_memberships BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'character', new.character_id, datetime('now') FROM characters WHERE id = new.character_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'organization', new.organization_id, datetime('now') FROM organizations WHERE id = new.organization_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_memberships_au AFTER UPDATE ON character_organization_memberships BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'character', new.character_id, datetime('now') FROM characters WHERE id = new.character_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'organization', new.organization_id, datetime('now') FROM organizations WHERE id = new.organization_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_memberships_bd BEFORE DELETE ON character_organization_memberships BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'character', old.character_id, datetime('now') FROM characters WHERE id = old.character_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT work_id, 'organization', old.organization_id, datetime('now') FROM organizations WHERE id = old.organization_id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_volume_dependencies_au AFTER UPDATE ON volumes BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT chapter.work_id, 'chapter-outline', chapter.id, datetime('now')
+            FROM chapters chapter JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+            WHERE chapter.volume_id = new.id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_chapter_dependencies_au AFTER UPDATE ON chapters BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT new.work_id, 'chapter-outline', new.id, datetime('now')
+            WHERE EXISTS(SELECT 1 FROM chapter_outlines WHERE chapter_id = new.id)
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT foreshadow.work_id, 'foreshadow', foreshadow.id, datetime('now')
+            FROM foreshadows foreshadow JOIN foreshadow_occurrences occurrence ON occurrence.foreshadow_id = foreshadow.id
+            WHERE occurrence.chapter_id = new.id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_character_dependencies_au AFTER UPDATE ON characters BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT organization.work_id, 'organization', organization.id, datetime('now')
+            FROM organizations organization JOIN character_organization_memberships membership ON membership.organization_id = organization.id
+            WHERE membership.character_id = new.id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT race.work_id, 'race', race.id, datetime('now') FROM races race
+            WHERE race.id IN (old.race_id, new.race_id)
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT event.work_id, 'timeline-event', event.id, datetime('now') FROM timeline_events event
+            WHERE EXISTS(SELECT 1 FROM json_each(event.participant_ids_json) participant WHERE participant.value = new.id)
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT relation.work_id, 'relationship', relation.id, datetime('now') FROM relationships relation
+            WHERE relation.from_character_id = new.id OR relation.to_character_id = new.id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_race_dependencies_au AFTER UPDATE ON races BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT character.work_id, 'character', character.id, datetime('now') FROM characters character
+            WHERE character.race_id = new.id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
+          CREATE TRIGGER IF NOT EXISTS relationship_index_organization_dependencies_au AFTER UPDATE ON organizations BEGIN
+            INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+            SELECT character.work_id, 'character', character.id, datetime('now')
+            FROM characters character JOIN character_organization_memberships membership ON membership.character_id = character.id
+            WHERE membership.organization_id = new.id
+            ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at;
+          END;
         `);
 
         const timestamp = new Date().toISOString();
