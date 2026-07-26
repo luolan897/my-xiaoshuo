@@ -42,6 +42,8 @@ describe("AI 分析全流程追踪界面", () => {
     expect(styles).toContain(".task-trace-round {");
     expect(styles).toContain(".task-trace-load-state {");
     expect(styles).toContain(".task-trace-call > summary .task-trace-call-sources {");
+    expect(styles).toContain(".task-trace-call.is-failed .task-trace-status {");
+    expect(styles).toContain("background: color-mix(in srgb, var(--accent) 14%, var(--surface));");
     expect(styles).toContain(".task-trace-message.is-system");
     expect(styles).toContain(".task-trace-tool-grid {");
   });

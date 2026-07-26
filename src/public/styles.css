@@ -1328,6 +1328,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-trace-call-index, .task-trace-round-index { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--accent) 9%, var(--surface)); color: var(--accent-dark); font-family: var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 700; }
 .task-trace-status { padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 9px; }
 .task-trace-call.is-completed .task-trace-status { border-color: color-mix(in srgb, var(--green) 42%, var(--line)); color: var(--green); }
+.task-trace-call.is-failed .task-trace-status { border-color: color-mix(in srgb, var(--accent) 72%, var(--line)); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent-dark); font-weight: 700; }
 .task-trace-call-body { display: grid; gap: 13px; padding: 0 15px 16px 54px; border-top: 1px solid var(--line); }
 .task-trace-call-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding-top: 12px; color: var(--muted); font-size: 9px !important; }
 .task-trace-call-meta code { overflow-wrap: anywhere; }
