@@ -1369,6 +1369,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-result-json-content { grid-column: 1 / -1; min-width: 0; }
 .task-result-json-content:empty { display: none; }
 .task-result-json-content textarea { width: 100%; min-height: 360px; max-height: 52vh; resize: vertical; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--ink); font-family: var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; line-height: 1.55; tab-size: 2; white-space: pre; }
+.task-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
+.task-detail-actions small { color: var(--muted); }
 .relationship-identity-repair-entry { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
 .relationship-identity-repair-entry > div { display: grid; gap: 4px; }
 .relationship-identity-repair-entry strong { color: var(--ink); }

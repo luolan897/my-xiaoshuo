@@ -1654,6 +1654,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       requestPermissions(request)
     ));
   });
+  app.post("/api/tasks/:taskId/rerun", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    const task = store.getTask(request.params.taskId);
+    if (task.taskType === "relationship-analysis") {
+      const permissions = requestPermissions(request, String(task.workId));
+      const deniedModules = relationshipAnalysisReadModules(task.scope).filter((module) => permissions[module] === "none");
+      if (deniedModules.length > 0) {
+        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取本次定向人物关系分析所需资料模块的权限", {
+          modules: deniedModules
+        });
+      }
+    }
+    data(response, redactTaskCharacterNames(
+      ai.rerunTask(request.params.taskId),
+      requestPermissions(request)
+    ), 201);
+  });
   app.post("/api/tasks/:taskId/cancel", (request, response) => data(
     response,
     redactTaskCharacterNames(ai.cancelTask(request.params.taskId), requestPermissions(request))

@@ -1185,6 +1185,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(protectedTaskCancellation.body.data.scopeSummary).toBe("全书 · 定向 1 人");
     expect(protectedTaskCancellation.body.data.scope.targetCharacters).toBeUndefined();
     expect(JSON.stringify(protectedTaskCancellation.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedTaskRerun = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/rerun`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({})
+      .expect(403);
+    expect(protectedTaskRerun.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     const targetedTaskDenied = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({

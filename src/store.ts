@@ -5348,7 +5348,12 @@ export class Store {
     };
   }
 
-  createTask(workId: string, input: { taskType: string; scope?: Record<string, unknown>; modelId?: string }): Record<string, unknown> {
+  createTask(workId: string, input: {
+    taskType: string;
+    scope?: Record<string, unknown>;
+    modelId?: string;
+    rerunOfTaskId?: string;
+  }): Record<string, unknown> {
     this.getWork(workId);
     const taskId = id("task");
     const timestamp = now();
@@ -5397,7 +5402,8 @@ export class Store {
     this.audit(workId, "task.created", "analysis-task", taskId, {
       taskType: input.taskType,
       scope,
-      modelId: input.modelId ?? null
+      modelId: input.modelId ?? null,
+      ...(input.rerunOfTaskId ? { rerunOfTaskId: input.rerunOfTaskId } : {})
     });
     this.notifyAnalysisTaskQueued(workId);
     return this.getTask(taskId);
