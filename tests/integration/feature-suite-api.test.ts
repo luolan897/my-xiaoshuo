@@ -1311,7 +1311,17 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     ]));
 
     const previewedChapter = preview.body.data.sources.find((source: { sourceType: string }) => source.sourceType === "chapter");
-    const chapterRef = { sourceType: previewedChapter.sourceType, sourceId: previewedChapter.sourceId };
+    const previewedSetting = preview.body.data.sources.find((source: { sourceType: string }) => source.sourceType === "setting");
+    const chapterRef = {
+      sourceType: previewedChapter.sourceType,
+      sourceId: previewedChapter.sourceId,
+      sourceVersion: previewedChapter.version
+    };
+    const settingRef = {
+      sourceType: previewedSetting.sourceType,
+      sourceId: previewedSetting.sourceId,
+      sourceVersion: previewedSetting.version
+    };
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "relationship-analysis",
       modelId,
@@ -1328,6 +1338,28 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(sent).toContain("阿宁在旧港查看完整航海日志。");
     expect(sent).not.toContain("阿宁与顾川订立了长期守望盟约。");
     expect(sent).not.toContain("这是一章完全无关的正文。");
+
+    const queuedTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { ...scope, additionalPrompt: "验证排队期间的来源版本变化", relationshipSourceRefs: [settingRef] }
+    }).expect(201);
+    expect(queuedTask.body.data.status).toBe("pending");
+    await request(runtime.app).patch(`/api/settings/${setting.body.data.id}`).send({
+      content: "阿宁与顾川在预检后修改了盟约。"
+    }).expect(200);
+    const staleRun = await request(runtime.app).post(`/api/tasks/${queuedTask.body.data.id}/run`).send({}).expect(409);
+    expect(staleRun.body.error).toMatchObject({ code: "RELATIONSHIP_SOURCE_PREVIEW_STALE" });
+
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "阿宁在预检后改写了航海日志。"
+    }).expect(200);
+    const staleTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { ...scope, relationshipSourceRefs: [chapterRef] }
+    }).expect(409);
+    expect(staleTask.body.error).toMatchObject({ code: "RELATIONSHIP_SOURCE_PREVIEW_STALE" });
   });
 
   it("关闭前置过滤时定向人物关系分析发送范围内全部章节和设定", async () => {

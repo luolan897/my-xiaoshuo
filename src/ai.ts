@@ -1623,6 +1623,17 @@ export class AiManager {
     );
     const modelId = input.modelId ?? (defaultRow ? stringValue(defaultRow, "model_id") : undefined);
     if (modelId) this.resolveModel(workId, modelPurpose, modelId);
+    const relationshipScope = input.taskType === "relationship-analysis" && input.scope
+      ? input.scope as ContextScope
+      : null;
+    if (relationshipScope && Array.isArray(relationshipScope.relationshipSourceRefs)) {
+      this.relationshipSourcesFromRefs(
+        workId,
+        relationshipScope,
+        this.store.listCharacters(workId),
+        relationshipScope.relationshipSourceRefs
+      );
+    }
     return this.store.createTask(workId, {
       taskType: input.taskType,
       ...(input.scope ? { scope: input.scope } : {}),
@@ -4909,20 +4920,40 @@ export class AiManager {
     workId: string,
     scope: ContextScope,
     characters: Record<string, unknown>[],
-    refs: Array<{ sourceType: string; sourceId: string }>
+    refs: Array<{ sourceType: string; sourceId: string; sourceVersion: string }>
   ): { chapters: Record<string, unknown>[]; settings: RelationshipSettingSource[] } {
-    const requestedKeys = new Set(refs.map((ref) => this.relationshipIndexedSourceKey(ref.sourceType, ref.sourceId)));
-    const chapters = scope.type === "settings"
-      ? []
-      : this.getScopeChapters(workId, scope).filter((chapter) =>
-        requestedKeys.has(this.relationshipIndexedSourceKey("chapter", String(chapter.id)))
-      );
+    const requestedRefs = new Map(refs.map((ref) => [
+      this.relationshipIndexedSourceKey(ref.sourceType, ref.sourceId),
+      ref
+    ]));
+    const availableChapters = scope.type === "settings" ? [] : this.getScopeChapters(workId, scope);
     const includeSettings = scope.type === "settings" || scope.includeAllSettings === true;
-    const settings = includeSettings
-      ? this.relationshipSettingSources(workId, characters).filter((source) =>
-        requestedKeys.has(this.relationshipIndexedSourceKey(source.sourceType, source.sourceId))
-      )
-      : [];
+    const availableSettings = includeSettings ? this.relationshipSettingSources(workId, characters) : [];
+    const availableVersions = new Map<string, string>([
+      ...availableChapters.map((chapter) => [
+        this.relationshipIndexedSourceKey("chapter", String(chapter.id)),
+        String(chapter.versionNo ?? "")
+      ] as [string, string]),
+      ...availableSettings.map((source) => [
+        this.relationshipIndexedSourceKey(source.sourceType, source.sourceId),
+        source.version
+      ] as [string, string])
+    ]);
+    for (const [sourceKey, ref] of requestedRefs) {
+      const currentVersion = availableVersions.get(sourceKey);
+      if (currentVersion === undefined || currentVersion !== ref.sourceVersion) {
+        throw new AppError(409, "RELATIONSHIP_SOURCE_PREVIEW_STALE", "来源已在预检后发生变化，请重新预览", {
+          sourceType: ref.sourceType,
+          sourceId: ref.sourceId
+        });
+      }
+    }
+    const chapters = availableChapters.filter((chapter) =>
+      requestedRefs.has(this.relationshipIndexedSourceKey("chapter", String(chapter.id)))
+    );
+    const settings = availableSettings.filter((source) =>
+      requestedRefs.has(this.relationshipIndexedSourceKey(source.sourceType, source.sourceId))
+    );
     return { chapters, settings };
   }
 

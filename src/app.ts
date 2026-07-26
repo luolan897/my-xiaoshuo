@@ -411,7 +411,8 @@ const contextSchema = z.object({
 const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
 const relationshipSourceRefSchema = z.object({
   sourceType: z.string().trim().min(1).max(50).regex(/^[a-z][a-z-]*$/u),
-  sourceId: identifier
+  sourceId: identifier,
+  sourceVersion: z.string().trim().min(1).max(200)
 }).strict();
 const relationshipAnalysisScopeSchema = z.object({
   type: z.enum(["chapter", "book", "settings"]),

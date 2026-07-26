@@ -6634,7 +6634,11 @@ async function openTaskDialog() {
     if (taskType === "relationship-analysis" && relationshipSourcePreview
       && relationshipSourcePreviewConfigKey === relationshipPreviewKey(scope, modelId)) {
       scope.relationshipSourceRefs = [...$("#dialog-fields").querySelectorAll("[data-relationship-source-selected]:checked")]
-        .map((input) => ({ sourceType: input.dataset.sourceType, sourceId: input.dataset.sourceId }));
+        .map((input) => ({
+          sourceType: input.dataset.sourceType,
+          sourceId: input.dataset.sourceId,
+          sourceVersion: input.dataset.sourceVersion
+        }));
     }
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     taskListPage = 1;
@@ -6724,7 +6728,7 @@ async function openTaskDialog() {
       return;
     }
     const rows = preview.sources.map((source) => `<label class="relationship-source-preview-row">
-      <input type="checkbox" data-relationship-source-selected data-source-type="${esc(source.sourceType)}" data-source-id="${esc(source.sourceId)}" checked>
+      <input type="checkbox" data-relationship-source-selected data-source-type="${esc(source.sourceType)}" data-source-id="${esc(source.sourceId)}" data-source-version="${esc(source.version)}" checked>
       <span class="relationship-source-preview-main"><strong>${esc(source.title)}</strong><small>${esc(relationshipSourceTypeLabel(source.sourceType))} · ${Number(source.characterCount).toLocaleString("zh-CN")} 字符</small></span>
       <span class="relationship-source-preview-match ${source.matchType === "fuzzy" ? "is-fuzzy" : ""}">${source.matchType === "exact" ? "名称命中" : source.matchType === "fuzzy" ? "疑似写法确认" : "范围内来源"}</span>
     </label>`).join("");
