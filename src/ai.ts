@@ -1156,6 +1156,7 @@ export class AiManager {
   private readonly relationshipIndexBuilds = new Map<string, Promise<number>>();
   private readonly relationshipSelectionCache = new Map<string, RelationshipLocalSourceSelection>();
   private readonly relationshipSelectionBuilds = new Map<string, Promise<RelationshipLocalSourceSelection>>();
+  private readonly relationshipIndexSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private relationshipIndexSerial: Promise<void> = Promise.resolve();
   private relationshipIndexTimer: ReturnType<typeof setTimeout> | null = null;
   private relationshipIndexDisposed = false;
@@ -1183,6 +1184,7 @@ export class AiManager {
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
+    this.store.setRelationshipIndexQueuedHandler((workId) => this.scheduleRelationshipIndexSync(workId));
     this.relationshipIndexTimer = setTimeout(() => {
       this.relationshipIndexTimer = null;
       void this.schedulePendingRelationshipIndexes();
@@ -1239,9 +1241,12 @@ export class AiManager {
     this.autoRunTimers.clear();
     this.autoRunBatches.clear();
     this.relationshipIndexDisposed = true;
+    for (const timer of this.relationshipIndexSyncTimers.values()) clearTimeout(timer);
+    this.relationshipIndexSyncTimers.clear();
     if (this.relationshipIndexTimer) clearTimeout(this.relationshipIndexTimer);
     this.relationshipIndexTimer = null;
     this.store.setAnalysisTaskQueuedHandler(null);
+    this.store.setRelationshipIndexQueuedHandler(null);
     logger.info("ai.manager.disposed");
   }
 
@@ -3893,6 +3898,25 @@ export class AiManager {
       "SELECT DISTINCT work_id FROM relationship_source_index_queue ORDER BY work_id"
     ).map((row) => String(row.work_id));
     await Promise.allSettled(workIds.map((workId) => this.ensureRelationshipSearchIndex(workId)));
+  }
+
+  private scheduleRelationshipIndexSync(workId: string): void {
+    if (this.relationshipIndexDisposed) return;
+    const existing = this.relationshipIndexSyncTimers.get(workId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.relationshipIndexSyncTimers.delete(workId);
+      try {
+        const status = this.getRelationshipSearchIndexStatus(workId);
+        if (Number(status.queuedSourceCount ?? 0) > 0) {
+          void this.ensureRelationshipSearchIndex(workId).catch(() => undefined);
+        }
+      } catch {
+        // 作品可能已在等待期间被删除
+      }
+    }, 2_000);
+    this.relationshipIndexSyncTimers.set(workId, timer);
+    logger.debug("relationship.search_index.auto_sync_scheduled", { workId });
   }
 
   getRelationshipSearchIndexStatus(workId: string): Record<string, unknown> {
