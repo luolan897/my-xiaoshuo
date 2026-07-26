@@ -298,7 +298,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260726-search-result-details');
-    expect(page.text).toContain('/styles.css?v=20260726-trace-security-review');
+    expect(page.text).toContain('/styles.css?v=20260726-task-submit-loading');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -372,9 +372,15 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("background: var(--toast-bg)");
     expect(page.text).toContain('id="platform-ui-settings-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="platform-ui-settings-dialog"');
+    expect(page.text).toContain('id="page-size-characters"');
+    expect(page.text).toContain('id="page-size-analysis-tasks"');
+    expect(page.text).toContain('id="page-size-file-versions"');
+    expect(page.text).toContain('默认均为 30 条');
     expect(page.text).toContain('data-position="bottom-right"');
     expect(application.text).toContain('api("/api/ui-settings")');
     expect(application.text).toContain('api("/api/platform/ui-settings"');
+    expect(application.text).toContain('pageSizes: {');
+    expect(styles.text).toContain('.pagination-settings-grid { display: grid;');
     expect(styles.text).toContain('.toast-region[data-position="top-right"]');
     expect(styles.text).toContain('.toast-region[data-position="bottom-right"]');
     expect(styles.text).not.toContain(".task-table .task-id");

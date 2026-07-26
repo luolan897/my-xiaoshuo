@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260726-trace-security-review">
+    <link rel="stylesheet" href="/styles.css?v=20260726-task-submit-loading">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -172,7 +172,7 @@
           <div class="settings-hub-grid">
             <button id="platform-ai-button" class="settings-hub-card hidden" type="button" data-settings-action="ai"><span class="settings-card-mark">AI</span><strong>AI 管理</strong><small>供应商、模型、上下文与全局提示词</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
-            <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面通知</strong><small>设置所有用户的 Toast 提示位置</small></button>
+            <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">MD</span><strong>导出作品</strong><small>将当前作品安全导出为 Markdown</small></button>
@@ -337,6 +337,10 @@
           <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
         </div>
         <div id="dialog-fields" class="dialog-fields"></div>
+        <div id="dialog-submit-status" class="dialog-submit-status hidden" role="status" aria-live="polite">
+          <span id="dialog-submit-status-message">正在提交，请稍候</span>
+          <div class="dialog-submit-progress" role="progressbar" aria-label="提交处理中" aria-valuetext="正在等待服务器响应"><span></span></div>
+        </div>
         <div class="dialog-actions">
           <button class="ghost-button" value="cancel" type="submit">取消</button>
           <button id="dialog-submit" class="primary-button" value="default" type="submit">保存</button>
@@ -575,11 +579,20 @@
     </dialog>
 
     <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">
-      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面通知</h2></div><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面与分页</h2></div><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <form id="platform-ui-settings-form">
         <div class="dialog-fields">
           <label>Toast 提示位置<select id="toast-position" name="toastPosition" aria-label="Toast 提示位置"><option value="bottom-right">右下角（默认）</option><option value="top-right">右上角</option></select></label>
           <small>该设置对所有用户生效，保存后的提示会立即显示在新位置。</small>
+          <fieldset class="pagination-settings-fieldset">
+            <legend>各模块单页数量</legend>
+            <small>每个模块独立设置，允许 10–100 条；默认均为 30 条。</small>
+            <div class="pagination-settings-grid">
+              <label>角色列表<input id="page-size-characters" name="pageSizeCharacters" type="number" min="10" max="100" step="1" required aria-label="角色列表单页数量"></label>
+              <label>AI 分析任务<input id="page-size-analysis-tasks" name="pageSizeAnalysisTasks" type="number" min="10" max="100" step="1" required aria-label="AI 分析任务单页数量"></label>
+              <label>正文导入历史<input id="page-size-file-versions" name="pageSizeFileVersions" type="number" min="10" max="100" step="1" required aria-label="正文导入历史单页数量"></label>
+            </div>
+          </fieldset>
         </div>
         <div class="dialog-actions"><button class="ghost-button" id="platform-ui-settings-cancel" type="button">取消</button><button class="primary-button" id="platform-ui-settings-save" type="submit">保存设置</button></div>
       </form>
