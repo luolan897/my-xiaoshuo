@@ -4089,7 +4089,7 @@ async function renderTasks(page = taskListPage) {
     button.disabled = true;
     const taskId = encodeURIComponent(button.dataset.taskDetail);
     Promise.all([
-      api(`/api/tasks/${taskId}`),
+      api(`/api/tasks/${taskId}/detail`),
       api(`/api/tasks/${taskId}/trace`).catch((error) => {
         if (error.code === "WORK_MODULE_READ_DENIED") return { restricted: true, captured: false, calls: [] };
         throw error;
@@ -4355,104 +4355,78 @@ function renderTaskTraceVisualization(trace, taskId) {
   </section>`;
 }
 
-function relationshipTaskActionLabel(action) {
-  return {
-    created: "已新建",
-    updated: "已更新",
-    unchanged: "已保留原记录"
-  }[action] || "已处理";
-}
-
-function relationshipTaskStatusLabel(status) {
-  return {
-    active: "持续中",
-    ongoing: "持续中",
-    ended: "已结束",
-    historical: "历史关系",
-    unknown: "未确定"
-  }[String(status || "").toLowerCase()] || String(status || "未说明");
-}
-
-function renderRelationshipTaskEvidence(relationship) {
-  const evidence = Array.isArray(relationship.evidence) ? relationship.evidence : [];
+function renderTaskResultEvidence(item) {
+  const evidence = Array.isArray(item.evidence) ? item.evidence : [];
   if (!evidence.length) return '<p class="task-result-muted">没有保存可展示的证据摘录。</p>';
   return `<ul class="task-result-evidence">${evidence.map((item) => {
     const source = item.chapterTitle || item.chapterId || "未标明章节";
     return `<li><strong>${esc(source)}</strong>${item.quote ? `<q>${esc(item.quote)}</q>` : ""}${item.supports ? `<small>${esc(item.supports)}</small>` : ""}</li>`;
-  }).join("")}</ul>${relationship.evidenceTruncated ? `<p class="task-result-muted">这里只展示前 ${evidence.length} 条，共 ${Number(relationship.evidenceCount || evidence.length)} 条证据。</p>` : ""}`;
+  }).join("")}</ul>`;
 }
 
-function renderRelationshipTaskResult(task) {
-  const result = task.result && typeof task.result === "object" ? task.result : {};
-  const relationships = Array.isArray(result.relationshipResults)
-    ? result.relationshipResults.filter((item) => item && typeof item === "object" && !Array.isArray(item))
-    : [];
-  const analysisTarget = result.analysisTarget && typeof result.analysisTarget === "object" ? result.analysisTarget : {};
-  const storageTarget = result.storageTarget && typeof result.storageTarget === "object" ? result.storageTarget : {};
-  const targetNames = Array.isArray(analysisTarget.characterNames) ? analysisTarget.characterNames.filter(Boolean) : [];
-  const analysisSubject = analysisTarget.mode === "targeted-characters"
-    ? targetNames.length
-      ? `重点分析 ${targetNames.join("、")} 与其他已建档人物之间的关系`
-      : "重点分析指定人物与其他已建档人物之间的关系"
-    : "分析所选范围内已建档人物之间、对人物图有长期意义的关系";
-  const coveredChapterCount = Number(analysisTarget.coveredChapterCount ?? result.coveredChapterCount ?? 0);
-  const createdCount = Number(result.createdCount ?? relationships.filter((item) => item.action === "created").length);
-  const updatedCount = Number(result.updatedCount ?? relationships.filter((item) => item.action === "updated").length);
-  const unchangedCount = Number(result.unchangedCount ?? relationships.filter((item) => item.action === "unchanged").length);
-  const skipped = Array.isArray(result.skipped) ? result.skipped : [];
-  const missingRelationshipIds = Array.isArray(result.missingRelationshipIds) ? result.missingRelationshipIds : [];
-  const workTitle = state.work?.title || "当前作品";
-  const workId = storageTarget.workId || task.workId || state.work?.id || "未知作品";
-  const relationshipCards = relationships.map((relationship) => {
-    const fromName = relationship.fromCharacterName || relationship.fromCharacterId || "未知人物";
-    const toName = relationship.toCharacterName || relationship.toCharacterId || "未知人物";
-    const connector = relationship.directed ? "→" : "↔";
-    const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
-    return `<article class="task-result-relationship">
+function renderTaskResultItem(item) {
+  const tags = Array.isArray(item.tags) ? item.tags : [];
+  const details = Array.isArray(item.details) ? item.details : [];
+  const evidence = Array.isArray(item.evidence) ? item.evidence : [];
+  return `<article class="task-result-item">
       <header>
-        <div><strong>${esc(fromName)} ${connector} ${esc(toName)}</strong><small>${esc(relationshipCategoryLabel(relationship.category))} / ${esc(relationship.subtype || "未细分")}</small></div>
-        <span class="task-result-action is-${esc(relationship.action || "processed")}">${esc(relationshipTaskActionLabel(relationship.action))}</span>
+        <div><strong>${esc(item.title || "未命名结果")}</strong>${item.subtitle ? `<small>${esc(item.subtitle)}</small>` : ""}</div>
       </header>
-      <div class="task-result-relationship-content">
-        <p><strong>关系内容</strong> ${esc(relationship.subtype || relationshipCategoryLabel(relationship.category))}${keywords.length ? `；${keywords.map(String).map(esc).join("、")}` : ""}</p>
-        <p><strong>当前状态</strong> ${esc(relationshipTaskStatusLabel(relationship.currentStatus))} · 置信度 ${Math.round(Number(relationship.confidence || 0) * 100)}% · ${esc(relationshipConfirmationLabel(relationship.confirmationStatus))}</p>
-      </div>
-      <details><summary>查看原文证据（${Number(relationship.evidenceCount || 0)} 条）</summary>${renderRelationshipTaskEvidence(relationship)}</details>
+      ${item.description ? `<p class="task-result-item-description">${esc(item.description)}</p>` : ""}
+      ${details.length ? `<dl class="task-result-item-details">${details.map((detail) => `<div><dt>${esc(detail.label || "详情")}</dt><dd>${esc(detail.value ?? "")}</dd></div>`).join("")}</dl>` : ""}
+      ${tags.length ? `<div class="task-result-tags">${tags.map((tag) => `<span>${esc(tag)}</span>`).join("")}</div>` : ""}
+      ${evidence.length ? `<details><summary>查看原文证据（${evidence.length} 条）</summary>${renderTaskResultEvidence(item)}</details>` : ""}
     </article>`;
-  }).join("");
-  const technicalResult = `<details class="task-result-technical"><summary>查看技术明细</summary><pre class="task-detail-result">${esc(JSON.stringify(result, null, 2).slice(0, 8000))}</pre></details>`;
-  return `<div class="task-result-readable">
-    <section class="task-result-section">
-      <h4>本次分析</h4>
-      <p><strong>分析内容</strong> ${esc(analysisSubject)}。</p>
-      <p><strong>分析范围</strong> ${esc(task.scopeSummary || "未指定")}${coveredChapterCount > 0 ? `，覆盖 ${coveredChapterCount} 章` : ""}${analysisTarget.includeAllSettings ? "，并参考全部作品设定" : ""}。</p>
-    </section>
-    <section class="task-result-section">
-      <h4>数据写入位置</h4>
-      <p><strong>作品</strong> ${esc(workTitle)}（<code>${esc(workId)}</code>）</p>
-      <p><strong>关系记录</strong> ${esc(storageTarget.database || "当前作品 SQLite 数据库")} → ${esc(storageTarget.entity || "人物关系")}（<code>${esc(storageTarget.table || "relationships")}</code> 表）</p>
-      <p><strong>任务摘要</strong> AI 分析任务记录（<code>${esc(storageTarget.taskResultTable || "analysis_tasks")}.result_json</code>）</p>
-      <div class="task-result-metrics" aria-label="关系分析写入统计">
-        <span><strong>${createdCount}</strong> 新建</span>
-        <span><strong>${updatedCount}</strong> 更新</span>
-        <span><strong>${unchangedCount}</strong> 保留</span>
-        <span><strong>${skipped.length}</strong> 跳过</span>
-      </div>
-    </section>
-    <section class="task-result-section">
-      <h4>分析出的关系（${relationships.length}）</h4>
-      ${relationshipCards || `<p class="task-result-empty">本次没有形成可展示的人物关系${skipped.length ? `，有 ${skipped.length} 个候选因证据或规则校验未通过而跳过` : ""}。</p>`}
-      ${missingRelationshipIds.length ? `<p class="task-result-warning">另有 ${missingRelationshipIds.length} 条旧任务关系记录目前已不存在，无法还原人物与关系内容。</p>` : ""}
-    </section>
-    ${technicalResult}
-  </div>`;
 }
 
 function renderTaskResult(task) {
-  if (task.taskType === "relationship-analysis") return renderRelationshipTaskResult(task);
-  return task.result && Object.keys(task.result).length
-    ? `<pre class="task-detail-result">${esc(JSON.stringify(task.result, null, 2).slice(0, 2000))}</pre>`
-    : "<p>尚无结果</p>";
+  const result = task.resultSummary && typeof task.resultSummary === "object" ? task.resultSummary : {};
+  const metrics = Array.isArray(result.metrics) ? result.metrics : [];
+  const storageTargets = Array.isArray(result.storageTargets) ? result.storageTargets : [];
+  const sections = Array.isArray(result.sections) ? result.sections : [];
+  return `<div class="task-result-readable">
+    <section class="task-result-section">
+      <h4>${esc(result.title || "分析结果")}</h4>
+      <p><strong>分析内容</strong> ${esc(result.analysisContent || `${analysisTaskTypeLabel(task.taskType)}；范围：${task.scopeSummary || "未指定"}`)}</p>
+      <p class="task-result-summary">${esc(result.summary || "任务尚未产生分析结果。")}</p>
+      ${result.restricted ? '<p class="task-result-warning">部分结果因当前账号权限受限而隐藏。</p>' : ""}
+    </section>
+    <section class="task-result-section">
+      <h4>数据写入位置</h4>
+      <p><strong>作品</strong> ${esc(state.work?.title || "当前作品")}（<code>${esc(task.workId || state.work?.id || "未知作品")}</code>）</p>
+      <div class="task-result-storage-list">${storageTargets.map((target) => `<article><strong>${esc(target.label || target.entity || "数据记录")}</strong><p>${esc(target.database || "当前作品 SQLite 数据库")} → ${esc(target.entity || "分析结果")}（<code>${esc(target.table || "analysis_tasks")}</code> 表）</p><small>写入 ${Number(target.count || 0)} 条${target.note ? ` · ${esc(target.note)}` : ""}</small></article>`).join("") || "<p>没有可说明的数据写入位置。</p>"}</div>
+      ${metrics.length ? `<div class="task-result-metrics" aria-label="分析结果统计">${metrics.map((item) => `<span><strong>${esc(item.value ?? 0)}</strong>${esc(item.label || "数量")}</span>`).join("")}</div>` : ""}
+    </section>
+    ${sections.map((section) => {
+      const items = Array.isArray(section.items) ? section.items : [];
+      const totalCount = Number(section.totalCount ?? items.length);
+      return `<section class="task-result-section"><h4>${esc(section.title || "分析结论")}（${totalCount}）</h4>${items.map(renderTaskResultItem).join("") || `<p class="task-result-empty">${esc(section.emptyMessage || "没有可展示的结果。")}</p>`}${totalCount > items.length ? `<p class="task-result-muted">可读摘要展示前 ${items.length} 项；完整 ${totalCount} 项可通过下方按钮查看完整 JSON。</p>` : ""}</section>`;
+    }).join("")}
+    <section class="task-result-json-loader">
+      <div><strong>完整返回 JSON</strong><p>点击后按需从服务器拉取本任务的完整 JSON，不做字符截断。</p></div>
+      <button class="ghost-button" type="button" data-load-task-result-json="${esc(task.id)}" ${task.hasResult ? "" : "disabled"}>${task.hasResult ? "查看完整 JSON" : "尚无 JSON 结果"}</button>
+      <div class="task-result-json-content" data-task-result-json-content></div>
+    </section>
+  </div>`;
+}
+
+function bindTaskResultActions(container) {
+  container.querySelectorAll("[data-load-task-result-json]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const content = button.closest(".task-result-json-loader")?.querySelector("[data-task-result-json-content]");
+    if (!content) return;
+    button.disabled = true;
+    button.textContent = "正在拉取完整 JSON";
+    try {
+      const payload = await api(`/api/tasks/${encodeURIComponent(button.dataset.loadTaskResultJson)}/result`);
+      content.innerHTML = `<pre>${esc(JSON.stringify(payload.result, null, 2))}</pre>`;
+      button.textContent = "完整 JSON 已加载";
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+      button.textContent = "重新加载完整 JSON";
+    }
+  }));
 }
 
 function openTaskDetailDialog(task, trace) {
@@ -4496,6 +4470,7 @@ function openTaskDetailDialog(task, trace) {
     "AI 分析详情",
     { submitLabel: "关闭", wide: true, trace: true });
   bindTaskTraceCallActions($("#dialog-fields"));
+  bindTaskResultActions($("#dialog-fields"));
 }
 
 function renderProviderCards(providers, models) {

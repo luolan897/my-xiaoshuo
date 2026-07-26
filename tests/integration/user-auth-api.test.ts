@@ -1033,6 +1033,25 @@ describe("用户、作品权限与操作者追踪 API", () => {
       }),
       targetedTask.body.data.id
     );
+    const secretTimeline = runtime.store.createTimelineEvent(workId, {
+      name: "TOP_SECRET_TIMELINE",
+      description: "TOP_SECRET_TIMELINE_DESCRIPTION",
+      eventType: "conflict",
+      timeLabel: "秘密年代",
+      chapterIds: [],
+      participantIds: [],
+      location: "秘密地点",
+      impactScope: "秘密范围"
+    }, "manual", "permission-readable-result-test");
+    const timelineTask = await owner.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ taskType: "timeline-analysis", scope: { type: "book" } })
+      .expect(201);
+    runtime.store.updateTask(String(timelineTask.body.data.id), {
+      status: "completed",
+      progress: 100,
+      result: { eventIds: [secretTimeline.id] }
+    });
 
     const noContentPermissions = Object.fromEntries(Object.keys(basePermissions).map((module) => [module, "none"]));
     await owner.agent.patch(`/api/works/${workId}/members/${analysisOnly.user.userId}`)
@@ -1051,6 +1070,20 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(protectedTaskDetail.body.data.result.relationshipResults[0].toCharacterName).toBeUndefined();
     expect(protectedTaskDetail.body.data.result.analysisTarget.characterNames).toBeUndefined();
     expect(JSON.stringify(protectedTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedReadableTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}/detail`).expect(200);
+    expect(protectedReadableTaskDetail.body.data).not.toHaveProperty("result");
+    expect(protectedReadableTaskDetail.body.data.resultSummary.restricted).toBe(true);
+    expect(protectedReadableTaskDetail.body.data.resultSummary.sections).toEqual([]);
+    expect(JSON.stringify(protectedReadableTaskDetail.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedFullTaskResult = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}/result`).expect(200);
+    expect(protectedFullTaskResult.body.data.result.relationshipResults[0].fromCharacterName).toBeUndefined();
+    expect(protectedFullTaskResult.body.data.result.relationshipResults[0].toCharacterName).toBeUndefined();
+    expect(protectedFullTaskResult.body.data.result.analysisTarget.characterNames).toBeUndefined();
+    expect(JSON.stringify(protectedFullTaskResult.body.data)).not.toContain("TOP_SECRET_CHARACTER");
+    const protectedTimelineDetail = await analysisOnly.agent.get(`/api/tasks/${timelineTask.body.data.id}/detail`).expect(200);
+    expect(protectedTimelineDetail.body.data.resultSummary.restricted).toBe(true);
+    expect(protectedTimelineDetail.body.data.resultSummary.sections).toEqual([]);
+    expect(JSON.stringify(protectedTimelineDetail.body.data)).not.toContain("TOP_SECRET_TIMELINE");
     const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
