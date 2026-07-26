@@ -520,12 +520,80 @@ function redactOrganizationMembers(record: Record<string, unknown>, permissions:
 
 function redactTaskCharacterNames(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
   const { scopeSummaryWithoutCharacterNames, ...result } = record;
-  if (permissions.characters !== "none") return result;
-  if (typeof scopeSummaryWithoutCharacterNames === "string") result.scopeSummary = scopeSummaryWithoutCharacterNames;
-  const scope = recordValue(result.scope);
-  if (scope) {
-    const { targetCharacters: _targetCharacters, ...redactedScope } = scope;
-    result.scope = redactedScope;
+  const proseRestricted = permissions.prose === "none";
+  const proseScope = recordValue(result.scope);
+  const selectionScopeRestricted = proseRestricted
+    && (proseScope?.type === "selection" || String(result.scopeSummary ?? "").startsWith("选定内容："));
+  if (selectionScopeRestricted) {
+    if (proseScope) {
+      const { selection: _selection, ...redactedScope } = proseScope;
+      result.scope = redactedScope;
+    }
+    result.scopeSummary = "选定内容（正文读取权限受限）";
+    if (Array.isArray(result.scopeDetails)) {
+      result.scopeDetails = result.scopeDetails.map((item) => {
+        const detail = recordValue(item);
+        return detail?.type === "selection" ? { type: "selection", restricted: true } : item;
+      });
+    }
+  }
+  const characterRestricted = permissions.characters === "none";
+  if (characterRestricted) {
+    if (!selectionScopeRestricted && typeof scopeSummaryWithoutCharacterNames === "string") result.scopeSummary = scopeSummaryWithoutCharacterNames;
+    const scope = recordValue(result.scope);
+    if (scope) {
+      const { targetCharacters: _targetCharacters, ...redactedScope } = scope;
+      result.scope = redactedScope;
+    }
+    const taskResult = recordValue(result.result);
+    if (taskResult) {
+      const redactedTaskResult = { ...taskResult };
+      if (Array.isArray(taskResult.relationshipResults)) {
+        redactedTaskResult.relationshipResults = taskResult.relationshipResults.map((value) => {
+          const relationship = recordValue(value);
+          if (!relationship) return value;
+          const {
+            fromCharacterName: _fromCharacterName,
+            toCharacterName: _toCharacterName,
+            ...redactedRelationship
+          } = relationship;
+          return redactedRelationship;
+        });
+      }
+      const analysisTarget = recordValue(taskResult.analysisTarget);
+      if (analysisTarget) {
+        const { characterNames: _characterNames, ...redactedAnalysisTarget } = analysisTarget;
+        redactedTaskResult.analysisTarget = redactedAnalysisTarget;
+      }
+      result.result = redactedTaskResult;
+    }
+  }
+  const resultSummary = recordValue(result.resultSummary);
+  const characterSensitiveTask = ["character-extraction", "character-summary", "character-identity-audit", "relationship-analysis"]
+    .includes(String(result.taskType));
+  const requiredResultModule = {
+    "chapter-analysis": "prose",
+    "character-extraction": "characters",
+    "character-summary": "characters",
+    "character-identity-audit": "reviews",
+    "timeline-analysis": "timeline",
+    "relationship-analysis": "relationships",
+    "worldview-analysis": "settings",
+    "setting-extraction": "settings",
+    "consistency-check": "reviews",
+    "book-analysis": "prose",
+    structure: "outlines",
+    "report-update": "prose"
+  }[String(result.taskType)] as keyof WorkModulePermissions | undefined;
+  const resultRestricted = requiredResultModule !== undefined && permissions[requiredResultModule] === "none";
+  if (resultSummary && (resultRestricted || (characterRestricted && characterSensitiveTask))) {
+    result.resultSummary = {
+      ...resultSummary,
+      analysisContent: `${String(resultSummary.title ?? "AI 分析")}；范围：${String(result.scopeSummary ?? "未指定")}`,
+      summary: "当前账号缺少相关资料的读取权限，无法展示对应的可读结论。",
+      sections: [],
+      restricted: true
+    };
   }
   return result;
 }
@@ -1460,6 +1528,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
     data(response, ai.startAutoRunBatch(request.params.workId));
+  });
+  app.get("/api/tasks/:taskId/detail", (request, response) => data(
+    response,
+    redactTaskCharacterNames(store.getTaskDetail(request.params.taskId), requestPermissions(request))
+  ));
+  app.get("/api/tasks/:taskId/result", (request, response) => {
+    const task = store.getTaskResultPayload(request.params.taskId);
+    const redacted = redactTaskCharacterNames(
+      task,
+      requestPermissions(request)
+    );
+    data(response, { taskId: task.id, result: redacted.result });
   });
   app.get("/api/tasks/:taskId", (request, response) => data(
     response,

@@ -297,8 +297,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260726-task-progress-ring-trace-lazy-load');
-    expect(page.text).toContain('/styles.css?v=20260726-task-progress-ring-trace-lazy-load');
+    expect(page.text).toContain('/app.js?v=20260726-readable-analysis-results-v7');
+    expect(page.text).toContain('/styles.css?v=20260726-task-result-heading-gap-v7');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -507,6 +507,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}"');
     expect(application.text).toContain('class="task-progress-track" role="progressbar"');
     expect(styles.text).toContain(".task-status-badge.is-running");
+    expect(styles.text).toContain("--task-running: #356f94;");
+    expect(styles.text).toContain("--task-running: #7fb8d8;");
+    expect(styles.text).toContain("--task-status-color: var(--task-running);");
+    expect(styles.text).toContain(".task-progress.is-running .task-progress-fill { background: var(--task-running); }");
+    expect(styles.text).toContain(".task-progress.is-review .task-progress-fill, .task-progress.is-completed .task-progress-fill { background: var(--green); }");
     expect(styles.text).toContain("@keyframes task-status-running-breathe");
     expect(styles.text).toContain("@keyframes task-progress-waiting");
     expect(styles.text).toContain("@media (prefers-reduced-motion: reduce)");

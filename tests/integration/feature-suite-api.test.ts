@@ -883,7 +883,36 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "book" } }).expect(201);
     expect(Object.keys(task.body.data.sourceVersions)).toHaveLength(3);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
-    expect(result.body.data.result).toMatchObject({ candidateCount: 1, rawCandidateCount: 2, coveredChapterCount: 3, fallbackSegmentCount: 0 });
+    expect(result.body.data.result).toMatchObject({
+      candidateCount: 1,
+      createdCount: 1,
+      updatedCount: 0,
+      unchangedCount: 0,
+      rawCandidateCount: 2,
+      coveredChapterCount: 3,
+      fallbackSegmentCount: 0,
+      analysisTarget: {
+        mode: "all-relationships",
+        scopeType: "book",
+        coveredChapterCount: 3
+      },
+      relationshipResults: [{
+        action: "created",
+        category: "social",
+        subtype: "朋友",
+        keywords: ["长期信任", "共同守望"],
+        currentStatus: "active",
+        evidenceCount: 1,
+        evidence: [{
+          chapterTitle: "第一章 埋线",
+          quote: "我们一直是朋友"
+        }]
+      }]
+    });
+    expect([
+      result.body.data.result.relationshipResults[0].fromCharacterName,
+      result.body.data.result.relationshipResults[0].toCharacterName
+    ].sort()).toEqual(["林舟", "沈星"].sort());
     expect(result.body.data.result.policyOmittedSegmentCount).toBeGreaterThan(0);
     const prompts = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).messages[1].content as string);
     expect(prompts.filter((prompt) => (prompt.match(/<CHAPTER id=/gu) ?? []).length > 1)).toHaveLength(1);
@@ -897,6 +926,24 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data).toHaveLength(1);
     expect(relationships.body.data[0]).toMatchObject({ subtype: "朋友", keywords: ["长期信任", "共同守望"], confirmationStatus: "pending" });
+    runtime.database.run(
+      "UPDATE analysis_tasks SET result_json = ? WHERE id = ?",
+      JSON.stringify({ relationshipIds: [relationships.body.data[0].id], candidateCount: 1, coveredChapterCount: 3 }),
+      task.body.data.id
+    );
+    const historicalTask = await request(runtime.app).get(`/api/tasks/${task.body.data.id}`).expect(200);
+    expect(historicalTask.body.data.result).toMatchObject({
+      relationshipResults: [{
+        relationshipId: relationships.body.data[0].id,
+        snapshotSource: "current-record",
+        subtype: "朋友"
+      }]
+    });
+    expect(historicalTask.body.data.result).not.toHaveProperty("storageTarget");
+    expect([
+      historicalTask.body.data.result.relationshipResults[0].fromCharacterName,
+      historicalTask.body.data.result.relationshipResults[0].toCharacterName
+    ].sort()).toEqual(["林舟", "沈星"].sort());
   });
 
   it("关系分析可将所有设定和额外提示加入每个抽取批次", async () => {
@@ -1450,7 +1497,22 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     }).expect(201);
     const modelId = await configureAi(runtime, workId);
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "chapter", chapterId } }).expect(201);
-    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      createdCount: 0,
+      updatedCount: 1,
+      unchangedCount: 0,
+      relationshipResults: [{
+        relationshipId: weaker.body.data.id,
+        action: "updated",
+        subtype: "盟友",
+        keywords: ["旧有信任", "正式结盟", "共同守望"]
+      }]
+    });
+    expect([
+      result.body.data.result.relationshipResults[0].fromCharacterName,
+      result.body.data.result.relationshipResults[0].toCharacterName
+    ].sort()).toEqual(["林舟", "沈星"].sort());
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data).toHaveLength(1);
     expect(relationships.body.data[0]).toMatchObject({ id: weaker.body.data.id, subtype: "盟友", confidence: 0.95 });
