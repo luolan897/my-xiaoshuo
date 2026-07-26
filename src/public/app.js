@@ -52,6 +52,24 @@ import {
   resizeCropRect
 } from "/avatar-crop.js?v=20260725-avatar-crop";
 
+const defaultPageSizes = Object.freeze({
+  characters: 30,
+  analysisTasks: 30,
+  fileVersions: 30
+});
+
+function normalizePageSize(value, fallback = 30) {
+  const candidate = Number(value);
+  return Number.isInteger(candidate) && candidate >= 10 && candidate <= 100 ? candidate : fallback;
+}
+
+function normalizePageSizes(value) {
+  return Object.fromEntries(Object.entries(defaultPageSizes).map(([module, fallback]) => [
+    module,
+    normalizePageSize(value?.[module], fallback)
+  ]));
+}
+
 const state = {
   user: null,
   csrfToken: null,
@@ -74,6 +92,7 @@ const state = {
   dirty: false,
   pendingImportMeta: null,
   pendingCoverWorkId: null,
+  uiSettings: { toastPosition: "bottom-right", pageSizes: { ...defaultPageSizes } },
   relationshipGraph: null,
   galaxy: null,
   relationshipMindMap: null,
@@ -812,6 +831,7 @@ let entityEditorDirty = false;
 let entityEditorReadOnly = false;
 let chapterEditorReadOnly = true;
 let characterListPage = 1;
+let taskListPage = 1;
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
 let settingEditorItem = null;
@@ -1927,7 +1947,7 @@ async function api(path, options = {}) {
   return payload.data;
 }
 
-async function apiPage(path, page = 1, limit = 50) {
+async function apiPage(path, page = 1, limit = 30) {
   const separator = path.includes("?") ? "&" : "?";
   const result = await api(`${path}${separator}page=${page}&limit=${limit}`);
   if (Array.isArray(result)) return { items: result, page, limit, hasMore: false, nextPage: null };
@@ -2036,7 +2056,12 @@ function applyAuthenticatedUser(session) {
 
 function applyPlatformUiSettings(settings) {
   const position = settings?.toastPosition === "top-right" ? "top-right" : "bottom-right";
+  state.uiSettings = { toastPosition: position, pageSizes: normalizePageSizes(settings?.pageSizes) };
   $("#toast-region").dataset.position = position;
+}
+
+function pageSizeFor(module) {
+  return normalizePageSize(state.uiSettings.pageSizes[module], defaultPageSizes[module] ?? 30);
 }
 
 async function loadPlatformUiSettings() {
@@ -2531,6 +2556,10 @@ async function openPlatformUiSettingsDialog() {
   try {
     const settings = await api("/api/platform/ui-settings");
     $("#toast-position").value = settings.toastPosition === "top-right" ? "top-right" : "bottom-right";
+    const pageSizes = normalizePageSizes(settings.pageSizes);
+    $("#page-size-characters").value = String(pageSizes.characters);
+    $("#page-size-analysis-tasks").value = String(pageSizes.analysisTasks);
+    $("#page-size-file-versions").value = String(pageSizes.fileVersions);
     $("#platform-ui-settings-dialog").showModal();
   } catch (error) {
     toast(error.message, "error");
@@ -2808,6 +2837,7 @@ function resetWorkScopedUiCaches() {
   state.characters = [];
   state.settings = [];
   characterListPage = 1;
+  taskListPage = 1;
   state.collapsedVolumeIds.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
@@ -3060,7 +3090,7 @@ async function showModule(module) {
     if (module === "outlines") await renderOutlines();
     if (module === "relationships") await renderRelationships();
     if (module === "reviews") await renderReviews();
-    if (module === "tasks") await renderTasks();
+    if (module === "tasks") await renderTasks(taskListPage);
     if (module === "ai-settings") await renderBookAiSettings();
   } catch (error) {
     $("#module-content").innerHTML = `<div class="empty-state"><b>载入失败</b>${esc(error.message)}</div>`;
@@ -3475,13 +3505,14 @@ async function renderSettings() {
 
 async function renderCharacters(page = characterListPage) {
   const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
+  const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
-    hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page),
+    hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page, pageSize),
     canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
-    ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, 50)
+    ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, pageSize)
     : characterSource;
   if (!characterPage.items.length && page > 1) return renderCharacters(page - 1);
   characterListPage = characterPage.page;
@@ -3906,27 +3937,36 @@ async function renderReviews() {
   }));
 }
 
-async function renderTasks() {
+async function renderTasks(page = taskListPage) {
   stopTaskProgressRefresh();
-  const [tasks, settings] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/tasks?view=summary`),
+  const pageSize = pageSizeFor("analysisTasks");
+  const [taskPage, settings] = await Promise.all([
+    apiPage(`/api/works/${state.work.id}/tasks`, page, pageSize),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
       : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
   ]);
-  mountModuleCount(tasks.length);
+  if (!taskPage.items.length && page > 1) return renderTasks(page - 1);
+  taskListPage = taskPage.page;
+  const tasks = taskPage.items;
+  const taskTotal = Number(taskPage.total ?? taskPage.stats?.total ?? tasks.length);
+  mountModuleCount(taskTotal);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
-  const pendingCount = tasks.filter((item) => item.status === "pending").length;
-  const runningTasks = tasks.filter((item) => item.status === "running");
-  const runningCount = runningTasks.length;
+  const pendingCount = Number(taskPage.stats?.pendingCount ?? 0);
+  const runningCount = Number(taskPage.stats?.runningCount ?? 0);
   const activeTaskCount = pendingCount + runningCount;
-  const runningProgress = runningCount
-    ? Math.round(runningTasks.reduce((total, item) => total + Math.min(100, Math.max(0, Number(item.progress) || 0)), 0) / runningCount)
-    : 0;
+  const runningProgress = runningCount ? analysisTaskProgressValue(taskPage.stats?.runningProgress) : 0;
   const visibleTaskIds = new Set(tasks.map((item) => String(item.id)));
   for (const taskId of taskStatusSnapshots.keys()) {
     if (!visibleTaskIds.has(taskId)) taskStatusSnapshots.delete(taskId);
   }
+  const pagination = tasks.length && (taskPage.page > 1 || taskPage.hasMore)
+    ? `<nav class="module-pagination" aria-label="AI 分析任务分页">
+      <button type="button" data-task-page="${taskPage.page - 1}" ${taskPage.page <= 1 ? "disabled" : ""}>上一页</button>
+      <span>第 ${taskPage.page}/${Math.max(1, Math.ceil(taskTotal / taskPage.limit))} 页 · 本页 ${tasks.length} 个任务 · 共 ${taskTotal} 个任务</span>
+      <button type="button" data-task-page="${taskPage.nextPage ?? taskPage.page + 1}" ${taskPage.hasMore ? "" : "disabled"}>下一页</button>
+    </nav>`
+    : "";
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel ${canConfigureAutoRun ? "" : "hidden"}" aria-labelledby="task-auto-run-title">
       <div class="task-auto-run-copy">
@@ -3958,7 +3998,13 @@ async function renderTasks() {
         ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
-    </tr>`).join("")}</tbody></table>` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
+    </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
+
+  $("#module-content").querySelectorAll("[data-task-page]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    $("#module-content").querySelectorAll("[data-task-page]").forEach((control) => { control.disabled = true; });
+    await renderTasks(Number(button.dataset.taskPage));
+  }));
 
   $("#task-auto-run-save")?.addEventListener("click", async () => {
     const button = $("#task-auto-run-save");
@@ -4750,42 +4796,77 @@ function commitRelationshipKeywordInputs(container) {
 
 function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   void discardPendingMarkdownAttachments();
+  const dialog = $("#form-dialog");
+  const form = $("#dynamic-form");
+  const submit = $("#dialog-submit");
+  const submitStatus = $("#dialog-submit-status");
+  const submitStatusMessage = $("#dialog-submit-status-message");
+  const submitLabel = options.submitLabel ?? "保存";
+  let submitting = false;
+  let disabledStates = [];
   $("#dialog-title").textContent = title;
   $("#dialog-eyebrow").textContent = eyebrow;
   $("#dialog-meta").textContent = options.meta ?? "";
   $("#dialog-meta").classList.toggle("hidden", !options.meta);
   $("#dialog-fields").innerHTML = fields;
-  $("#dialog-submit").textContent = options.submitLabel ?? "保存";
+  submit.textContent = submitLabel;
+  submitStatusMessage.textContent = options.pendingMessage ?? "正在提交，请稍候";
+  submitStatus.classList.add("hidden");
+  form.classList.remove("is-submitting");
+  form.removeAttribute("aria-busy");
   $("#dynamic-form .dialog-actions [value='cancel']").classList.toggle("hidden", Boolean(options.hideCancel));
-  $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
-  $("#form-dialog").classList.toggle("trace-dialog", Boolean(options.trace));
+  dialog.classList.toggle("wide-dialog", Boolean(options.wide));
+  dialog.classList.toggle("trace-dialog", Boolean(options.trace));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
   bindVditorEditors($("#dialog-fields"));
-  const form = $("#dynamic-form");
   form.onclick = null;
   form.onkeydown = null;
+  dialog.oncancel = (event) => {
+    if (submitting) event.preventDefault();
+  };
   form.onsubmit = async (event) => {
+    if (submitting) {
+      event.preventDefault();
+      return;
+    }
     if (event.submitter?.value === "cancel") {
       void discardPendingMarkdownAttachments();
       return;
     }
     event.preventDefault();
-    const submit = $("#dialog-submit");
-    submit.disabled = true;
+    submitting = true;
+    form.setAttribute("aria-busy", "true");
+    form.classList.add("is-submitting");
+    submitStatus.classList.remove("hidden");
+    submit.textContent = options.pendingLabel ?? "处理中…";
     try {
       commitRelationshipKeywordInputs(form);
-      await onSubmit(new FormData(form));
+      const formData = new FormData(form);
+      disabledStates = [...form.elements].map((control) => [control, control.disabled]);
+      disabledStates.forEach(([control]) => {
+        control.disabled = true;
+      });
+      await onSubmit(formData);
       const markdown = [...form.querySelectorAll("[data-vditor-value]")].map((textarea) => textarea.value).join("\n\n");
       await cleanupPendingMarkdownAttachments(markdown);
-      $("#form-dialog").close();
+      dialog.close();
     } catch (error) {
-      toast(error.message, "error");
+      const message = error instanceof Error ? error.message : "未知错误";
+      toast(`${options.errorPrefix ?? ""}${message}`, "error");
     } finally {
-      submit.disabled = false;
+      disabledStates.forEach(([control, wasDisabled]) => {
+        control.disabled = wasDisabled;
+      });
+      disabledStates = [];
+      submitting = false;
+      form.removeAttribute("aria-busy");
+      form.classList.remove("is-submitting");
+      submitStatus.classList.add("hidden");
+      submit.textContent = submitLabel;
     }
   };
-  $("#form-dialog").showModal();
+  dialog.showModal();
   $("#dialog-fields").scrollTop = 0;
 }
 
@@ -6210,7 +6291,14 @@ async function openTaskDialog() {
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { type: "chapter", chapterId: form.get("chapterId"), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope } });
-    await renderTasks();
+    taskListPage = 1;
+    toast("分析任务已创建，已进入任务队列");
+    void renderTasks(1).catch((error) => toast(`任务已创建，但列表刷新失败：${error.message}`, "error"));
+  }, "AI 分析", {
+    submitLabel: "创建任务",
+    pendingLabel: "创建中…",
+    pendingMessage: "正在创建分析任务，请稍候",
+    errorPrefix: "任务创建失败："
   });
   const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
   const scopeTypeSelect = $("#dialog-fields").querySelector('select[name="scopeType"]');
@@ -6708,7 +6796,7 @@ async function loadImportHistoryPage(page) {
   const workId = state.work?.id;
   if (!workId || !page) return;
   const requestId = ++importHistoryRequestId;
-  const result = await apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25);
+  const result = await apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, pageSizeFor("fileVersions"));
   if (requestId !== importHistoryRequestId || state.work?.id !== workId || !$("#import-history-dialog").open) return;
   importHistoryRecords = page === 1 ? result.items : [...importHistoryRecords, ...result.items];
   importHistoryNextPage = result.nextPage;
@@ -7309,11 +7397,20 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   try {
     const settings = await api("/api/platform/ui-settings", {
       method: "PATCH",
-      body: { toastPosition: $("#toast-position").value }
+      body: {
+        toastPosition: $("#toast-position").value,
+        pageSizes: {
+          characters: Number($("#page-size-characters").value),
+          analysisTasks: Number($("#page-size-analysis-tasks").value),
+          fileVersions: Number($("#page-size-file-versions").value)
+        }
+      }
     });
     applyPlatformUiSettings(settings);
+    characterListPage = 1;
+    taskListPage = 1;
     $("#platform-ui-settings-dialog").close();
-    toast("界面通知设置已保存");
+    toast("界面与分页设置已保存");
   } catch (error) {
     toast(error.message, "error");
   } finally {

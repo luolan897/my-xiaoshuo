@@ -375,6 +375,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS platform_ui_settings (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+        page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
         updated_at TEXT NOT NULL
       );
 
@@ -1667,6 +1668,23 @@ export class Database {
         this.run("CREATE INDEX IF NOT EXISTS idx_calls_task ON ai_calls(task_id, created_at, id)");
         this.run("CREATE INDEX IF NOT EXISTS idx_ai_call_traces_task ON ai_call_traces(task_id, created_at, call_id)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (41, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(42)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(platform_ui_settings)").map((row) => String(row.name)));
+        if (!columns.has("page_sizes_json")) {
+          this.run(`ALTER TABLE platform_ui_settings ADD COLUMN page_sizes_json TEXT NOT NULL
+            DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}'
+            CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object')`);
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (42, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

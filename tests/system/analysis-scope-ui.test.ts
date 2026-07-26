@@ -5,9 +5,10 @@ import { describe, expect, it } from "vitest";
 describe("AI 分析范围交互", () => {
   it("选择全书时禁用章节选项，并在切回指定章节后恢复", async () => {
     const publicPath = join(process.cwd(), "src/public");
-    const [application, styles] = await Promise.all([
+    const [application, styles, page] = await Promise.all([
       readFile(join(publicPath, "app.js"), "utf8"),
-      readFile(join(publicPath, "styles.css"), "utf8")
+      readFile(join(publicPath, "styles.css"), "utf8"),
+      readFile(join(publicPath, "index.html"), "utf8")
     ]);
 
     expect(application).toContain('allSettingsOption.textContent = "全书 + 所有设定"');
@@ -33,11 +34,23 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('relationshipCharacterSearch.addEventListener("input", filterRelationshipCharacters)');
     expect(application).toContain('setRelationshipCharacterBubbleOpen(false)');
     expect(application).toContain("includeAllSettings: true");
+    expect(application).toContain('form.setAttribute("aria-busy", "true")');
+    expect(application).toContain("if (submitting)");
+    expect(application).toContain("control.disabled = true");
+    expect(application).toContain("dialog.oncancel");
+    expect(application).toContain('pendingLabel: "创建中…"');
+    expect(application).toContain('pendingMessage: "正在创建分析任务，请稍候"');
+    expect(application).toContain('errorPrefix: "任务创建失败："');
+    expect(application).toContain('void renderTasks(1).catch((error) => toast(`任务已创建，但列表刷新失败：${error.message}`, "error"))');
+    expect(page).toContain('id="dialog-submit-status"');
+    expect(page).toContain('class="dialog-submit-progress" role="progressbar"');
     expect(styles).toContain(".task-chapter-field.is-disabled { opacity: .48; }");
     expect(styles).toContain(".task-chapter-field select:disabled { cursor: not-allowed; }");
     expect(styles).toContain(".relationship-character-bubble {");
     expect(styles).toContain(".relationship-character-options {");
     expect(styles).toContain(".relationship-analysis-helper {");
     expect(styles).toContain(".relationship-overwrite-card {");
+    expect(styles).toContain(".dialog-submit-status {");
+    expect(styles).toContain("@keyframes dialog-submit-progress");
   });
 });

@@ -339,9 +339,18 @@ const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional()
 });
 
-const platformUiSettingsSchema = z.object({
-  toastPosition: z.enum(["bottom-right", "top-right"])
+const platformPageSizesSchema = z.object({
+  characters: z.number().int().min(10).max(100).optional(),
+  analysisTasks: z.number().int().min(10).max(100).optional(),
+  fileVersions: z.number().int().min(10).max(100).optional()
 }).strict();
+
+const platformUiSettingsSchema = z.object({
+  toastPosition: z.enum(["bottom-right", "top-right"]).optional(),
+  pageSizes: platformPageSizesSchema.optional()
+}).strict().refine((input) => input.toastPosition !== undefined || input.pageSizes !== undefined, {
+  message: "至少需要提供一项界面设置"
+});
 
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
@@ -507,6 +516,18 @@ function redactRaceMembers(record: Record<string, unknown>, permissions: WorkMod
 
 function redactOrganizationMembers(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
   return permissions.characters === "none" ? { ...record, memberIds: [], members: [] } : record;
+}
+
+function redactTaskCharacterNames(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  const { scopeSummaryWithoutCharacterNames, ...result } = record;
+  if (permissions.characters !== "none") return result;
+  if (typeof scopeSummaryWithoutCharacterNames === "string") result.scopeSummary = scopeSummaryWithoutCharacterNames;
+  const scope = recordValue(result.scope);
+  if (scope) {
+    const { targetCharacters: _targetCharacters, ...redactedScope } = scope;
+    result.scope = redactedScope;
+  }
+  return result;
 }
 
 function redactMergeRecords(
@@ -1424,26 +1445,38 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/tasks", (request, response) => {
-    const pagination = parsePagination(request.query);
-    const summary = request.query.view === "summary";
-    data(response, pagination
-      ? (summary ? store.listTaskSummariesPage(request.params.workId, pagination) : store.listTasksPage(request.params.workId, pagination))
-      : store.listTasks(request.params.workId));
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, mapRecords(store.listTaskSummariesPage(
+      request.params.workId,
+      parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 }
+    ), (task) => redactTaskCharacterNames(task, permissions)));
   });
   app.post("/api/works/:workId/tasks", (request, response) => {
     const input = parse(analysisTaskSchema, request.body);
-    data(response, store.createTask(request.params.workId, input), 201);
+    data(response, redactTaskCharacterNames(
+      store.createTask(request.params.workId, input),
+      requestPermissions(request, request.params.workId)
+    ), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
     data(response, ai.startAutoRunBatch(request.params.workId));
   });
-  app.get("/api/tasks/:taskId", (request, response) => data(response, store.getTask(request.params.taskId)));
+  app.get("/api/tasks/:taskId", (request, response) => data(
+    response,
+    redactTaskCharacterNames(store.getTask(request.params.taskId), requestPermissions(request))
+  ));
   app.get("/api/tasks/:taskId/trace", (request, response) => data(response, ai.getTaskTrace(request.params.taskId)));
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
-    data(response, await ai.runTask(request.params.taskId, input.modelId));
+    data(response, redactTaskCharacterNames(
+      await ai.runTask(request.params.taskId, input.modelId),
+      requestPermissions(request)
+    ));
   });
-  app.post("/api/tasks/:taskId/cancel", (request, response) => data(response, ai.cancelTask(request.params.taskId)));
+  app.post("/api/tasks/:taskId/cancel", (request, response) => data(
+    response,
+    redactTaskCharacterNames(ai.cancelTask(request.params.taskId), requestPermissions(request))
+  ));
 
   app.get("/api/platform/ai/providers", (request, response) => {
     const pagination = parsePagination(request.query);

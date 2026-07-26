@@ -1000,15 +1000,20 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       scope: {
         type: "book",
         includeAllSettings: true,
-        characterIds: [linId],
+        characterIds: [linId, shenId],
         additionalPrompt: "重点检查失联前后的关系连续性。"
       }
     }).expect(201);
-    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定 · 定向 1 人");
+    expect(task.body.data.scopeSummary).toBe("全书 + 所有设定 · 定向 2 人：林舟、沈星");
+    expect(task.body.data.scope.targetCharacters).toEqual([{ id: linId, name: "林舟" }, { id: shenId, name: "沈星" }]);
+    await request(runtime.app).patch(`/api/characters/${linId}`).send({ name: "林舟（调查员）" }).expect(200);
+    const taskPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
+    expect(taskPage.body.data.items.find((item: { id: string }) => item.id === task.body.data.id)?.scopeSummary)
+      .toBe("全书 + 所有设定 · 定向 2 人：林舟、沈星");
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({
       candidateCount: 1,
-      targetedCharacterIds: [linId],
+      targetedCharacterIds: [linId, shenId],
       targetedEvidenceCount: 1,
       aggregationBatchCount: 1,
       replacedRelationshipCount: 0
@@ -1088,7 +1093,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       scope: { type: "book", characterIds: [linId], replaceExistingRelationships: true }
     });
     const task = await createTask().expect(201);
-    expect(task.body.data.scopeSummary).toBe("全书 · 定向 1 人 · 覆盖已有关系");
+    expect(task.body.data.scopeSummary).toBe("全书 · 定向 1 人：林舟 · 覆盖已有关系");
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result.replacedRelationshipCount).toBe(2);
     const replaced = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);

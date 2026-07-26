@@ -40,8 +40,11 @@ describe("作品、导入和章节版本 API", () => {
     expect(versions.body.data[0].source).toBe("auto");
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
-    expect(tasks.body.data).toHaveLength(1);
-    expect(tasks.body.data[0]).toMatchObject({ status: "pending", sourceVersions: { [chapter.id]: 3 } });
+    expect(tasks.body.data.items).toHaveLength(1);
+    expect(tasks.body.data.items[0]).toMatchObject({ status: "pending" });
+    expect(tasks.body.data.items[0]).not.toHaveProperty("sourceVersions");
+    const task = await request(runtime.app).get(`/api/tasks/${tasks.body.data.items[0].id}`).expect(200);
+    expect(task.body.data).toMatchObject({ status: "pending", sourceVersions: { [chapter.id]: 3 } });
 
     const restored = await request(runtime.app).post(`/api/chapters/${chapter.id}/restore`).send({ versionNo: 1 }).expect(200);
     expect(restored.body.data).toMatchObject({ content: "林舟收到信号。", versionNo: 4 });
