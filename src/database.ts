@@ -427,6 +427,12 @@ export class Database {
         failure TEXT,
         input_chars INTEGER NOT NULL DEFAULT 0,
         output_chars INTEGER NOT NULL DEFAULT 0,
+        input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(input_tokens >= 0),
+        output_tokens INTEGER NOT NULL DEFAULT 0 CHECK(output_tokens >= 0),
+        cached_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cached_input_tokens >= 0),
+        cache_eligible_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cache_eligible_input_tokens >= 0),
+        cache_usage_available INTEGER NOT NULL DEFAULT 0 CHECK(cache_usage_available IN (0, 1)),
+        token_usage_source TEXT NOT NULL DEFAULT 'estimated' CHECK(token_usage_source IN ('reported', 'estimated', 'mixed')),
         created_at TEXT NOT NULL,
         completed_at TEXT
       );
@@ -2078,6 +2084,45 @@ export class Database {
             CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages'))`);
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (47, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(48)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_calls)").map((row) => String(row.name)));
+        if (!columns.has("input_tokens")) {
+          this.run("ALTER TABLE ai_calls ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(input_tokens >= 0)");
+        }
+        if (!columns.has("output_tokens")) {
+          this.run("ALTER TABLE ai_calls ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0 CHECK(output_tokens >= 0)");
+        }
+        if (!columns.has("cached_input_tokens")) {
+          this.run("ALTER TABLE ai_calls ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cached_input_tokens >= 0)");
+        }
+        if (!columns.has("cache_eligible_input_tokens")) {
+          this.run("ALTER TABLE ai_calls ADD COLUMN cache_eligible_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK(cache_eligible_input_tokens >= 0)");
+        }
+        if (!columns.has("cache_usage_available")) {
+          this.run("ALTER TABLE ai_calls ADD COLUMN cache_usage_available INTEGER NOT NULL DEFAULT 0 CHECK(cache_usage_available IN (0, 1))");
+        }
+        if (!columns.has("token_usage_source")) {
+          this.run(`ALTER TABLE ai_calls ADD COLUMN token_usage_source TEXT NOT NULL DEFAULT 'estimated'
+            CHECK(token_usage_source IN ('reported', 'estimated', 'mixed'))`);
+        }
+        this.run(
+          `UPDATE ai_calls
+           SET input_tokens = CASE WHEN input_chars > 0 THEN input_chars ELSE 0 END,
+               output_tokens = CASE WHEN output_chars > 0 THEN output_chars ELSE 0 END,
+               token_usage_source = 'estimated'
+           WHERE status = 'completed' AND input_tokens = 0 AND output_tokens = 0`
+        );
+        this.run("CREATE INDEX IF NOT EXISTS idx_calls_usage_daily ON ai_calls(created_at, work_id)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (48, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

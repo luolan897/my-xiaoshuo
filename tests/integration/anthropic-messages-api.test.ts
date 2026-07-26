@@ -152,6 +152,14 @@ describe("Anthropic Messages 供应商", () => {
       expect.objectContaining({ type: "thinking", content: "工具结果足够回答。" })
     ]));
     expect(completionCount).toBe(2);
+    const usage = await request(runtime.app).get(`/api/works/${workId}/ai-settings/usage`).expect(200);
+    expect(usage.body.data.summary).toMatchObject({
+      totalTokens: 141,
+      inputTokens: 120,
+      outputTokens: 21,
+      requestCount: 1,
+      estimatedRequestCount: 0
+    });
   });
 
   it("解析 LongCat Messages SSE 的思考、正文与用量", async () => {
@@ -165,8 +173,17 @@ describe("Anthropic Messages 供应商", () => {
     expect(response.text).toContain('event: delta\ndata: {"delta":"LongCat"}');
     expect(response.text).toContain('event: delta\ndata: {"delta":" 流式响应"}');
     expect(response.text).toContain('"type":"thinking","round":1,"content":"先检查上下文。"');
-    expect(response.text).toContain('"outputTokens":6,"cacheHitPercent":50');
+    expect(response.text).toContain('"outputTokens":6,"cacheHitPercent":33.3');
     const suggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
     expect(suggestions.body.data[0].content).toBe("LongCat 流式响应");
+    const usage = await request(runtime.app).get(`/api/works/${workId}/ai-settings/usage`).expect(200);
+    expect(usage.body.data.summary).toMatchObject({
+      totalTokens: 36,
+      inputTokens: 30,
+      outputTokens: 6,
+      cachedInputTokens: 10,
+      cacheEligibleInputTokens: 30,
+      cacheHitRate: 33.3
+    });
   });
 });

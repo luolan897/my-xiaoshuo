@@ -51,7 +51,7 @@ export function serializePageRoute(route = {}) {
   } else if (view === "welcome" && workId) {
     params.set("view", "welcome");
     params.set("work", workId);
-  } else if (view === "settings" || view === "platform-ai") {
+  } else if (view === "settings" || view === "platform-ai" || view === "platform-usage") {
     params.set("view", view);
     if (workId) params.set("work", workId);
     appendReturnContext(params, route);
@@ -85,7 +85,7 @@ export function parsePageRoute(hash = "") {
     return { view, workId, entity, entityId: entityId || null, entityMode };
   }
   if (view === "welcome" && workId) return { view, workId };
-  if (view === "settings" || view === "platform-ai") {
+  if (view === "settings" || view === "platform-ai" || view === "platform-usage") {
     const route = { view, workId: workId || null };
     const returnView = value(params, "from");
     if (returnViewSet.has(returnView)) route.returnView = returnView;
