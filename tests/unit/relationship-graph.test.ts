@@ -303,7 +303,7 @@ describe("人物关系图数据与布局", () => {
     expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
   });
 
-  it("默认在原星群外为边缘旋臂增加百分之十星点", () => {
+  it("默认在原星群外为边缘旋臂增加百分之二十星点", () => {
     const stars = createGalaxyStarfield("dense-background");
     const edgeStars = stars.filter((star: { region: string }) => star.region === "edge-arm");
     expect(stars).toHaveLength(GALAXY_BASE_STAR_COUNT + Math.round(GALAXY_BASE_STAR_COUNT * GALAXY_EDGE_STAR_BOOST_RATIO));
