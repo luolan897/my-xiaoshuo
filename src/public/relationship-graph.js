@@ -93,6 +93,8 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
   outer: Object.freeze(["rocky", "ocean", "ice", "volcanic", "dwarf", "ringed"])
 });
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
+export const GALAXY_BASE_STAR_COUNT = 7200;
+export const GALAXY_EDGE_STAR_BOOST_RATIO = 0.1;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
   minimumRadius: 220,
   radialSpan: 830,
@@ -1678,26 +1680,32 @@ export function layoutGalaxy(graph, seed) {
   return { nodes, byId };
 }
 
-export function createGalaxyStarfield(seed, count = 7200) {
+export function createGalaxyStarfield(seed, count) {
   const random = seededRandom(hashString(seed));
   const stars = [];
   const armCount = 4;
-  for (let index = 0; index < count; index += 1) {
+  const baseCount = count === undefined ? GALAXY_BASE_STAR_COUNT : Math.max(0, Math.floor(Number(count) || 0));
+  const edgeBoostCount = count === undefined ? Math.round(baseCount * GALAXY_EDGE_STAR_BOOST_RATIO) : 0;
+  const totalCount = baseCount + edgeBoostCount;
+  for (let index = 0; index < totalCount; index += 1) {
+    const isEdgeBoost = index >= baseCount;
     const population = random();
-    const isCore = population < 0.62;
-    const isHalo = !isCore && population > 0.9;
-    const radius = isCore
+    const isCore = !isEdgeBoost && population < 0.62;
+    const isHalo = !isEdgeBoost && !isCore && population > 0.9;
+    const radius = isEdgeBoost
+      ? 900 + Math.pow(random(), 0.82) * 900
+      : isCore
       ? 32 + Math.pow(random(), 1.72) * 720
       : 160 + Math.pow(random(), 0.68) * 1510;
     const arm = index % armCount;
     const armAngle = arm / armCount * Math.PI * 2;
     const angle = isHalo
       ? random() * Math.PI * 2
-      : armAngle + radius * 0.0065 + (random() - 0.5) * (isCore ? 0.72 : 0.42 + radius / 1100);
-    const thickness = isHalo ? 70 + radius * 0.2 : (isCore ? 8 + radius * 0.045 : 22 + radius * 0.105);
+      : armAngle + radius * 0.0065 + (random() - 0.5) * (isEdgeBoost ? 0.36 + radius / 1700 : isCore ? 0.72 : 0.42 + radius / 1100);
+    const thickness = isHalo ? 70 + radius * 0.2 : (isEdgeBoost ? 26 + radius * 0.11 : isCore ? 8 + radius * 0.045 : 22 + radius * 0.105);
     const temperature = random();
-    const x = Math.cos(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78);
-    const z = Math.sin(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78);
+    const x = Math.cos(angle) * radius + (random() - 0.5) * (isCore ? 42 : isEdgeBoost ? 68 : 78);
+    const z = Math.sin(angle) * radius + (random() - 0.5) * (isCore ? 42 : isEdgeBoost ? 68 : 78);
     stars.push({
       x,
       y: (random() + random() + random() - 1.5) * thickness,
@@ -1708,7 +1716,8 @@ export function createGalaxyStarfield(seed, count = 7200) {
       vz: 0,
       size: isCore && random() > 0.94 ? 1.25 + random() * 1.25 : 0.38 + random() * 0.82,
       brightness: isCore ? 0.3 + random() * 0.7 : 0.16 + random() * 0.66,
-      color: temperature < 0.2 ? "255,218,176" : temperature > 0.78 ? "174,211,255" : "226,237,255"
+      color: temperature < 0.2 ? "255,218,176" : temperature > 0.78 ? "174,211,255" : "226,237,255",
+      region: isEdgeBoost ? "edge-arm" : isCore ? "core" : isHalo ? "halo" : "arm"
     });
   }
   return stars;

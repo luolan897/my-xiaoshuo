@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -303,9 +303,12 @@ describe("人物关系图数据与布局", () => {
     expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
   });
 
-  it("默认生成更密集的银河背景星群", () => {
+  it("默认在原星群外为边缘旋臂增加百分之十星点", () => {
     const stars = createGalaxyStarfield("dense-background");
-    expect(stars).toHaveLength(7200);
+    const edgeStars = stars.filter((star: { region: string }) => star.region === "edge-arm");
+    expect(stars).toHaveLength(GALAXY_BASE_STAR_COUNT + Math.round(GALAXY_BASE_STAR_COUNT * GALAXY_EDGE_STAR_BOOST_RATIO));
+    expect(edgeStars).toHaveLength(Math.round(GALAXY_BASE_STAR_COUNT * GALAXY_EDGE_STAR_BOOST_RATIO));
+    expect(edgeStars.every((star: { originX: number; originZ: number }) => Math.hypot(star.originX, star.originZ) > 820)).toBe(true);
     expect(stars.filter((star: { y: number }) => Math.abs(star.y) < 120).length).toBeGreaterThan(3000);
   });
 
