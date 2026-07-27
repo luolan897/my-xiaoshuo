@@ -1936,23 +1936,66 @@ export class Store {
     this.db.transaction(() => {
       const lockedChapter = this.getChapter(chapterId);
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedChapter.versionNo));
+      const sourceVolumeId = String(lockedChapter.volumeId);
+      const targetVolumeId = input.volumeId;
+      const sourceChapterIds = this.db.all(
+        "SELECT id FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at, id",
+        sourceVolumeId
+      ).map((row) => requiredString(row, "id")).filter((idValue) => idValue !== chapterId);
+      const targetChapterIds = sourceVolumeId === targetVolumeId
+        ? sourceChapterIds
+        : this.db.all(
+          "SELECT id FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at, id",
+          targetVolumeId
+        ).map((row) => requiredString(row, "id")).filter((idValue) => idValue !== chapterId);
+      const targetIndex = Math.min(input.sortOrder, targetChapterIds.length);
+      targetChapterIds.splice(targetIndex, 0, chapterId);
+      const timestamp = now();
+      sourceChapterIds.forEach((idValue, sortOrder) => {
+        this.db.run("UPDATE chapters SET sort_order = ?, updated_at = ? WHERE id = ?", sortOrder, timestamp, idValue);
+      });
+      targetChapterIds.forEach((idValue, sortOrder) => {
+        this.db.run("UPDATE chapters SET volume_id = ?, sort_order = ?, updated_at = ? WHERE id = ?", targetVolumeId, sortOrder, timestamp, idValue);
+      });
+      const versionNo = Number(lockedChapter.versionNo) + 1;
       this.db.run(
         `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
          WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
-         AND json_extract(scope_json, '$.type') = 'volume' AND json_extract(scope_json, '$.volumeId') = ?`,
-        now(),
-        String(chapter.workId),
-        String(chapter.volumeId)
+         AND json_extract(scope_json, '$.type') = 'volume'
+         AND json_extract(scope_json, '$.volumeId') IN (?, ?)`,
+        timestamp,
+        String(lockedChapter.workId),
+        sourceVolumeId,
+        targetVolumeId
       );
       this.db.run(
-        "UPDATE chapters SET volume_id = ?, sort_order = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?",
-        input.volumeId,
-        input.sortOrder,
-        now(),
+        "UPDATE chapters SET version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?",
+        versionNo,
+        timestamp,
         chapterId
       );
-      this.invalidateChapter(String(chapter.workId), chapterId, Number(chapter.versionNo));
-      this.audit(String(chapter.workId), "chapter.moved", "chapter", chapterId, input);
+      this.insertChapterVersionRow({
+        workId: String(lockedChapter.workId),
+        chapterId,
+        versionNo,
+        title: String(lockedChapter.title),
+        content: String(lockedChapter.content),
+        volumeId: targetVolumeId,
+        sortOrder: targetIndex,
+        chapterType: String(lockedChapter.chapterType),
+        source: "manual",
+        sourceRef: null,
+        changeNote: sourceVolumeId === targetVolumeId ? "调整章节顺序" : "移动章节分卷",
+        timestamp
+      });
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, String(lockedChapter.workId));
+      this.invalidateChapter(String(lockedChapter.workId), chapterId, versionNo);
+      this.audit(String(lockedChapter.workId), "chapter.moved", "chapter", chapterId, {
+        volumeId: targetVolumeId,
+        sortOrder: targetIndex,
+        fromVolumeId: sourceVolumeId,
+        versionNo
+      });
     });
     return this.getChapter(chapterId);
   }

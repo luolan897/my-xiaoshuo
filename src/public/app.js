@@ -133,6 +133,7 @@ const acknowledgedCollaborativeChangeIds = new Set();
 let collaborativeChangePromptOpen = false;
 let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
+let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
@@ -3023,12 +3024,12 @@ function renderTree() {
   $("#novel-tree").innerHTML = state.work.volumes.map((volume) => `
     <div class="volume-node ${state.collapsedVolumeIds.has(volume.id) ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
-        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
       ${volume.chapters.map((chapter) => `
-        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}">
+        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}" draggable="${proseEditable ? "true" : "false"}" title="${proseEditable ? "拖拽排序；Alt+方向键排序，Alt+Shift+方向键跨卷" : ""}">
           <span>${esc(chapter.title)}</span><span class="chapter-node-meta">${chapter.chapterType && chapter.chapterType !== "正文" ? `<em class="chapter-type-badge">${esc(chapter.chapterType)}</em>` : ""}<small>${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small></span>
         </button>`).join("")}
       </div>
@@ -3045,13 +3046,30 @@ function renderTree() {
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
+    if (proseEditable) {
+      button.addEventListener("dragover", (event) => {
+        if (!event.dataTransfer?.types.includes("text/plain")) return;
+        event.preventDefault();
+        button.closest(".volume-node")?.classList.add("is-drag-target");
+      });
+      button.addEventListener("dragleave", () => button.closest(".volume-node")?.classList.remove("is-drag-target"));
+      button.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        button.closest(".volume-node")?.classList.remove("is-drag-target");
+        const chapterId = event.dataTransfer?.getData("text/plain");
+        const volume = state.work?.volumes.find((item) => item.id === button.dataset.volumeToggle);
+        if (chapterId && volume) await moveChapterInTree(chapterId, volume.id, volume.chapters.length);
+      });
+    }
   });
   $("#novel-tree").querySelectorAll("[data-new-chapter-volume]").forEach((button) => {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
-    button.addEventListener("click", () => {
-      selectChapter(button.dataset.chapterId);
+    button.addEventListener("click", async () => {
+      const chapterId = button.dataset.chapterId;
+      await selectChapter(chapterId);
+      $("#novel-tree").querySelector(`[data-chapter-id="${CSS.escape(chapterId)}"]`)?.focus();
       if (isMobileViewport()) {
         panelLayout.leftCollapsed = true;
         applyPanelLayout(true);
@@ -3062,7 +3080,87 @@ function renderTree() {
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
     });
+    if (proseEditable) {
+      button.addEventListener("dragstart", (event) => {
+        event.dataTransfer?.setData("text/plain", button.dataset.chapterId);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        button.classList.add("is-dragging");
+      });
+      button.addEventListener("dragend", () => {
+        button.classList.remove("is-dragging");
+        $("#novel-tree").querySelectorAll(".is-drag-over, .is-drag-target").forEach((node) => node.classList.remove("is-drag-over", "drop-after", "is-drag-target"));
+      });
+      button.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        const after = event.clientY >= button.getBoundingClientRect().top + button.offsetHeight / 2;
+        button.classList.toggle("drop-after", after);
+        button.classList.add("is-drag-over");
+      });
+      button.addEventListener("dragleave", () => button.classList.remove("is-drag-over", "drop-after"));
+      button.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const chapterId = event.dataTransfer?.getData("text/plain");
+        const target = findChapterLocation(button.dataset.chapterId);
+        const after = button.classList.contains("drop-after");
+        button.classList.remove("is-drag-over", "drop-after");
+        if (!chapterId || !target) return;
+        const targetChapters = target.volume.chapters.filter((chapter) => chapter.id !== chapterId);
+        const targetIndex = targetChapters.findIndex((chapter) => chapter.id === button.dataset.chapterId);
+        await moveChapterInTree(chapterId, target.volume.id, Math.max(0, targetIndex + (after ? 1 : 0)));
+      });
+      button.addEventListener("keydown", async (event) => {
+        if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        await moveChapterByKeyboard(button.dataset.chapterId, event.key === "ArrowDown" ? 1 : -1, event.shiftKey);
+      });
+    }
   });
+}
+
+function findChapterLocation(chapterId) {
+  for (const [volumeIndex, volume] of (state.work?.volumes ?? []).entries()) {
+    const chapterIndex = volume.chapters.findIndex((chapter) => chapter.id === chapterId);
+    if (chapterIndex >= 0) return { volume, volumeIndex, chapterIndex, chapter: volume.chapters[chapterIndex] };
+  }
+  return null;
+}
+
+async function moveChapterInTree(chapterId, volumeId, sortOrder) {
+  const location = findChapterLocation(chapterId);
+  if (!location || chapterMovePending) return;
+  const samePosition = location.volume.id === volumeId && location.chapterIndex === sortOrder;
+  if (samePosition) return;
+  chapterMovePending = true;
+  try {
+    const moved = await api(`/api/chapters/${encodeURIComponent(chapterId)}/move`, {
+      method: "POST",
+      body: { volumeId, sortOrder, expectedVersionNo: location.chapter.versionNo }
+    });
+    state.work = await api(`/api/works/${encodeURIComponent(state.work.id)}`);
+    if (state.chapter?.id === chapterId) state.chapter = { ...state.chapter, ...moved };
+    renderTree();
+    $("#novel-tree").querySelector(`[data-chapter-id="${CSS.escape(chapterId)}"]`)?.focus();
+    toast(location.volume.id === volumeId ? "章节顺序已更新" : "章节已移动到目标分卷");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    chapterMovePending = false;
+  }
+}
+
+async function moveChapterByKeyboard(chapterId, direction, crossVolume) {
+  const location = findChapterLocation(chapterId);
+  if (!location || !state.work) return;
+  if (crossVolume) {
+    const targetVolume = state.work.volumes[location.volumeIndex + direction];
+    if (!targetVolume) return toast("已经是最前或最后一个分卷");
+    await moveChapterInTree(chapterId, targetVolume.id, direction < 0 ? targetVolume.chapters.length : 0);
+    return;
+  }
+  const targetIndex = location.chapterIndex + direction;
+  if (targetIndex < 0 || targetIndex >= location.volume.chapters.length) return toast("已经是本卷首章或末章");
+  await moveChapterInTree(chapterId, location.volume.id, targetIndex);
 }
 
 function closeChapterTypeMenu() {
