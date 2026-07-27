@@ -364,6 +364,20 @@ describe("作品、导入和章节版本 API", () => {
     expect(runtime.store.searchChapterParagraphs(workId, "原始正文")).toEqual([]);
     expect((await request(runtime.app).get(`/api/works/${workId}/search?q=${encodeURIComponent("原始正文")}`).expect(200)).body.data).toEqual([]);
 
+    const recycleBin = await request(runtime.app).get(`/api/works/${workId}/deleted-chapters`).expect(200);
+    expect(recycleBin.body.data).toEqual([expect.objectContaining({
+      id: chapterId,
+      title: "第一章",
+      volumeTitle: "正文",
+      contentPreview: "原始正文。",
+      wordCount: 4,
+      versionNo: 2,
+      deletedAt: expect.any(String)
+    })]);
+    const recycleBinPage = await request(runtime.app).get(`/api/works/${workId}/deleted-chapters?page=1&limit=10`).expect(200);
+    expect(recycleBinPage.body.data).toMatchObject({ page: 1, limit: 10, hasMore: false, nextPage: null });
+    expect(recycleBinPage.body.data.items[0].id).toBe(chapterId);
+
     const versions = await request(runtime.app).get(`/api/chapters/${chapterId}/versions`).expect(200);
     expect(versions.body.data[0]).toMatchObject({ versionNo: 2, source: "delete", title: "第一章", content: "原始正文。" });
     expect(versions.body.data.some((item: { versionNo: number }) => item.versionNo === 1)).toBe(true);
@@ -373,6 +387,7 @@ describe("作品、导入和章节版本 API", () => {
     expect(restored.body.data.versionNo).toBeGreaterThan(2);
     expect(runtime.database.get("SELECT deleted_at FROM chapters WHERE id = ?", chapterId)?.deleted_at).toBeNull();
     expect((await request(runtime.app).get(`/api/works/${workId}`).expect(200)).body.data.chapterCount).toBe(1);
+    expect((await request(runtime.app).get(`/api/works/${workId}/deleted-chapters`).expect(200)).body.data).toEqual([]);
   });
 
   it("可从文件版本快照恢复作品正文树", async () => {

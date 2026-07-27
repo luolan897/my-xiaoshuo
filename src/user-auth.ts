@@ -983,7 +983,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     return direct("organizations", write && (createsMembers || updatesMembers || replacesMembers) ? ["characters"] : []);
   }
   const rules: Array<[RegExp, WorkPermissionModule]> = [
-    [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters)(?:\/|$)/u, "prose"],
+    [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters|deleted-chapters)(?:\/|$)/u, "prose"],
     [/^\/api\/(?:volumes|chapters)\/[^/]+(?:\/|$)/u, "prose"],
     [/^\/api\/works\/[^/]+\/(?:settings|attachments)(?:\/|$)/u, "settings"],
     [/^\/api\/(?:settings|attachments)\/[^/]+(?:\/|$)/u, "settings"],

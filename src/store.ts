@@ -1569,6 +1569,49 @@ export class Store {
     return this.mapChapter(row);
   }
 
+  listDeletedChapters(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.findDeletedChapterRows(workId).map((row) => this.mapDeletedChapter(row));
+  }
+
+  listDeletedChaptersPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.findDeletedChapterRows(workId, page.sql, page.params);
+    return paginated(rows.map((row) => this.mapDeletedChapter(row)), pagination);
+  }
+
+  private findDeletedChapterRows(workId: string, pageSql = "", pageParams: Array<string | number> = []): Row[] {
+    return this.db.all(
+      `SELECT chapter.*, volume.title AS volume_title,
+        user.display_name AS actor_display_name, user.username AS actor_username
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       LEFT JOIN chapter_versions version
+         ON version.chapter_id = chapter.id AND version.version_no = chapter.version_no AND version.source = 'delete'
+       LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NOT NULL
+       ORDER BY chapter.deleted_at DESC, chapter.id DESC${pageSql}`,
+      workId,
+      ...pageParams
+    );
+  }
+
+  private mapDeletedChapter(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      volumeId: requiredString(row, "volume_id"),
+      volumeTitle: requiredString(row, "volume_title"),
+      title: requiredString(row, "title"),
+      contentPreview: requiredString(row, "content").slice(0, 300),
+      wordCount: numberValue(row, "word_count"),
+      versionNo: numberValue(row, "version_no"),
+      deletedAt: requiredString(row, "deleted_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    };
+  }
+
   private findChapterVersionRows(chapterId: string): Row[] {
     return this.db.all(
       `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
