@@ -548,6 +548,35 @@ describe("作品、导入和章节版本 API", () => {
     expect(exported.body.data.work.volumes[0].chapters[0]).toMatchObject({ chapterType: "作者的话" });
   });
 
+  it("将 Markdown 正文压缩为 ZIP 下载", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "压缩导出作品" }).expect(201);
+    const workId = work.body.data.id;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章 启航",
+      content: "飞船驶离北港。"
+    }).expect(201);
+
+    const exported = await request(runtime.app)
+      .get(`/api/works/${workId}/export?format=markdown`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/zip/u)
+      .expect("Content-Disposition", `attachment; filename=novel-${workId}.zip`)
+      .expect(200);
+    expect(Buffer.isBuffer(exported.body)).toBe(true);
+    const archive = await JSZip.loadAsync(exported.body as Buffer);
+    const markdownName = `novel-${workId}.md`;
+    expect(Object.keys(archive.files)).toEqual([markdownName]);
+    await expect(archive.file(markdownName)?.async("string")).resolves.toContain("# 第一卷\n\n## 第一章 启航\n\n飞船驶离北港。");
+  });
+
   it("删除章节后可列出版本并恢复", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "章节删除恢复" }).expect(201);
     const workId = work.body.data.id;

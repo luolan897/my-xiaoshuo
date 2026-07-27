@@ -1,4 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
+import JSZip from "jszip";
 import multer from "multer";
 import mammoth from "mammoth";
 import { randomUUID } from "node:crypto";
@@ -6,6 +7,7 @@ import { dirname, extname, join } from "node:path";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
@@ -1990,15 +1992,29 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const query = parse(z.string().trim().min(1).max(500), request.query.q);
     data(response, store.search(request.params.workId, query));
   });
-  app.get("/api/works/:workId/export", (request, response) => {
+  app.get("/api/works/:workId/export", async (request, response) => {
     const format = parse(z.enum(["json", "txt", "markdown"]), request.query.format ?? "json");
     if (format === "json") {
       response.setHeader("Content-Disposition", `attachment; filename=novel-${request.params.workId}.json`);
       data(response, store.exportWork(request.params.workId));
       return;
     }
-    response.type(format === "txt" ? "text/plain" : "text/markdown");
-    response.setHeader("Content-Disposition", `attachment; filename=novel-${request.params.workId}.${format === "markdown" ? "md" : "txt"}`);
+    if (format === "markdown") {
+      const exportName = `novel-${request.params.workId}`;
+      const archive = new JSZip();
+      archive.file(`${exportName}.md`, store.exportText(request.params.workId, format));
+      response.type("application/zip");
+      response.setHeader("Content-Disposition", `attachment; filename=${exportName}.zip`);
+      await pipeline(archive.generateNodeStream({
+        type: "nodebuffer",
+        streamFiles: true,
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 }
+      }), response);
+      return;
+    }
+    response.type("text/plain");
+    response.setHeader("Content-Disposition", `attachment; filename=novel-${request.params.workId}.txt`);
     response.send(store.exportText(request.params.workId, format));
   });
   app.get("/api/works/:workId/audit-logs", (request, response) => {

@@ -317,7 +317,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260728-writing-daily-line-v2');
+    expect(page.text).toContain('/app.js?v=20260728-work-manuscript-zip-v1');
     expect(page.text).toContain('/styles.css?v=20260728-writing-daily-line-v2');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -463,8 +463,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("当日新增");
     expect(application.text).toContain('bar.addEventListener("mouseenter", () => showTooltip(bar))');
     expect(page.text).toContain('id="work-audit-button" class="settings-hub-card"');
-    expect(page.text).toContain('<strong>导出正文</strong><small>仅导出分卷、章节标题与正文，不包含角色和设定资料</small>');
-    expect(application.text).toContain('id="work-export-button" class="ghost-button" type="button">下载 Markdown</button>');
+    expect(page.text).toContain('<span class="settings-card-mark">ZIP</span><strong>导出正文</strong><small>以 ZIP 下载 Markdown 正文，不包含角色和设定资料</small>');
+    expect(application.text).toContain('id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>');
+    expect(application.text).toContain("导出的 ZIP 内含 Markdown 正文");
     expect(application.text).toContain('function downloadWorkManuscript(work)');
     expect(application.text).toContain('不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料');
     expect(page.text).toContain('id="work-audit-dialog"');
