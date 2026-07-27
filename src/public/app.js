@@ -6371,11 +6371,16 @@ function openVolumeDialog(item) {
   if (!state.work) return openWorkDialog();
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
+  const management = item ? `<section class="entity-dialog-management" aria-label="分卷操作">
+    <div><strong>分卷操作</strong><small>仅空分卷可以删除；卷内章节及回收站章节需先移动到其他分卷。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-volume-delete>删除分卷</button></div>
+  </section>` : "";
   openDialog(item ? "编辑分卷" : "新建分卷",
     field("title", "分卷名称", "text", item?.title) +
     field("kind", "分卷类型", "select", item?.kind ?? "main", kindOptions) +
     field("description", "分卷简介", "textarea", item?.description) +
-    field("keywords", "分卷关键词", "keyword-chips", item?.keywords ?? []),
+    field("keywords", "分卷关键词", "keyword-chips", item?.keywords ?? []) +
+    management,
     async (form) => {
       const body = {
         title: form.get("title"),
@@ -6388,6 +6393,28 @@ function openVolumeDialog(item) {
       renderTree();
       toast(item ? "分卷设置已保存" : "分卷已创建");
     }, "分卷设置");
+  $("#dialog-fields").querySelector("[data-dialog-volume-delete]")?.addEventListener("click", () => {
+    void deleteVolume(item);
+  });
+}
+
+async function deleteVolume(item) {
+  if (!state.work || !item || !canEditProse()) return toast("当前权限不能删除分卷", "error");
+  $("#form-dialog").close();
+  if (!await confirmToast(`确认删除空分卷“${item.title}”吗？分卷信息和版本记录仍会保留。`, {
+    title: "删除分卷",
+    confirmLabel: "确认删除"
+  })) return openVolumeDialog(item);
+  try {
+    await api(`/api/volumes/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    state.collapsedVolumeIds.delete(item.id);
+    state.work = await api(`/api/works/${state.work.id}`);
+    renderTree();
+    toast(`已删除分卷“${item.title}”`);
+  } catch (error) {
+    toast(error.message, "error");
+    openVolumeDialog(item);
+  }
 }
 
 function openSettingEditor(item = null, { readOnly = false } = {}) {

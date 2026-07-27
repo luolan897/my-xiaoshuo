@@ -317,7 +317,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-login-shelf-v1');
+    expect(page.text).toContain('/app.js?v=20260727-delete-volume-v3');
     expect(page.text).toContain('/styles.css?v=20260727-integrated-authoring-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -673,6 +673,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openVolumeDialog(item)");
     expect(application.text).toContain('field("keywords", "分卷关键词", "keyword-chips"');
     expect(application.text).toContain('keywords: uniqueRelationshipKeywords(form.getAll("keywords").map(String))');
+    expect(application.text).toContain('data-dialog-volume-delete');
+    expect(application.text).toContain('async function deleteVolume(item)');
+    expect(application.text).toContain('$("#form-dialog").close();');
+    expect(application.text).toContain('body: { expectedVersionNo: item.versionNo }');
     expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
     expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");
