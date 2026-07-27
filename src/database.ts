@@ -148,6 +148,7 @@ export class Database {
         version_no INTEGER NOT NULL DEFAULT 1,
         analysis_status TEXT NOT NULL DEFAULT 'pending',
         excluded_from_analysis INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -2123,6 +2124,83 @@ export class Database {
         );
         this.run("CREATE INDEX IF NOT EXISTS idx_calls_usage_daily ON ai_calls(created_at, work_id)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (48, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(49)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(chapters)").map((row) => String(row.name)));
+        if (!columns.has("deleted_at")) {
+          this.run("ALTER TABLE chapters ADD COLUMN deleted_at TEXT");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapters_active_work ON chapters(work_id, deleted_at, volume_id, sort_order)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (49, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(50)) {
+      this.transaction(() => {
+        this.run(`
+          CREATE TABLE IF NOT EXISTS writing_goals (
+            work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+            daily_goal INTEGER NOT NULL DEFAULT 1000 CHECK(daily_goal >= 0 AND daily_goal <= 1000000),
+            target_total INTEGER NOT NULL DEFAULT 100000 CHECK(target_total >= 0 AND target_total <= 100000000),
+            deadline TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+          )
+        `);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (50, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(51)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS chapter_annotations (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('note', 'todo')),
+          start_line INTEGER NOT NULL CHECK(start_line > 0),
+          end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+          quote TEXT NOT NULL,
+          note TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved')),
+          version_no INTEGER NOT NULL DEFAULT 1,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS chapter_annotation_versions (
+          id TEXT PRIMARY KEY,
+          annotation_id TEXT NOT NULL REFERENCES chapter_annotations(id) ON DELETE CASCADE,
+          version_no INTEGER NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          source TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          UNIQUE(annotation_id, version_no)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapter_annotations_chapter ON chapter_annotations(chapter_id, deleted_at, status, created_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (51, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

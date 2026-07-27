@@ -175,6 +175,7 @@ function workIdFromPath(database: Database, pathname: string): string | null {
   const tableByResource: Record<string, string> = {
     volumes: "volumes",
     chapters: "chapters",
+    "chapter-annotations": "chapter_annotations",
     settings: "settings",
     characters: "characters",
     "character-sections": "character_profile_sections",
@@ -869,10 +870,15 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET", "POST"], path: /^\/api\/works$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/works\/[^/]+$/u },
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|settings|characters|races|organizations|timeline-tracks|timeline|relationships|search|export|audit-logs)$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/writing-progress$/u },
+  { methods: ["PUT"], path: /^\/api\/works\/[^/]+\/writing-goal$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
+  { methods: ["POST"], path: /^\/api\/works\/[^/]+\/chapters\/batch$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/volumes\/[^/]+$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/chapters\/[^/]+$/u },
   { methods: ["GET"], path: /^\/api\/chapters\/[^/]+\/(?:versions|outline)$/u },
+  { methods: ["GET", "POST"], path: /^\/api\/chapters\/[^/]+\/annotations$/u },
+  { methods: ["PATCH", "DELETE"], path: /^\/api\/chapter-annotations\/[^/]+$/u },
   { methods: ["POST"], path: /^\/api\/chapters\/[^/]+\/(?:restore|move)$/u },
   { methods: ["PUT"], path: /^\/api\/chapters\/[^/]+\/outline$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/(?:settings|characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows)\/[^/]+$/u },
@@ -928,6 +934,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/presence$/u.test(pathname)) return {};
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
+  if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { anyRead: [...aiInteractionModules] };
   if (!write && /^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u.test(pathname)) {
     return { anyRead: [...aiInteractionModules] };
@@ -936,6 +943,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     return write ? { write: [...proseReplacementPermissionModules] } : { read: ["prose"] };
   }
   if (/^\/api\/chapters\/[^/]+\/outline$/u.test(pathname)) return direct("outlines");
+  if (/^\/api\/(?:chapters\/[^/]+\/annotations|chapter-annotations\/[^/]+)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/entity-versions\/[^/]+\/[^/]+(?:\/restore)?$/u.test(pathname)) {
     const entityType = pathname.split("/")[3] ?? "";
     const moduleByEntityType: Record<string, WorkPermissionModule> = {
@@ -983,7 +991,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     return direct("organizations", write && (createsMembers || updatesMembers || replacesMembers) ? ["characters"] : []);
   }
   const rules: Array<[RegExp, WorkPermissionModule]> = [
-    [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters)(?:\/|$)/u, "prose"],
+    [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters|deleted-chapters)(?:\/|$)/u, "prose"],
     [/^\/api\/(?:volumes|chapters)\/[^/]+(?:\/|$)/u, "prose"],
     [/^\/api\/works\/[^/]+\/(?:settings|attachments)(?:\/|$)/u, "settings"],
     [/^\/api\/(?:settings|attachments)\/[^/]+(?:\/|$)/u, "settings"],

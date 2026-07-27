@@ -129,6 +129,12 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("overflow-wrap: anywhere; line-height: 1.45; white-space: normal");
     expect(page.text).toContain('id="ai-citations"');
     expect(page.text).toContain('id="line-citation-menu"');
+    expect(page.text).toContain('<button id="chapter-delete-button" class="danger-button" type="button">删除章节</button>');
+    expect(page.text).toContain('data-delete-chapter');
+    expect(application.text).toContain("async function deleteChapter(chapterId)");
+    expect(application.text).toContain('title: "删除章节"');
+    expect(application.text).toContain('title: "删除操作需要再次确认"');
+    expect(application.text).toContain('method: "DELETE", body: { expectedVersionNo }');
   });
 
   it("作品切换和新建只保留在书架首页", async () => {
@@ -306,8 +312,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-race-tree-pagination-v1');
-    expect(page.text).toContain('/styles.css?v=20260727-inline-save-spacing-v2');
+    expect(page.text).toContain('/app.js?v=20260727-integrated-authoring-v1');
+    expect(page.text).toContain('/styles.css?v=20260727-integrated-authoring-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -431,6 +437,16 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="top-search-button"');
     expect(page.text).toContain('title="全文检索（Command/Ctrl+F）"');
     expect(page.text).toContain('id="user-management-button" class="settings-hub-card hidden"');
+    expect(page.text).toContain('id="writing-progress-button" class="settings-hub-card"');
+    expect(page.text).toContain('id="writing-progress-dialog"');
+    expect(application.text).toContain("function renderWritingProgress(");
+    expect(application.text).toContain("async function saveWritingGoal(");
+    expect(styles.text).toContain(".writing-trend-chart");
+    expect(page.text).toContain('id="work-audit-button" class="settings-hub-card"');
+    expect(page.text).toContain('id="work-audit-dialog"');
+    expect(application.text).toContain("async function openWorkAuditDialog(");
+    expect(application.text).toContain("workAuditActionLabels");
+    expect(styles.text).toContain(".work-audit-row");
     expect(page.text).toContain('id="search-dialog"');
     expect(application.text).toContain('isGlobalSearchShortcut(event)');
     expect(application.text).toContain('const target = resolveGlobalSearchTarget(result);');
@@ -655,7 +671,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
     expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");
-    expect(application.text).toContain('title="左键折叠，右键设置分卷"');
+    expect(application.text).toContain('title="左键折叠，右键设置分卷；可将章节拖到这里追加"');
     expect(application.text).toContain("const proseEditable = canEditProse();");
     expect(application.text).toContain("${proseEditable ? `<button class=\"add-button chapter-add-button\"");
     expect(application.text).toContain('class="add-button chapter-add-button"');

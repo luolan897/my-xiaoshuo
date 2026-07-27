@@ -133,6 +133,11 @@ const acknowledgedCollaborativeChangeIds = new Set();
 let collaborativeChangePromptOpen = false;
 let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
+let chapterAnnotations = [];
+let workAuditRecords = [];
+let workAuditNextPage = null;
+const chapterBatchSelectedIds = new Set();
+let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
@@ -277,6 +282,7 @@ function applyWorkAccessMode() {
   }
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
   $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
+  $("#chapter-batch-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#welcome-new-work").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#import-file-button").setAttribute("aria-disabled", String(proseReadOnly));
   $("#import-file-button").setAttribute("title", proseReadOnly ? "当前权限不能导入正文" : "导入 TXT / DOCX");
@@ -897,6 +903,8 @@ function applyChapterEditorMode() {
   $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
+  $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || !state.chapter);
+  $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
   if (viewOnly) cancelChapterAutoSave();
 }
 
@@ -1735,6 +1743,96 @@ function addSelectedLinesAsCitation() {
   toast(`已引用《${citation.chapterTitle}》第 ${citation.startLine}${citation.startLine === citation.endLine ? "" : `-${citation.endLine}`} 行`);
 }
 
+async function createSelectedLineAnnotation(kind) {
+  if (!state.chapter || !chapterLineSelection || !canEditProse()) return;
+  const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
+  closeLineCitationMenu();
+  const note = await inputToast(kind === "todo" ? "描述需要后续处理的事项" : "写下这段正文的批注", {
+    title: kind === "todo" ? "添加正文待办" : "添加正文批注",
+    inputLabel: kind === "todo" ? "待办内容" : "批注内容",
+    confirmLabel: "添加",
+    maxLength: 2000
+  });
+  if (!note) return;
+  try {
+    await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}/annotations`, {
+      method: "POST",
+      body: { kind, startLine: selection.safeStart + 1, endLine: selection.safeEnd + 1, note }
+    });
+    toast(kind === "todo" ? "正文待办已添加" : "正文批注已添加");
+    await openChapterAnnotationsDialog();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function renderChapterAnnotations() {
+  const host = $("#chapter-annotations-list");
+  host.innerHTML = chapterAnnotations.length ? chapterAnnotations.map((annotation) => `<article class="chapter-annotation-card ${annotation.status === "resolved" ? "is-resolved" : ""}" data-annotation-id="${esc(annotation.id)}">
+    <header><span class="chapter-annotation-kind">${annotation.kind === "todo" ? "待办" : "批注"}</span><strong>${annotation.startLine === annotation.endLine ? `第 ${annotation.startLine} 行` : `第 ${annotation.startLine}-${annotation.endLine} 行`}</strong><em>${annotation.status === "resolved" ? "已完成" : "处理中"}</em></header>
+    <blockquote>${esc(annotation.quote || "空白行")}</blockquote>
+    <p>${esc(annotation.note)}</p>
+    <small>${esc(annotation.actor)} · ${esc(formatDateTime(annotation.updatedAt))} · v${Number(annotation.versionNo)}</small>
+    <footer><button type="button" data-annotation-locate>定位原文</button>${canEditProse() ? `<button type="button" data-annotation-edit>编辑说明</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : "完成待办"}</button><button class="danger-button" type="button" data-annotation-delete>删除</button>` : ""}</footer>
+  </article>`).join("") : '<p class="entity-history-empty">本章还没有批注或待办。选择正文行并打开右键菜单即可添加。</p>';
+  host.querySelectorAll("[data-annotation-id]").forEach((card) => {
+    const annotation = chapterAnnotations.find((item) => item.id === card.dataset.annotationId);
+    if (!annotation) return;
+    card.querySelector("[data-annotation-locate]")?.addEventListener("click", () => {
+      $("#chapter-annotations-dialog").close();
+      paintChapterLineSelection(annotation.startLine - 1, annotation.endLine - 1);
+      selectChapterLines(annotation.startLine - 1, annotation.endLine - 1);
+    });
+    card.querySelector("[data-annotation-status]")?.addEventListener("click", async () => {
+      try {
+        await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "PATCH", body: { status: annotation.status === "resolved" ? "open" : "resolved", expectedVersionNo: annotation.versionNo } });
+        await loadChapterAnnotations();
+      } catch (error) { toast(error.message, "error"); }
+    });
+    card.querySelector("[data-annotation-edit]")?.addEventListener("click", async () => {
+      const dialog = $("#chapter-annotations-dialog");
+      dialog.close();
+      const note = await inputToast("修改批注或待办说明", { title: "编辑说明", inputLabel: "说明", placeholder: annotation.note, confirmLabel: "保存", maxLength: 2000 });
+      if (!note) return dialog.showModal();
+      try {
+        await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "PATCH", body: { note, expectedVersionNo: annotation.versionNo } });
+        await loadChapterAnnotations();
+      } catch (error) { toast(error.message, "error"); }
+      dialog.showModal();
+    });
+    card.querySelector("[data-annotation-delete]")?.addEventListener("click", async () => {
+      const dialog = $("#chapter-annotations-dialog");
+      dialog.close();
+      const confirmed = await confirmToast("删除后不会在本章清单中显示，但历史版本仍会保留。", { title: "删除批注或待办", confirmLabel: "确认删除" });
+      if (!confirmed) return dialog.showModal();
+      try {
+        await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "DELETE", body: { expectedVersionNo: annotation.versionNo } });
+        await loadChapterAnnotations();
+        dialog.showModal();
+      } catch (error) { dialog.showModal(); toast(error.message, "error"); }
+    });
+  });
+}
+
+async function loadChapterAnnotations() {
+  if (!state.chapter) return;
+  chapterAnnotations = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}/annotations`);
+  renderChapterAnnotations();
+}
+
+async function openChapterAnnotationsDialog() {
+  if (!state.chapter) return;
+  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文批注与待办`;
+  $("#chapter-annotations-list").innerHTML = '<p class="entity-history-empty">正在加载批注与待办…</p>';
+  if (!$("#chapter-annotations-dialog").open) $("#chapter-annotations-dialog").showModal();
+  try {
+    await loadChapterAnnotations();
+  } catch (error) {
+    $("#chapter-annotations-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
 function closeLineCitationMenu() {
   $("#line-citation-menu").classList.add("hidden");
 }
@@ -1746,6 +1844,8 @@ function showLineCitationMenu(event, lineIndex) {
     selectChapterLines(lineIndex, lineIndex);
   }
   const menu = $("#line-citation-menu");
+  $("#add-line-annotation").classList.toggle("hidden", !canEditProse());
+  $("#add-line-todo").classList.toggle("hidden", !canEditProse());
   const { start, end } = chapterLineSelection;
   $("#line-citation-label").textContent = start === end ? `第 ${start + 1} 行` : `第 ${start + 1}-${end + 1} 行`;
   menu.classList.remove("hidden");
@@ -2586,12 +2686,123 @@ function renderSettingsHub() {
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
+  $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
+  $("#work-audit-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !canReadAggregate;
   $("#export-button").disabled = !canReadAggregate;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出将作用于这部作品。`
     : "当前未选择作品；打开作品后可使用导出。";
+}
+
+function renderWritingProgress(progress) {
+  $("#writing-current-words").textContent = Number(progress.currentWords).toLocaleString("zh-CN");
+  $("#writing-today-words").textContent = Number(progress.todayWords).toLocaleString("zh-CN");
+  $("#writing-daily-completion").textContent = `${Math.round(Number(progress.dailyCompletion) * 100)}%`;
+  $("#writing-total-completion").textContent = `${Math.round(Number(progress.totalCompletion) * 100)}%`;
+  $("#writing-daily-goal").value = String(progress.goal.dailyGoal);
+  $("#writing-total-goal").value = String(progress.goal.targetTotal);
+  $("#writing-deadline").value = progress.goal.deadline ?? "";
+  $("#writing-goal-save").disabled = !canEditProse();
+  const maxWords = Math.max(1, ...progress.trend.map((item) => Number(item.words)));
+  $("#writing-trend-chart").innerHTML = progress.trend.map((item, index) => {
+    const height = Math.max(3, Math.round(Number(item.words) / maxWords * 100));
+    const label = `${item.date}：${Number(item.words).toLocaleString("zh-CN")} 字，较前日 ${Number(item.delta) >= 0 ? "+" : ""}${Number(item.delta).toLocaleString("zh-CN")}`;
+    return `<span class="writing-trend-bar${index === progress.trend.length - 1 ? " is-today" : ""}" style="--bar-height:${height}%" title="${esc(label)}" aria-label="${esc(label)}"><i></i><small>${index % 5 === 0 || index === progress.trend.length - 1 ? esc(item.date.slice(5)) : ""}</small></span>`;
+  }).join("");
+}
+
+async function loadWritingProgress() {
+  if (!state.work) return;
+  renderWritingProgress(await api(`/api/works/${encodeURIComponent(state.work.id)}/writing-progress`));
+}
+
+async function openWritingProgressDialog() {
+  if (!state.work || !canReadModule("editor")) return;
+  $("#writing-progress-dialog").showModal();
+  try {
+    await loadWritingProgress();
+  } catch (error) {
+    $("#writing-progress-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
+const workAuditActionLabels = {
+  "work.created": "创建作品",
+  "work.updated": "更新作品",
+  "volume.created": "创建分卷",
+  "volume.updated": "更新分卷",
+  "volume.deleted": "删除分卷",
+  "chapter.created": "创建章节",
+  "chapter.saved": "保存章节",
+  "chapter.moved": "移动章节",
+  "chapter.deleted": "删除章节",
+  "chapter.restored": "恢复章节",
+  "work.imported": "导入正文"
+};
+
+function workAuditEntityLabel(type) {
+  return ({ work: "作品", volume: "分卷", chapter: "章节", user: "用户" })[type] ?? type;
+}
+
+function workAuditDetailText(detail) {
+  const entries = Object.entries(detail ?? {}).filter(([, value]) => value !== null && value !== undefined && value !== "").slice(0, 6);
+  return entries.map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join(" · ");
+}
+
+function renderWorkAuditRecords() {
+  $("#work-audit-list").innerHTML = workAuditRecords.length ? workAuditRecords.map((record) => `<article class="work-audit-row">
+    <time>${esc(formatDateTime(record.createdAt))}</time>
+    <div><strong>${esc(workAuditActionLabels[record.action] ?? record.action)}</strong><span>${esc(record.actor)} · ${esc(workAuditEntityLabel(record.entityType))}${record.entityId ? ` · ${esc(record.entityId)}` : ""}</span>${workAuditDetailText(record.detail) ? `<small>${esc(workAuditDetailText(record.detail))}</small>` : ""}</div>
+  </article>`).join("") : '<p class="entity-history-empty">当前作品还没有操作记录。</p>';
+  $("#work-audit-load-more").classList.toggle("hidden", workAuditNextPage === null);
+}
+
+async function loadWorkAuditPage(page = 1, append = false) {
+  if (!state.work) return;
+  const result = await apiPage(`/api/works/${encodeURIComponent(state.work.id)}/audit-logs`, page, 30);
+  workAuditRecords = append ? [...workAuditRecords, ...result.items] : result.items;
+  workAuditNextPage = result.nextPage;
+  renderWorkAuditRecords();
+}
+
+async function openWorkAuditDialog() {
+  if (!state.work || !["admin", "owner"].includes(String(state.work.accessRole))) return;
+  workAuditRecords = [];
+  workAuditNextPage = null;
+  $("#work-audit-list").innerHTML = '<p class="entity-history-empty">正在加载操作记录…</p>';
+  $("#work-audit-dialog").showModal();
+  try {
+    await loadWorkAuditPage();
+  } catch (error) {
+    $("#work-audit-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
+async function saveWritingGoal(event) {
+  event.preventDefault();
+  if (!state.work || !canEditProse()) return;
+  const button = $("#writing-goal-save");
+  button.disabled = true;
+  try {
+    const progress = await api(`/api/works/${encodeURIComponent(state.work.id)}/writing-goal`, {
+      method: "PUT",
+      body: {
+        dailyGoal: Number($("#writing-daily-goal").value),
+        targetTotal: Number($("#writing-total-goal").value),
+        deadline: $("#writing-deadline").value || null
+      }
+    });
+    renderWritingProgress(progress);
+    toast("写作目标已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = !canEditProse();
+  }
 }
 
 function renderUsers(users) {
@@ -3022,12 +3233,12 @@ function renderTree() {
   $("#novel-tree").innerHTML = state.work.volumes.map((volume) => `
     <div class="volume-node ${state.collapsedVolumeIds.has(volume.id) ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
-        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
       ${volume.chapters.map((chapter) => `
-        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}">
+        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}" draggable="${proseEditable ? "true" : "false"}" title="${proseEditable ? "拖拽排序；Alt+方向键排序，Alt+Shift+方向键跨卷" : ""}">
           <span>${esc(chapter.title)}</span><span class="chapter-node-meta">${chapter.chapterType && chapter.chapterType !== "正文" ? `<em class="chapter-type-badge">${esc(chapter.chapterType)}</em>` : ""}<small>${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small></span>
         </button>`).join("")}
       </div>
@@ -3044,13 +3255,30 @@ function renderTree() {
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
+    if (proseEditable) {
+      button.addEventListener("dragover", (event) => {
+        if (!event.dataTransfer?.types.includes("text/plain")) return;
+        event.preventDefault();
+        button.closest(".volume-node")?.classList.add("is-drag-target");
+      });
+      button.addEventListener("dragleave", () => button.closest(".volume-node")?.classList.remove("is-drag-target"));
+      button.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        button.closest(".volume-node")?.classList.remove("is-drag-target");
+        const chapterId = event.dataTransfer?.getData("text/plain");
+        const volume = state.work?.volumes.find((item) => item.id === button.dataset.volumeToggle);
+        if (chapterId && volume) await moveChapterInTree(chapterId, volume.id, volume.chapters.length);
+      });
+    }
   });
   $("#novel-tree").querySelectorAll("[data-new-chapter-volume]").forEach((button) => {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
-    button.addEventListener("click", () => {
-      selectChapter(button.dataset.chapterId);
+    button.addEventListener("click", async () => {
+      const chapterId = button.dataset.chapterId;
+      await selectChapter(chapterId);
+      $("#novel-tree").querySelector(`[data-chapter-id="${CSS.escape(chapterId)}"]`)?.focus();
       if (isMobileViewport()) {
         panelLayout.leftCollapsed = true;
         applyPanelLayout(true);
@@ -3061,7 +3289,170 @@ function renderTree() {
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
     });
+    if (proseEditable) {
+      button.addEventListener("dragstart", (event) => {
+        event.dataTransfer?.setData("text/plain", button.dataset.chapterId);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        button.classList.add("is-dragging");
+      });
+      button.addEventListener("dragend", () => {
+        button.classList.remove("is-dragging");
+        $("#novel-tree").querySelectorAll(".is-drag-over, .is-drag-target").forEach((node) => node.classList.remove("is-drag-over", "drop-after", "is-drag-target"));
+      });
+      button.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        const after = event.clientY >= button.getBoundingClientRect().top + button.offsetHeight / 2;
+        button.classList.toggle("drop-after", after);
+        button.classList.add("is-drag-over");
+      });
+      button.addEventListener("dragleave", () => button.classList.remove("is-drag-over", "drop-after"));
+      button.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const chapterId = event.dataTransfer?.getData("text/plain");
+        const target = findChapterLocation(button.dataset.chapterId);
+        const after = button.classList.contains("drop-after");
+        button.classList.remove("is-drag-over", "drop-after");
+        if (!chapterId || !target) return;
+        const targetChapters = target.volume.chapters.filter((chapter) => chapter.id !== chapterId);
+        const targetIndex = targetChapters.findIndex((chapter) => chapter.id === button.dataset.chapterId);
+        await moveChapterInTree(chapterId, target.volume.id, Math.max(0, targetIndex + (after ? 1 : 0)));
+      });
+      button.addEventListener("keydown", async (event) => {
+        if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        await moveChapterByKeyboard(button.dataset.chapterId, event.key === "ArrowDown" ? 1 : -1, event.shiftKey);
+      });
+    }
   });
+}
+
+function renderChapterBatchDialog() {
+  const chapters = state.work?.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({ ...chapter, volumeTitle: volume.title }))) ?? [];
+  for (const chapterId of chapterBatchSelectedIds) {
+    if (!chapters.some((chapter) => chapter.id === chapterId)) chapterBatchSelectedIds.delete(chapterId);
+  }
+  $("#chapter-batch-list").innerHTML = chapters.length ? chapters.map((chapter) => `<label class="chapter-batch-item">
+    <input type="checkbox" value="${esc(chapter.id)}" ${chapterBatchSelectedIds.has(chapter.id) ? "checked" : ""}>
+    <span><strong>${esc(chapter.title)}</strong><small>${esc(chapter.volumeTitle)} · ${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")} 字 · ${esc(chapter.chapterType || "正文")}</small></span>
+  </label>`).join("") : '<p class="entity-history-empty">当前作品还没有章节。</p>';
+  $("#chapter-batch-list").querySelectorAll('input[type="checkbox"]').forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) chapterBatchSelectedIds.add(input.value);
+    else chapterBatchSelectedIds.delete(input.value);
+    updateChapterBatchControls();
+  }));
+  $("#chapter-batch-volume").innerHTML = (state.work?.volumes ?? []).map((volume) => `<option value="${esc(volume.id)}">${esc(volume.title)}</option>`).join("");
+  updateChapterBatchControls();
+}
+
+function updateChapterBatchControls() {
+  const count = chapterBatchSelectedIds.size;
+  const action = $("#chapter-batch-action").value;
+  $("#chapter-batch-count").textContent = `已选择 ${count} 章`;
+  $("#chapter-batch-apply").disabled = count === 0;
+  $("#chapter-batch-volume-field").classList.toggle("hidden", action !== "move");
+  $("#chapter-batch-type-field").classList.toggle("hidden", action !== "setType");
+  $("#chapter-batch-apply").textContent = action === "delete" ? "软删除所选章节" : "应用到所选章节";
+}
+
+function openChapterBatchDialog() {
+  if (!state.work || !canEditProse()) return;
+  chapterBatchSelectedIds.clear();
+  renderChapterBatchDialog();
+  $("#chapter-batch-dialog").showModal();
+}
+
+async function submitChapterBatch(event) {
+  event.preventDefault();
+  if (!state.work || !chapterBatchSelectedIds.size) return;
+  const chapters = state.work.volumes.flatMap((volume) => volume.chapters).filter((chapter) => chapterBatchSelectedIds.has(chapter.id));
+  const actionValue = $("#chapter-batch-action").value;
+  const action = actionValue === "move"
+    ? { type: "move", volumeId: $("#chapter-batch-volume").value }
+    : actionValue === "setType"
+      ? { type: "setType", chapterType: $("#chapter-batch-type").value }
+      : actionValue === "exclude" || actionValue === "include"
+        ? { type: "setAnalysisExclusion", excludedFromAnalysis: actionValue === "exclude" }
+        : { type: "delete" };
+  const dialog = $("#chapter-batch-dialog");
+  if (action.type === "delete") {
+    dialog.close();
+    const confirmed = await confirmToast(`所选 ${chapters.length} 个章节的正文、版本和关联资料会保留，后续可以恢复。仍要删除吗？`, {
+      title: "批量删除需要再次确认",
+      confirmLabel: "确认软删除"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+  }
+  $("#chapter-batch-apply").disabled = true;
+  try {
+    await api(`/api/works/${encodeURIComponent(state.work.id)}/chapters/batch`, {
+      method: "POST",
+      body: { chapters: chapters.map((chapter) => ({ id: chapter.id, expectedVersionNo: chapter.versionNo })), action }
+    });
+    const workId = state.work.id;
+    state.work = await api(`/api/works/${encodeURIComponent(workId)}`);
+    const currentStillExists = state.chapter && state.work.volumes.some((volume) => volume.chapters.some((chapter) => chapter.id === state.chapter.id));
+    if (state.chapter && currentStillExists) state.chapter = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}`);
+    if (state.chapter && !currentStillExists) {
+      state.chapter = null;
+      showWelcome(true);
+    } else renderTree();
+    if (dialog.open) dialog.close();
+    chapterBatchSelectedIds.clear();
+    toast(`已批量处理 ${chapters.length} 个章节`);
+  } catch (error) {
+    if (!dialog.open) dialog.showModal();
+    $("#chapter-batch-apply").disabled = false;
+    toast(error.message, "error");
+  }
+}
+
+function findChapterLocation(chapterId) {
+  for (const [volumeIndex, volume] of (state.work?.volumes ?? []).entries()) {
+    const chapterIndex = volume.chapters.findIndex((chapter) => chapter.id === chapterId);
+    if (chapterIndex >= 0) return { volume, volumeIndex, chapterIndex, chapter: volume.chapters[chapterIndex] };
+  }
+  return null;
+}
+
+async function moveChapterInTree(chapterId, volumeId, sortOrder) {
+  const location = findChapterLocation(chapterId);
+  if (!location || chapterMovePending) return;
+  const samePosition = location.volume.id === volumeId && location.chapterIndex === sortOrder;
+  if (samePosition) return;
+  chapterMovePending = true;
+  try {
+    const moved = await api(`/api/chapters/${encodeURIComponent(chapterId)}/move`, {
+      method: "POST",
+      body: { volumeId, sortOrder, expectedVersionNo: location.chapter.versionNo }
+    });
+    state.work = await api(`/api/works/${encodeURIComponent(state.work.id)}`);
+    if (state.chapter?.id === chapterId) state.chapter = { ...state.chapter, ...moved };
+    renderTree();
+    $("#novel-tree").querySelector(`[data-chapter-id="${CSS.escape(chapterId)}"]`)?.focus();
+    toast(location.volume.id === volumeId ? "章节顺序已更新" : "章节已移动到目标分卷");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    chapterMovePending = false;
+  }
+}
+
+async function moveChapterByKeyboard(chapterId, direction, crossVolume) {
+  const location = findChapterLocation(chapterId);
+  if (!location || !state.work) return;
+  if (crossVolume) {
+    const targetVolume = state.work.volumes[location.volumeIndex + direction];
+    if (!targetVolume) return toast("已经是最前或最后一个分卷");
+    await moveChapterInTree(chapterId, targetVolume.id, direction < 0 ? targetVolume.chapters.length : 0);
+    return;
+  }
+  const targetIndex = location.chapterIndex + direction;
+  if (targetIndex < 0 || targetIndex >= location.volume.chapters.length) return toast("已经是本卷首章或末章");
+  await moveChapterInTree(chapterId, location.volume.id, targetIndex);
 }
 
 function closeChapterTypeMenu() {
@@ -3083,6 +3474,57 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - rect.width - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - rect.height - 8))}px`;
+}
+
+async function deleteChapter(chapterId) {
+  if (!state.work || !canEditProse()) return toast("当前权限不能删除正文", "error");
+  const chaptersBeforeDelete = state.work.volumes.flatMap((volume) => volume.chapters);
+  const chapterIndex = chaptersBeforeDelete.findIndex((chapter) => chapter.id === chapterId);
+  const chapter = chaptersBeforeDelete[chapterIndex];
+  if (!chapter) return toast("章节不存在或已被删除", "error");
+  const deletingCurrentChapter = state.chapter?.id === chapterId;
+  if (deletingCurrentChapter) cancelChapterAutoSave();
+  const resumeAutoSave = () => {
+    if (deletingCurrentChapter && state.dirty && !chapterEditorReadOnly) scheduleChapterAutoSave();
+  };
+  const dirtyWarning = deletingCurrentChapter && state.dirty ? "，当前未保存修改不会保留" : "";
+  if (!await confirmToast(`确认删除章节“${chapter.title}”吗？删除后将从正文目录隐藏${dirtyWarning}。`, {
+    title: "删除章节",
+    confirmLabel: "继续删除"
+  })) {
+    resumeAutoSave();
+    return;
+  }
+  if (!await confirmToast(`章节“${chapter.title}”的正文、版本和关联资料会保留，后续可以恢复。仍要删除吗？`, {
+    title: "删除操作需要再次确认",
+    confirmLabel: "确认删除"
+  })) {
+    resumeAutoSave();
+    return;
+  }
+  try {
+    const deletingSelectedChapter = state.chapter?.id === chapterId;
+    const expectedVersionNo = deletingSelectedChapter ? state.chapter.versionNo : chapter.versionNo;
+    await api(`/api/chapters/${chapterId}`, { method: "DELETE", body: { expectedVersionNo } });
+    const workId = state.work.id;
+    state.work = await api(`/api/works/${workId}`);
+    if (deletingSelectedChapter) {
+      state.chapter = null;
+      state.dirty = false;
+      lastSavedChapterSnapshot = null;
+      setSaveState("已删除");
+      const remainingChapters = state.work.volumes.flatMap((volume) => volume.chapters);
+      const nextChapter = remainingChapters[Math.min(Math.max(chapterIndex, 0), remainingChapters.length - 1)];
+      if (nextChapter) await selectChapter(nextChapter.id);
+      else showWelcome(true);
+    } else {
+      renderTree();
+    }
+    toast(`已删除章节“${chapter.title}”，正文和版本记录已保留`);
+  } catch (error) {
+    resumeAutoSave();
+    toast(error.message, "error");
+  }
 }
 
 async function selectChapter(chapterId, { editMode = false } = {}) {
@@ -5867,12 +6309,16 @@ function openWorkSettingsDialog(work) {
     <div><strong id="import-history-settings-title">正文导入历史</strong><small>查看导入前快照并恢复被覆盖的分卷、章节标题和正文；大纲、伏笔等章节关联资料不在快照中。</small></div>
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
+  const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
+    <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>查看并恢复已软删除的章节，正文、版本和关联资料不会在删除时清理。</small></div>
+    <button id="chapter-recycle-bin-button" class="ghost-button" type="button" aria-controls="chapter-recycle-bin-dialog" aria-haspopup="dialog" ${canEditProse() ? "" : "disabled"}>打开回收站</button>
+  </section>` : "";
   const whitespaceField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="whitespace-settings-title">
     <div><strong id="whitespace-settings-title">正文空白符</strong><small>在编辑器正文中显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
     <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
   </section>` : "";
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + recycleBinField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = (await apiPage("/api/works")).items;
@@ -5894,6 +6340,10 @@ function openWorkSettingsDialog(work) {
   $("#import-history-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openImportHistory();
+  });
+  $("#chapter-recycle-bin-button")?.addEventListener("click", () => {
+    $("#form-dialog").close();
+    void openChapterRecycleBin();
   });
   $("#work-access-manage")?.addEventListener("click", () => {
     $("#form-dialog").close();
@@ -7925,6 +8375,69 @@ async function openImportHistory() {
   }
 }
 
+function renderChapterRecycleBin(chapters) {
+  const host = $("#chapter-recycle-bin-list");
+  if (!chapters.length) {
+    host.innerHTML = '<p class="entity-history-empty">回收站为空，没有可恢复的章节。</p>';
+    return;
+  }
+  host.innerHTML = chapters.map((chapter) => `<article class="entity-version-card" data-deleted-chapter="${esc(chapter.id)}">
+    <header><strong>${esc(chapter.title)}</strong><span class="import-history-kind">${esc(chapter.volumeTitle)}</span></header>
+    <time>${esc(formatDateTime(chapter.deletedAt))} · ${esc(chapter.actor)}</time>
+    <p>${esc(chapter.contentPreview || "空白章节")}</p>
+    <small>${Number(chapter.wordCount).toLocaleString("zh-CN")} 字 · 删除版本 v${Number(chapter.versionNo)}</small>
+    <button type="button" data-restore-deleted-chapter="${esc(chapter.id)}">恢复章节</button>
+  </article>`).join("");
+  host.querySelectorAll("[data-restore-deleted-chapter]").forEach((button) => button.addEventListener("click", async () => {
+    const chapter = chapters.find((item) => item.id === button.dataset.restoreDeletedChapter);
+    if (!chapter || !state.work) return;
+    const dialog = $("#chapter-recycle-bin-dialog");
+    dialog.close();
+    const confirmed = await confirmToast(`将章节“${chapter.title}”恢复到分卷“${chapter.volumeTitle}”吗？`, {
+      title: "恢复已删除章节",
+      confirmLabel: "确认恢复"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api(`/api/chapters/${encodeURIComponent(chapter.id)}/restore`, {
+        method: "POST",
+        body: { versionNo: chapter.versionNo, expectedVersionNo: chapter.versionNo }
+      });
+      state.work = await api(`/api/works/${encodeURIComponent(state.work.id)}`);
+      renderTree();
+      await loadChapterRecycleBin();
+      dialog.showModal();
+      toast(`已恢复章节“${chapter.title}”`);
+    } catch (error) {
+      button.disabled = false;
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  }));
+}
+
+async function loadChapterRecycleBin() {
+  if (!state.work) return;
+  const chapters = await api(`/api/works/${encodeURIComponent(state.work.id)}/deleted-chapters`);
+  renderChapterRecycleBin(chapters);
+}
+
+async function openChapterRecycleBin() {
+  if (!state.work || !canEditProse()) return toast("当前权限不能恢复正文", "error");
+  $("#chapter-recycle-bin-list").innerHTML = '<p class="entity-history-empty">正在读取已删除章节…</p>';
+  $("#chapter-recycle-bin-dialog").showModal();
+  try {
+    await loadChapterRecycleBin();
+  } catch (error) {
+    $("#chapter-recycle-bin-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
 async function showChapterInsight() {
   if (!state.chapter) return;
   const chapterId = state.chapter.id;
@@ -8554,6 +9067,17 @@ $("#platform-usage-refresh").addEventListener("click", async () => {
   }
 });
 $("#user-management-button").addEventListener("click", openUsersDialog);
+$("#writing-progress-button").addEventListener("click", () => openWritingProgressDialog().catch((error) => toast(error.message, "error")));
+$("#writing-progress-close").addEventListener("click", () => $("#writing-progress-dialog").close());
+$("#writing-progress-refresh").addEventListener("click", () => loadWritingProgress().catch((error) => toast(error.message, "error")));
+$("#writing-goal-form").addEventListener("submit", saveWritingGoal);
+$("#work-audit-button").addEventListener("click", () => openWorkAuditDialog().catch((error) => toast(error.message, "error")));
+$("#work-audit-close").addEventListener("click", () => $("#work-audit-dialog").close());
+$("#work-audit-settings-return").addEventListener("click", () => returnToSettingsHub("#work-audit-button", "#work-audit-dialog").catch((error) => toast(error.message, "error")));
+$("#work-audit-refresh").addEventListener("click", () => loadWorkAuditPage().catch((error) => toast(error.message, "error")));
+$("#work-audit-load-more").addEventListener("click", () => {
+  if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
+});
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {
@@ -8640,13 +9164,30 @@ $("#platform-new-provider").addEventListener("click", () => openProviderDialog()
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
+$("#chapter-delete-button").addEventListener("click", () => {
+  if (state.chapter) void deleteChapter(state.chapter.id);
+});
 $("#chapter-edit-button").addEventListener("click", enterChapterEditMode);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
+$("#chapter-batch-button").addEventListener("click", openChapterBatchDialog);
+$("#chapter-batch-close").addEventListener("click", () => $("#chapter-batch-dialog").close());
+$("#chapter-batch-cancel").addEventListener("click", () => $("#chapter-batch-dialog").close());
+$("#chapter-batch-action").addEventListener("change", updateChapterBatchControls);
+$("#chapter-batch-select-all").addEventListener("click", () => {
+  state.work?.volumes.flatMap((volume) => volume.chapters).forEach((chapter) => chapterBatchSelectedIds.add(chapter.id));
+  renderChapterBatchDialog();
+});
+$("#chapter-batch-clear").addEventListener("click", () => {
+  chapterBatchSelectedIds.clear();
+  renderChapterBatchDialog();
+});
+$("#chapter-batch-form").addEventListener("submit", submitChapterBatch);
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
 $("#import-history-close").addEventListener("click", () => $("#import-history-dialog").close());
+$("#chapter-recycle-bin-close").addEventListener("click", () => $("#chapter-recycle-bin-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
 $("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });
@@ -8736,6 +9277,12 @@ $("#chapter-line-numbers-inner").addEventListener("contextmenu", (event) => {
   if (row) showLineCitationMenu(event, Number(row.dataset.lineIndex));
 });
 $("#add-line-citation").addEventListener("click", addSelectedLinesAsCitation);
+$("#add-line-annotation").addEventListener("click", () => createSelectedLineAnnotation("note"));
+$("#add-line-todo").addEventListener("click", () => createSelectedLineAnnotation("todo"));
+$("#chapter-annotations-button").addEventListener("click", () => openChapterAnnotationsDialog().catch((error) => toast(error.message, "error")));
+$("#chapter-annotations-close").addEventListener("click", () => $("#chapter-annotations-dialog").close());
+$("#chapter-annotations-done").addEventListener("click", () => $("#chapter-annotations-dialog").close());
+$("#chapter-annotations-refresh").addEventListener("click", () => loadChapterAnnotations().catch((error) => toast(error.message, "error")));
 $("#left-panel-toggle").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
   applyPanelLayout(true);
@@ -8894,6 +9441,13 @@ $("#cover-file").addEventListener("change", async (event) => {
   }
 });
 $("#chapter-type-menu").addEventListener("click", async (event) => {
+  const deleteButton = event.target.closest("[data-delete-chapter]");
+  if (deleteButton) {
+    const chapterId = state.contextChapterId;
+    closeChapterTypeMenu();
+    if (chapterId) await deleteChapter(chapterId);
+    return;
+  }
   const button = event.target.closest("[data-chapter-type]");
   const chapterId = state.contextChapterId;
   if (!button || !chapterId) return;
