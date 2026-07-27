@@ -2080,6 +2080,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use((_request, _response, next) => next(new AppError(404, "ROUTE_NOT_FOUND", "请求的接口不存在")));
   app.use((error: unknown, request: Request, response: Response, _next: NextFunction) => {
     const commonFields = { method: request.method, path: sanitizeRequestPath(request.path), error: sanitizeError(error) };
+    if (response.headersSent || response.destroyed) {
+      logger.warn("http.request.response_stream_failed", commonFields);
+      if (!response.destroyed) response.destroy(error instanceof Error ? error : undefined);
+      return;
+    }
     if (error instanceof ZodError) {
       logger.warn("http.request.validation_failed", { ...commonFields, issuePaths: error.issues.map((issue) => issue.path.join(".")) });
       response.status(400).json({
