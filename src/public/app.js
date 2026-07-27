@@ -2692,7 +2692,7 @@ function renderSettingsHub() {
   $("#export-button").disabled = !canReadAggregate;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
-    ? `当前作品：《${state.work.title}》。导出将作用于这部作品。`
+    ? `当前作品：《${state.work.title}》。Markdown 导出仅包含分卷、章节标题与正文。`
     : "当前未选择作品；打开作品后可使用导出。";
 }
 
@@ -6299,6 +6299,11 @@ function bindWorkCoverControls(work) {
   });
 }
 
+function downloadWorkManuscript(work) {
+  if (!work?.id) return;
+  window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=markdown`;
+}
+
 function openWorkSettingsDialog(work) {
   if (!work) return;
   const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
@@ -6315,6 +6320,10 @@ function openWorkSettingsDialog(work) {
     <div><strong id="import-history-settings-title">正文导入历史</strong><small>查看导入前快照并恢复被覆盖的分卷、章节标题和正文；大纲、伏笔等章节关联资料不在快照中。</small></div>
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
+  const exportField = `<section class="work-access-field" aria-labelledby="work-export-settings-title">
+    <div><strong id="work-export-settings-title">导出正文</strong><small>下载包含分卷、章节标题与正文的 Markdown 文件；不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
+    <button id="work-export-button" class="ghost-button" type="button">下载 Markdown</button>
+  </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
     <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>查看并恢复已软删除的章节，正文、版本和关联资料不会在删除时清理。</small></div>
     <button id="chapter-recycle-bin-button" class="ghost-button" type="button" aria-controls="chapter-recycle-bin-dialog" aria-haspopup="dialog" ${canEditProse() ? "" : "disabled"}>打开回收站</button>
@@ -6324,7 +6333,7 @@ function openWorkSettingsDialog(work) {
     <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
   </section>` : "";
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + recycleBinField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + exportField + recycleBinField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = (await apiPage("/api/works")).items;
@@ -6347,6 +6356,7 @@ function openWorkSettingsDialog(work) {
     $("#form-dialog").close();
     void openImportHistory();
   });
+  $("#work-export-button")?.addEventListener("click", () => downloadWorkManuscript(work));
   $("#chapter-recycle-bin-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openChapterRecycleBin();
@@ -9636,9 +9646,7 @@ $("#search-form").addEventListener("submit", async (event) => {
     $("#search-results").innerHTML = `<p class="search-results-status">${esc(error.message)}</p>`;
   });
 });
-$("#export-button").addEventListener("click", () => {
-  if (state.work) window.location.href = `/api/works/${state.work.id}/export?format=markdown`;
-});
+$("#export-button").addEventListener("click", () => downloadWorkManuscript(state.work));
 window.addEventListener("beforeunload", (event) => { if (state.dirty || entityEditorDirty || characterSectionEditorDirty) event.preventDefault(); });
 
 initializePage().catch((error) => {
