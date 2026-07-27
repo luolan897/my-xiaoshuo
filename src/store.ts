@@ -2051,6 +2051,138 @@ export class Store {
     return this.getChapter(chapterId);
   }
 
+  private mapChapterAnnotation(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      chapterId: requiredString(row, "chapter_id"),
+      kind: requiredString(row, "kind"),
+      startLine: numberValue(row, "start_line"),
+      endLine: numberValue(row, "end_line"),
+      quote: requiredString(row, "quote"),
+      note: requiredString(row, "note"),
+      status: requiredString(row, "status"),
+      versionNo: numberValue(row, "version_no"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据",
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private chapterAnnotationSnapshot(annotation: Record<string, unknown>): Record<string, unknown> {
+    return {
+      kind: annotation.kind,
+      startLine: annotation.startLine,
+      endLine: annotation.endLine,
+      quote: annotation.quote,
+      note: annotation.note,
+      status: annotation.status,
+      deletedAt: annotation.deletedAt ?? null
+    };
+  }
+
+  private recordChapterAnnotationVersion(annotation: Record<string, unknown>, source: string, timestamp: string): void {
+    this.db.run(
+      `INSERT INTO chapter_annotation_versions (id, annotation_id, version_no, snapshot_json, source, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      id("chapterAnnotationVersion"),
+      String(annotation.id),
+      Number(annotation.versionNo),
+      JSON.stringify(this.chapterAnnotationSnapshot(annotation)),
+      source,
+      timestamp,
+      currentRequestActor()?.userId ?? null
+    );
+  }
+
+  getChapterAnnotation(annotationId: string, includeDeleted = false): Record<string, unknown> {
+    const row = this.db.get(
+      `SELECT annotation.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM chapter_annotations annotation LEFT JOIN users user ON user.id = annotation.updated_by_user_id
+       WHERE annotation.id = ?${includeDeleted ? "" : " AND annotation.deleted_at IS NULL"}`,
+      annotationId
+    );
+    if (!row) throw notFound("章节批注");
+    return { ...this.mapChapterAnnotation(row), deletedAt: optionalString(row, "deleted_at") };
+  }
+
+  listChapterAnnotations(chapterId: string): Record<string, unknown>[] {
+    this.getChapter(chapterId);
+    return this.db.all(
+      `SELECT annotation.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM chapter_annotations annotation LEFT JOIN users user ON user.id = annotation.updated_by_user_id
+       WHERE annotation.chapter_id = ? AND annotation.deleted_at IS NULL
+       ORDER BY CASE annotation.status WHEN 'open' THEN 0 ELSE 1 END, annotation.start_line, annotation.created_at`,
+      chapterId
+    ).map((row) => this.mapChapterAnnotation(row));
+  }
+
+  createChapterAnnotation(chapterId: string, input: { kind: "note" | "todo"; startLine: number; endLine: number; note: string }): Record<string, unknown> {
+    const chapter = this.getChapter(chapterId);
+    const lines = String(chapter.content).replace(/\r\n?/gu, "\n").split("\n");
+    if (input.startLine > lines.length || input.endLine > lines.length) throw new AppError(400, "ANNOTATION_LINE_RANGE_INVALID", "批注行号超出当前正文范围");
+    if (input.endLine - input.startLine >= 20) throw new AppError(400, "ANNOTATION_LINE_RANGE_TOO_LARGE", "一次最多批注 20 行正文");
+    const annotationId = id("chapterAnnotation");
+    const timestamp = now();
+    const actorId = currentRequestActor()?.userId ?? null;
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO chapter_annotations (id, work_id, chapter_id, kind, start_line, end_line, quote, note, status, version_no, created_at, updated_at, created_by_user_id, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?, ?)`,
+        annotationId,
+        String(chapter.workId),
+        chapterId,
+        input.kind,
+        input.startLine,
+        input.endLine,
+        lines.slice(input.startLine - 1, input.endLine).join("\n"),
+        input.note.trim(),
+        timestamp,
+        timestamp,
+        actorId,
+        actorId
+      );
+      const annotation = this.getChapterAnnotation(annotationId);
+      this.recordChapterAnnotationVersion(annotation, "create", timestamp);
+      this.audit(String(chapter.workId), "chapter.annotation.created", "chapter-annotation", annotationId, { kind: input.kind, chapterId, startLine: input.startLine, endLine: input.endLine });
+    });
+    return this.getChapterAnnotation(annotationId);
+  }
+
+  updateChapterAnnotation(annotationId: string, input: { note?: string; status?: "open" | "resolved" }, expectedVersionNo?: number): Record<string, unknown> {
+    const current = this.getChapterAnnotation(annotationId);
+    this.assertExpectedRevision("chapter-annotation", annotationId, expectedVersionNo, "章节批注", Number(current.versionNo));
+    const timestamp = now();
+    this.db.transaction(() => {
+      const locked = this.getChapterAnnotation(annotationId);
+      this.assertExpectedRevision("chapter-annotation", annotationId, expectedVersionNo, "章节批注", Number(locked.versionNo));
+      this.db.run(
+        "UPDATE chapter_annotations SET note = ?, status = ?, version_no = version_no + 1, updated_at = ?, updated_by_user_id = ? WHERE id = ?",
+        input.note?.trim() ?? String(locked.note),
+        input.status ?? String(locked.status),
+        timestamp,
+        currentRequestActor()?.userId ?? null,
+        annotationId
+      );
+      const updated = this.getChapterAnnotation(annotationId);
+      this.recordChapterAnnotationVersion(updated, "update", timestamp);
+      this.audit(String(updated.workId), "chapter.annotation.updated", "chapter-annotation", annotationId, { status: updated.status, versionNo: updated.versionNo });
+    });
+    return this.getChapterAnnotation(annotationId);
+  }
+
+  deleteChapterAnnotation(annotationId: string, expectedVersionNo?: number): void {
+    const current = this.getChapterAnnotation(annotationId);
+    this.assertExpectedRevision("chapter-annotation", annotationId, expectedVersionNo, "章节批注", Number(current.versionNo));
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run("UPDATE chapter_annotations SET version_no = version_no + 1, deleted_at = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ?", timestamp, timestamp, currentRequestActor()?.userId ?? null, annotationId);
+      const deleted = this.getChapterAnnotation(annotationId, true);
+      this.recordChapterAnnotationVersion(deleted, "delete", timestamp);
+      this.audit(String(deleted.workId), "chapter.annotation.deleted", "chapter-annotation", annotationId, { versionNo: deleted.versionNo, recoverable: true });
+    });
+  }
+
   batchManageChapters(
     workId: string,
     chapters: { id: string; expectedVersionNo: number }[],

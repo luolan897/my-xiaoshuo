@@ -133,6 +133,7 @@ const acknowledgedCollaborativeChangeIds = new Set();
 let collaborativeChangePromptOpen = false;
 let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
+let chapterAnnotations = [];
 let workAuditRecords = [];
 let workAuditNextPage = null;
 const chapterBatchSelectedIds = new Set();
@@ -903,6 +904,7 @@ function applyChapterEditorMode() {
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
   $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || !state.chapter);
+  $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
   if (viewOnly) cancelChapterAutoSave();
 }
 
@@ -1741,6 +1743,96 @@ function addSelectedLinesAsCitation() {
   toast(`已引用《${citation.chapterTitle}》第 ${citation.startLine}${citation.startLine === citation.endLine ? "" : `-${citation.endLine}`} 行`);
 }
 
+async function createSelectedLineAnnotation(kind) {
+  if (!state.chapter || !chapterLineSelection || !canEditProse()) return;
+  const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
+  closeLineCitationMenu();
+  const note = await inputToast(kind === "todo" ? "描述需要后续处理的事项" : "写下这段正文的批注", {
+    title: kind === "todo" ? "添加正文待办" : "添加正文批注",
+    inputLabel: kind === "todo" ? "待办内容" : "批注内容",
+    confirmLabel: "添加",
+    maxLength: 2000
+  });
+  if (!note) return;
+  try {
+    await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}/annotations`, {
+      method: "POST",
+      body: { kind, startLine: selection.safeStart + 1, endLine: selection.safeEnd + 1, note }
+    });
+    toast(kind === "todo" ? "正文待办已添加" : "正文批注已添加");
+    await openChapterAnnotationsDialog();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function renderChapterAnnotations() {
+  const host = $("#chapter-annotations-list");
+  host.innerHTML = chapterAnnotations.length ? chapterAnnotations.map((annotation) => `<article class="chapter-annotation-card ${annotation.status === "resolved" ? "is-resolved" : ""}" data-annotation-id="${esc(annotation.id)}">
+    <header><span class="chapter-annotation-kind">${annotation.kind === "todo" ? "待办" : "批注"}</span><strong>${annotation.startLine === annotation.endLine ? `第 ${annotation.startLine} 行` : `第 ${annotation.startLine}-${annotation.endLine} 行`}</strong><em>${annotation.status === "resolved" ? "已完成" : "处理中"}</em></header>
+    <blockquote>${esc(annotation.quote || "空白行")}</blockquote>
+    <p>${esc(annotation.note)}</p>
+    <small>${esc(annotation.actor)} · ${esc(formatDateTime(annotation.updatedAt))} · v${Number(annotation.versionNo)}</small>
+    <footer><button type="button" data-annotation-locate>定位原文</button>${canEditProse() ? `<button type="button" data-annotation-edit>编辑说明</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : "完成待办"}</button><button class="danger-button" type="button" data-annotation-delete>删除</button>` : ""}</footer>
+  </article>`).join("") : '<p class="entity-history-empty">本章还没有批注或待办。选择正文行并打开右键菜单即可添加。</p>';
+  host.querySelectorAll("[data-annotation-id]").forEach((card) => {
+    const annotation = chapterAnnotations.find((item) => item.id === card.dataset.annotationId);
+    if (!annotation) return;
+    card.querySelector("[data-annotation-locate]")?.addEventListener("click", () => {
+      $("#chapter-annotations-dialog").close();
+      paintChapterLineSelection(annotation.startLine - 1, annotation.endLine - 1);
+      selectChapterLines(annotation.startLine - 1, annotation.endLine - 1);
+    });
+    card.querySelector("[data-annotation-status]")?.addEventListener("click", async () => {
+      try {
+        await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "PATCH", body: { status: annotation.status === "resolved" ? "open" : "resolved", expectedVersionNo: annotation.versionNo } });
+        await loadChapterAnnotations();
+      } catch (error) { toast(error.message, "error"); }
+    });
+    card.querySelector("[data-annotation-edit]")?.addEventListener("click", async () => {
+      const dialog = $("#chapter-annotations-dialog");
+      dialog.close();
+      const note = await inputToast("修改批注或待办说明", { title: "编辑说明", inputLabel: "说明", placeholder: annotation.note, confirmLabel: "保存", maxLength: 2000 });
+      if (!note) return dialog.showModal();
+      try {
+        await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "PATCH", body: { note, expectedVersionNo: annotation.versionNo } });
+        await loadChapterAnnotations();
+      } catch (error) { toast(error.message, "error"); }
+      dialog.showModal();
+    });
+    card.querySelector("[data-annotation-delete]")?.addEventListener("click", async () => {
+      const dialog = $("#chapter-annotations-dialog");
+      dialog.close();
+      const confirmed = await confirmToast("删除后不会在本章清单中显示，但历史版本仍会保留。", { title: "删除批注或待办", confirmLabel: "确认删除" });
+      if (!confirmed) return dialog.showModal();
+      try {
+        await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "DELETE", body: { expectedVersionNo: annotation.versionNo } });
+        await loadChapterAnnotations();
+        dialog.showModal();
+      } catch (error) { dialog.showModal(); toast(error.message, "error"); }
+    });
+  });
+}
+
+async function loadChapterAnnotations() {
+  if (!state.chapter) return;
+  chapterAnnotations = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}/annotations`);
+  renderChapterAnnotations();
+}
+
+async function openChapterAnnotationsDialog() {
+  if (!state.chapter) return;
+  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文批注与待办`;
+  $("#chapter-annotations-list").innerHTML = '<p class="entity-history-empty">正在加载批注与待办…</p>';
+  if (!$("#chapter-annotations-dialog").open) $("#chapter-annotations-dialog").showModal();
+  try {
+    await loadChapterAnnotations();
+  } catch (error) {
+    $("#chapter-annotations-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
 function closeLineCitationMenu() {
   $("#line-citation-menu").classList.add("hidden");
 }
@@ -1752,6 +1844,8 @@ function showLineCitationMenu(event, lineIndex) {
     selectChapterLines(lineIndex, lineIndex);
   }
   const menu = $("#line-citation-menu");
+  $("#add-line-annotation").classList.toggle("hidden", !canEditProse());
+  $("#add-line-todo").classList.toggle("hidden", !canEditProse());
   const { start, end } = chapterLineSelection;
   $("#line-citation-label").textContent = start === end ? `第 ${start + 1} 行` : `第 ${start + 1}-${end + 1} 行`;
   menu.classList.remove("hidden");
@@ -9183,6 +9277,12 @@ $("#chapter-line-numbers-inner").addEventListener("contextmenu", (event) => {
   if (row) showLineCitationMenu(event, Number(row.dataset.lineIndex));
 });
 $("#add-line-citation").addEventListener("click", addSelectedLinesAsCitation);
+$("#add-line-annotation").addEventListener("click", () => createSelectedLineAnnotation("note"));
+$("#add-line-todo").addEventListener("click", () => createSelectedLineAnnotation("todo"));
+$("#chapter-annotations-button").addEventListener("click", () => openChapterAnnotationsDialog().catch((error) => toast(error.message, "error")));
+$("#chapter-annotations-close").addEventListener("click", () => $("#chapter-annotations-dialog").close());
+$("#chapter-annotations-done").addEventListener("click", () => $("#chapter-annotations-dialog").close());
+$("#chapter-annotations-refresh").addEventListener("click", () => loadChapterAnnotations().catch((error) => toast(error.message, "error")));
 $("#left-panel-toggle").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
   applyPanelLayout(true);

@@ -292,6 +292,51 @@ describe("作品、导入和章节版本 API", () => {
     await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/move`).send({ volumeId: secondVolume.body.data.id, sortOrder: 0 }).expect(400);
   });
 
+  it("为正文行创建带版本记录的批注与待办", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "正文批注作品" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "第一行正文\n第二行正文\n第三行正文"
+    }).expect(201);
+
+    const created = await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/annotations`).send({
+      kind: "todo",
+      startLine: 2,
+      endLine: 3,
+      note: "补充两行之间的过渡"
+    }).expect(201);
+    expect(created.body.data).toMatchObject({
+      kind: "todo",
+      quote: "第二行正文\n第三行正文",
+      note: "补充两行之间的过渡",
+      status: "open",
+      versionNo: 1
+    });
+
+    const resolved = await request(runtime.app).patch(`/api/chapter-annotations/${created.body.data.id}`).send({
+      status: "resolved",
+      expectedVersionNo: 1
+    }).expect(200);
+    expect(resolved.body.data).toMatchObject({ status: "resolved", versionNo: 2 });
+
+    const conflict = await request(runtime.app).patch(`/api/chapter-annotations/${created.body.data.id}`).send({
+      note: "冲突修改",
+      expectedVersionNo: 1
+    }).expect(409);
+    expect(conflict.body.error.code).toBe("VERSION_CONFLICT");
+
+    await request(runtime.app).delete(`/api/chapter-annotations/${created.body.data.id}`).send({ expectedVersionNo: 2 }).expect(204);
+    const annotations = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/annotations`).expect(200);
+    expect(annotations.body.data).toEqual([]);
+    expect(runtime.database.all("SELECT version_no, source FROM chapter_annotation_versions WHERE annotation_id = ? ORDER BY version_no", created.body.data.id)).toEqual([
+      { version_no: 1, source: "create" },
+      { version_no: 2, source: "update" },
+      { version_no: 3, source: "delete" }
+    ]);
+  });
+
   it("保存写作目标并从正文版本重建字数趋势", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "写作目标作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
