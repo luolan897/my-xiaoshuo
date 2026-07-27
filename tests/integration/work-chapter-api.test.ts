@@ -292,6 +292,41 @@ describe("作品、导入和章节版本 API", () => {
     await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/move`).send({ volumeId: secondVolume.body.data.id, sortOrder: 0 }).expect(400);
   });
 
+  it("阻止删除仍包含回收站章节的分卷", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "分卷删除保护" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "仍需恢复的章节",
+      content: "这段正文不能被分卷删除级联清理。"
+    }).expect(201);
+
+    const deleted = await request(runtime.app)
+      .delete(`/api/chapters/${chapter.body.data.id}`)
+      .send({ expectedVersionNo: 1 })
+      .expect(204);
+    expect(deleted.body).toEqual({});
+
+    const blocked = await request(runtime.app)
+      .delete(`/api/volumes/${volume.body.data.id}`)
+      .send({ expectedVersionNo: 1 })
+      .expect(409);
+    expect(blocked.body.error).toMatchObject({
+      code: "VOLUME_HAS_DELETED_CHAPTERS",
+      message: "分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷"
+    });
+
+    const restored = await request(runtime.app)
+      .post(`/api/chapters/${chapter.body.data.id}/restore`)
+      .send({ versionNo: 1, expectedVersionNo: 2 })
+      .expect(200);
+    expect(restored.body.data).toMatchObject({
+      title: "仍需恢复的章节",
+      content: "这段正文不能被分卷删除级联清理。",
+      volumeId: volume.body.data.id
+    });
+  });
+
   it("创建和编辑带简介及关键词的分卷", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "分卷设定作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({
