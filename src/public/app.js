@@ -2712,7 +2712,7 @@ function renderWritingProgress(progress) {
     const y = 94 - Math.max(0, Number(item.delta)) / maxDailyWords * 88;
     return { x: x.toFixed(2), y: y.toFixed(2) };
   });
-  const dailyLine = `<svg class="writing-trend-daily-line" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${dailyPoints.map((point) => `${point.x},${point.y}`).join(" ")}"></polyline>${dailyPoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="3"></circle>`).join("")}</svg>`;
+  const dailyLine = `<svg class="writing-trend-daily-line" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${dailyPoints.map((point) => `${point.x},${point.y}`).join(" ")}"></polyline></svg><span class="writing-trend-daily-points" aria-hidden="true">${dailyPoints.map((point) => `<i style="--point-x:${(Number(point.x) / 10).toFixed(2)}%;--point-y:${point.y}%"></i>`).join("")}</span>`;
   const chart = $("#writing-trend-chart");
   chart.innerHTML = progress.trend.map((item, index) => {
     const height = Math.max(3, Math.round(Number(item.words) / maxWords * 100));
