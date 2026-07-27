@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 50 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 51 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -95,6 +95,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "deleted_at")).toBe(true);
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_annotations'")?.name).toBe("chapter_annotations");
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_annotation_versions'")?.name).toBe("chapter_annotation_versions");
+    expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'writing_goals'")?.name).toBe("writing_goals");
     expect(first.get("SELECT title, chapter_type FROM chapters WHERE id = 'chapter-old'")).toEqual({ title: "第一章", chapter_type: "正文" });
     expect(first.all("SELECT name, species FROM characters ORDER BY name")).toEqual([
       { name: "拉顿", species: "" },
