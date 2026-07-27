@@ -1087,6 +1087,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const input = parse(z.object({ volumeId: identifier, title: nonEmpty.max(300), content: z.string().max(2_000_000).optional(), chapterType: chapterTypeSchema.optional() }), request.body);
     data(response, store.createChapter(request.params.workId, input), 201);
   });
+  app.get("/api/works/:workId/deleted-chapters", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listDeletedChaptersPage(request.params.workId, pagination)
+      : store.listDeletedChapters(request.params.workId));
+  });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
   app.patch("/api/chapters/:chapterId", (request, response) => {
     const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
@@ -1116,6 +1122,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const input = parse(z.object({ volumeId: identifier, sortOrder: z.number().int().min(0), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const { expectedVersionNo, ...moveInput } = input;
     data(response, store.moveChapter(request.params.chapterId, moveInput, expectedVersionNo));
+  });
+  app.post("/api/works/:workId/chapters/batch", (request, response) => {
+    const selectedChapters = z.array(z.object({ id: identifier, expectedVersionNo: z.number().int().positive() }).strict()).min(1).max(200);
+    const action = z.discriminatedUnion("type", [
+      z.object({ type: z.literal("move"), volumeId: identifier }).strict(),
+      z.object({ type: z.literal("setType"), chapterType: chapterTypeSchema }).strict(),
+      z.object({ type: z.literal("setAnalysisExclusion"), excludedFromAnalysis: z.boolean() }).strict(),
+      z.object({ type: z.literal("delete") }).strict()
+    ]);
+    const input = parse(z.object({ chapters: selectedChapters, action }).strict(), request.body);
+    data(response, store.batchManageChapters(request.params.workId, input.chapters, input.action));
   });
 
   app.get("/api/works/:workId/outlines", (request, response) => {

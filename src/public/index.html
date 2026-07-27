@@ -140,6 +140,7 @@
             <span>作品目录</span>
             <div class="panel-heading-actions">
               <span id="chapter-count">0 章</span>
+              <button id="chapter-batch-button" class="chapter-batch-button" type="button">批量管理</button>
               <button id="new-volume-button" class="add-button" type="button" aria-label="新建分卷" title="新建分卷">+</button>
             </div>
           </div>
@@ -384,6 +385,30 @@
       </form>
     </dialog>
 
+    <dialog id="chapter-batch-dialog" class="dialog chapter-batch-dialog" aria-labelledby="chapter-batch-title">
+      <form id="chapter-batch-form">
+        <div class="dialog-header">
+          <div><span class="eyebrow">正文工具</span><h2 id="chapter-batch-title">章节批量管理</h2><p class="dialog-header-meta">选择多个章节后统一移动、修改属性或软删除。</p></div>
+          <button id="chapter-batch-close" class="dialog-close" type="button" aria-label="关闭章节批量管理">×</button>
+        </div>
+        <div class="chapter-batch-toolbar">
+          <button id="chapter-batch-select-all" class="ghost-button" type="button">全选</button>
+          <button id="chapter-batch-clear" class="ghost-button" type="button">清空</button>
+          <output id="chapter-batch-count">已选择 0 章</output>
+        </div>
+        <div id="chapter-batch-list" class="chapter-batch-list"></div>
+        <div class="chapter-batch-controls">
+          <label>批量操作<select id="chapter-batch-action"><option value="move">移动到分卷</option><option value="setType">修改章节类型</option><option value="exclude">排除 AI 分析</option><option value="include">纳入 AI 分析</option><option value="delete">软删除章节</option></select></label>
+          <label id="chapter-batch-volume-field">目标分卷<select id="chapter-batch-volume"></select></label>
+          <label id="chapter-batch-type-field" class="hidden">章节类型<select id="chapter-batch-type"><option value="正文">正文</option><option value="设定">设定</option><option value="作者的话">作者的话</option><option value="其他">其他</option></select></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="chapter-batch-cancel" class="ghost-button" type="button">取消</button>
+          <button id="chapter-batch-apply" class="primary-button" type="submit" disabled>应用到所选章节</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="import-mode-dialog" class="dialog import-mode-dialog" aria-labelledby="import-mode-dialog-title" aria-describedby="import-mode-dialog-description" data-testid="import-mode-dialog">
       <form method="dialog">
         <div class="dialog-header">
@@ -607,6 +632,17 @@
       <div class="import-history-body">
         <p id="import-history-description" class="import-history-note">每条记录都保存了该次导入开始前的正文。恢复仅作用于分卷、章节标题和正文，并会重新建立分卷和章节；大纲、伏笔、首次登场等章节关联信息不在快照中，无法通过这里恢复。</p>
         <div id="import-history-list" class="entity-history-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
+    <dialog id="chapter-recycle-bin-dialog" class="dialog wide-dialog" aria-labelledby="chapter-recycle-bin-title" aria-describedby="chapter-recycle-bin-description">
+      <div class="dialog-header">
+        <div><span class="eyebrow">正文安全</span><h2 id="chapter-recycle-bin-title">章节回收站</h2></div>
+        <button id="chapter-recycle-bin-close" class="dialog-close" aria-label="关闭章节回收站" type="button">×</button>
+      </div>
+      <div class="import-history-body">
+        <p id="chapter-recycle-bin-description" class="import-history-note">软删除的章节会保留正文、版本和关联资料。恢复后章节将重新出现在原分卷中。</p>
+        <div id="chapter-recycle-bin-list" class="entity-history-list" aria-live="polite"></div>
       </div>
     </dialog>
 
