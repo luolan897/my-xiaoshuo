@@ -1530,14 +1530,22 @@ export class Store {
   }
 
   deleteVolume(volumeId: string, expectedVersionNo?: number): void {
-    const volume = this.getVolume(volumeId);
-    const count = this.db.get("SELECT COUNT(*) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId);
-    if (numberValue(count ?? {}, "value") > 0) {
-      throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
-    }
     this.db.transaction(() => {
       const current = this.getVolume(volumeId);
       this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", Number(current.versionNo));
+      const counts = this.db.get(
+        `SELECT
+          SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS active_count,
+          SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS deleted_count
+        FROM chapters WHERE volume_id = ?`,
+        volumeId
+      );
+      if (numberValue(counts ?? {}, "active_count") > 0) {
+        throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
+      }
+      if (numberValue(counts ?? {}, "deleted_count") > 0) {
+        throw new AppError(409, "VOLUME_HAS_DELETED_CHAPTERS", "分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷");
+      }
       this.recordEntityVersion("volume", volumeId, "delete", null, "删除分卷");
       this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
       this.audit(String(current.workId), "volume.deleted", "volume", volumeId, { versionNo: Number(current.versionNo) });
@@ -1567,6 +1575,49 @@ export class Store {
     const row = this.db.get("SELECT * FROM chapters WHERE id = ? AND deleted_at IS NULL", chapterId);
     if (!row) throw notFound("章节");
     return this.mapChapter(row);
+  }
+
+  listDeletedChapters(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.findDeletedChapterRows(workId).map((row) => this.mapDeletedChapter(row));
+  }
+
+  listDeletedChaptersPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.findDeletedChapterRows(workId, page.sql, page.params);
+    return paginated(rows.map((row) => this.mapDeletedChapter(row)), pagination);
+  }
+
+  private findDeletedChapterRows(workId: string, pageSql = "", pageParams: Array<string | number> = []): Row[] {
+    return this.db.all(
+      `SELECT chapter.*, volume.title AS volume_title,
+        user.display_name AS actor_display_name, user.username AS actor_username
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       LEFT JOIN chapter_versions version
+         ON version.chapter_id = chapter.id AND version.version_no = chapter.version_no AND version.source = 'delete'
+       LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NOT NULL
+       ORDER BY chapter.deleted_at DESC, chapter.id DESC${pageSql}`,
+      workId,
+      ...pageParams
+    );
+  }
+
+  private mapDeletedChapter(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      volumeId: requiredString(row, "volume_id"),
+      volumeTitle: requiredString(row, "volume_title"),
+      title: requiredString(row, "title"),
+      contentPreview: requiredString(row, "content").slice(0, 300),
+      wordCount: numberValue(row, "word_count"),
+      versionNo: numberValue(row, "version_no"),
+      deletedAt: requiredString(row, "deleted_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    };
   }
 
   private findChapterVersionRows(chapterId: string): Row[] {
@@ -1936,23 +1987,66 @@ export class Store {
     this.db.transaction(() => {
       const lockedChapter = this.getChapter(chapterId);
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedChapter.versionNo));
+      const sourceVolumeId = String(lockedChapter.volumeId);
+      const targetVolumeId = input.volumeId;
+      const sourceChapterIds = this.db.all(
+        "SELECT id FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at, id",
+        sourceVolumeId
+      ).map((row) => requiredString(row, "id")).filter((idValue) => idValue !== chapterId);
+      const targetChapterIds = sourceVolumeId === targetVolumeId
+        ? sourceChapterIds
+        : this.db.all(
+          "SELECT id FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at, id",
+          targetVolumeId
+        ).map((row) => requiredString(row, "id")).filter((idValue) => idValue !== chapterId);
+      const targetIndex = Math.min(input.sortOrder, targetChapterIds.length);
+      targetChapterIds.splice(targetIndex, 0, chapterId);
+      const timestamp = now();
+      sourceChapterIds.forEach((idValue, sortOrder) => {
+        this.db.run("UPDATE chapters SET sort_order = ?, updated_at = ? WHERE id = ?", sortOrder, timestamp, idValue);
+      });
+      targetChapterIds.forEach((idValue, sortOrder) => {
+        this.db.run("UPDATE chapters SET volume_id = ?, sort_order = ?, updated_at = ? WHERE id = ?", targetVolumeId, sortOrder, timestamp, idValue);
+      });
+      const versionNo = Number(lockedChapter.versionNo) + 1;
       this.db.run(
         `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
          WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
-         AND json_extract(scope_json, '$.type') = 'volume' AND json_extract(scope_json, '$.volumeId') = ?`,
-        now(),
-        String(chapter.workId),
-        String(chapter.volumeId)
+         AND json_extract(scope_json, '$.type') = 'volume'
+         AND json_extract(scope_json, '$.volumeId') IN (?, ?)`,
+        timestamp,
+        String(lockedChapter.workId),
+        sourceVolumeId,
+        targetVolumeId
       );
       this.db.run(
-        "UPDATE chapters SET volume_id = ?, sort_order = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?",
-        input.volumeId,
-        input.sortOrder,
-        now(),
+        "UPDATE chapters SET version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?",
+        versionNo,
+        timestamp,
         chapterId
       );
-      this.invalidateChapter(String(chapter.workId), chapterId, Number(chapter.versionNo));
-      this.audit(String(chapter.workId), "chapter.moved", "chapter", chapterId, input);
+      this.insertChapterVersionRow({
+        workId: String(lockedChapter.workId),
+        chapterId,
+        versionNo,
+        title: String(lockedChapter.title),
+        content: String(lockedChapter.content),
+        volumeId: targetVolumeId,
+        sortOrder: targetIndex,
+        chapterType: String(lockedChapter.chapterType),
+        source: "manual",
+        sourceRef: null,
+        changeNote: sourceVolumeId === targetVolumeId ? "调整章节顺序" : "移动章节分卷",
+        timestamp
+      });
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, String(lockedChapter.workId));
+      this.invalidateChapter(String(lockedChapter.workId), chapterId, versionNo);
+      this.audit(String(lockedChapter.workId), "chapter.moved", "chapter", chapterId, {
+        volumeId: targetVolumeId,
+        sortOrder: targetIndex,
+        fromVolumeId: sourceVolumeId,
+        versionNo
+      });
     });
     return this.getChapter(chapterId);
   }

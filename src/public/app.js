@@ -134,6 +134,7 @@ let collaborativeChangePromptOpen = false;
 let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
 const chapterBatchSelectedIds = new Set();
+let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
@@ -3025,12 +3026,12 @@ function renderTree() {
   $("#novel-tree").innerHTML = state.work.volumes.map((volume) => `
     <div class="volume-node ${state.collapsedVolumeIds.has(volume.id) ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
-        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
       ${volume.chapters.map((chapter) => `
-        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}">
+        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}" draggable="${proseEditable ? "true" : "false"}" title="${proseEditable ? "拖拽排序；Alt+方向键排序，Alt+Shift+方向键跨卷" : ""}">
           <span>${esc(chapter.title)}</span><span class="chapter-node-meta">${chapter.chapterType && chapter.chapterType !== "正文" ? `<em class="chapter-type-badge">${esc(chapter.chapterType)}</em>` : ""}<small>${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small></span>
         </button>`).join("")}
       </div>
@@ -3047,13 +3048,30 @@ function renderTree() {
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
+    if (proseEditable) {
+      button.addEventListener("dragover", (event) => {
+        if (!event.dataTransfer?.types.includes("text/plain")) return;
+        event.preventDefault();
+        button.closest(".volume-node")?.classList.add("is-drag-target");
+      });
+      button.addEventListener("dragleave", () => button.closest(".volume-node")?.classList.remove("is-drag-target"));
+      button.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        button.closest(".volume-node")?.classList.remove("is-drag-target");
+        const chapterId = event.dataTransfer?.getData("text/plain");
+        const volume = state.work?.volumes.find((item) => item.id === button.dataset.volumeToggle);
+        if (chapterId && volume) await moveChapterInTree(chapterId, volume.id, volume.chapters.length);
+      });
+    }
   });
   $("#novel-tree").querySelectorAll("[data-new-chapter-volume]").forEach((button) => {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
-    button.addEventListener("click", () => {
-      selectChapter(button.dataset.chapterId);
+    button.addEventListener("click", async () => {
+      const chapterId = button.dataset.chapterId;
+      await selectChapter(chapterId);
+      $("#novel-tree").querySelector(`[data-chapter-id="${CSS.escape(chapterId)}"]`)?.focus();
       if (isMobileViewport()) {
         panelLayout.leftCollapsed = true;
         applyPanelLayout(true);
@@ -3064,6 +3082,41 @@ function renderTree() {
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
     });
+    if (proseEditable) {
+      button.addEventListener("dragstart", (event) => {
+        event.dataTransfer?.setData("text/plain", button.dataset.chapterId);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        button.classList.add("is-dragging");
+      });
+      button.addEventListener("dragend", () => {
+        button.classList.remove("is-dragging");
+        $("#novel-tree").querySelectorAll(".is-drag-over, .is-drag-target").forEach((node) => node.classList.remove("is-drag-over", "drop-after", "is-drag-target"));
+      });
+      button.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        const after = event.clientY >= button.getBoundingClientRect().top + button.offsetHeight / 2;
+        button.classList.toggle("drop-after", after);
+        button.classList.add("is-drag-over");
+      });
+      button.addEventListener("dragleave", () => button.classList.remove("is-drag-over", "drop-after"));
+      button.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const chapterId = event.dataTransfer?.getData("text/plain");
+        const target = findChapterLocation(button.dataset.chapterId);
+        const after = button.classList.contains("drop-after");
+        button.classList.remove("is-drag-over", "drop-after");
+        if (!chapterId || !target) return;
+        const targetChapters = target.volume.chapters.filter((chapter) => chapter.id !== chapterId);
+        const targetIndex = targetChapters.findIndex((chapter) => chapter.id === button.dataset.chapterId);
+        await moveChapterInTree(chapterId, target.volume.id, Math.max(0, targetIndex + (after ? 1 : 0)));
+      });
+      button.addEventListener("keydown", async (event) => {
+        if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        await moveChapterByKeyboard(button.dataset.chapterId, event.key === "ArrowDown" ? 1 : -1, event.shiftKey);
+      });
+    }
   });
 }
 
@@ -3148,6 +3201,51 @@ async function submitChapterBatch(event) {
     $("#chapter-batch-apply").disabled = false;
     toast(error.message, "error");
   }
+}
+
+function findChapterLocation(chapterId) {
+  for (const [volumeIndex, volume] of (state.work?.volumes ?? []).entries()) {
+    const chapterIndex = volume.chapters.findIndex((chapter) => chapter.id === chapterId);
+    if (chapterIndex >= 0) return { volume, volumeIndex, chapterIndex, chapter: volume.chapters[chapterIndex] };
+  }
+  return null;
+}
+
+async function moveChapterInTree(chapterId, volumeId, sortOrder) {
+  const location = findChapterLocation(chapterId);
+  if (!location || chapterMovePending) return;
+  const samePosition = location.volume.id === volumeId && location.chapterIndex === sortOrder;
+  if (samePosition) return;
+  chapterMovePending = true;
+  try {
+    const moved = await api(`/api/chapters/${encodeURIComponent(chapterId)}/move`, {
+      method: "POST",
+      body: { volumeId, sortOrder, expectedVersionNo: location.chapter.versionNo }
+    });
+    state.work = await api(`/api/works/${encodeURIComponent(state.work.id)}`);
+    if (state.chapter?.id === chapterId) state.chapter = { ...state.chapter, ...moved };
+    renderTree();
+    $("#novel-tree").querySelector(`[data-chapter-id="${CSS.escape(chapterId)}"]`)?.focus();
+    toast(location.volume.id === volumeId ? "章节顺序已更新" : "章节已移动到目标分卷");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    chapterMovePending = false;
+  }
+}
+
+async function moveChapterByKeyboard(chapterId, direction, crossVolume) {
+  const location = findChapterLocation(chapterId);
+  if (!location || !state.work) return;
+  if (crossVolume) {
+    const targetVolume = state.work.volumes[location.volumeIndex + direction];
+    if (!targetVolume) return toast("已经是最前或最后一个分卷");
+    await moveChapterInTree(chapterId, targetVolume.id, direction < 0 ? targetVolume.chapters.length : 0);
+    return;
+  }
+  const targetIndex = location.chapterIndex + direction;
+  if (targetIndex < 0 || targetIndex >= location.volume.chapters.length) return toast("已经是本卷首章或末章");
+  await moveChapterInTree(chapterId, location.volume.id, targetIndex);
 }
 
 function closeChapterTypeMenu() {
@@ -6004,12 +6102,16 @@ function openWorkSettingsDialog(work) {
     <div><strong id="import-history-settings-title">正文导入历史</strong><small>查看导入前快照并恢复被覆盖的分卷、章节标题和正文；大纲、伏笔等章节关联资料不在快照中。</small></div>
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
+  const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
+    <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>查看并恢复已软删除的章节，正文、版本和关联资料不会在删除时清理。</small></div>
+    <button id="chapter-recycle-bin-button" class="ghost-button" type="button" aria-controls="chapter-recycle-bin-dialog" aria-haspopup="dialog" ${canEditProse() ? "" : "disabled"}>打开回收站</button>
+  </section>` : "";
   const whitespaceField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="whitespace-settings-title">
     <div><strong id="whitespace-settings-title">正文空白符</strong><small>在编辑器正文中显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
     <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
   </section>` : "";
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + recycleBinField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = (await apiPage("/api/works")).items;
@@ -6031,6 +6133,10 @@ function openWorkSettingsDialog(work) {
   $("#import-history-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openImportHistory();
+  });
+  $("#chapter-recycle-bin-button")?.addEventListener("click", () => {
+    $("#form-dialog").close();
+    void openChapterRecycleBin();
   });
   $("#work-access-manage")?.addEventListener("click", () => {
     $("#form-dialog").close();
@@ -8062,6 +8168,69 @@ async function openImportHistory() {
   }
 }
 
+function renderChapterRecycleBin(chapters) {
+  const host = $("#chapter-recycle-bin-list");
+  if (!chapters.length) {
+    host.innerHTML = '<p class="entity-history-empty">回收站为空，没有可恢复的章节。</p>';
+    return;
+  }
+  host.innerHTML = chapters.map((chapter) => `<article class="entity-version-card" data-deleted-chapter="${esc(chapter.id)}">
+    <header><strong>${esc(chapter.title)}</strong><span class="import-history-kind">${esc(chapter.volumeTitle)}</span></header>
+    <time>${esc(formatDateTime(chapter.deletedAt))} · ${esc(chapter.actor)}</time>
+    <p>${esc(chapter.contentPreview || "空白章节")}</p>
+    <small>${Number(chapter.wordCount).toLocaleString("zh-CN")} 字 · 删除版本 v${Number(chapter.versionNo)}</small>
+    <button type="button" data-restore-deleted-chapter="${esc(chapter.id)}">恢复章节</button>
+  </article>`).join("");
+  host.querySelectorAll("[data-restore-deleted-chapter]").forEach((button) => button.addEventListener("click", async () => {
+    const chapter = chapters.find((item) => item.id === button.dataset.restoreDeletedChapter);
+    if (!chapter || !state.work) return;
+    const dialog = $("#chapter-recycle-bin-dialog");
+    dialog.close();
+    const confirmed = await confirmToast(`将章节“${chapter.title}”恢复到分卷“${chapter.volumeTitle}”吗？`, {
+      title: "恢复已删除章节",
+      confirmLabel: "确认恢复"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api(`/api/chapters/${encodeURIComponent(chapter.id)}/restore`, {
+        method: "POST",
+        body: { versionNo: chapter.versionNo, expectedVersionNo: chapter.versionNo }
+      });
+      state.work = await api(`/api/works/${encodeURIComponent(state.work.id)}`);
+      renderTree();
+      await loadChapterRecycleBin();
+      dialog.showModal();
+      toast(`已恢复章节“${chapter.title}”`);
+    } catch (error) {
+      button.disabled = false;
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  }));
+}
+
+async function loadChapterRecycleBin() {
+  if (!state.work) return;
+  const chapters = await api(`/api/works/${encodeURIComponent(state.work.id)}/deleted-chapters`);
+  renderChapterRecycleBin(chapters);
+}
+
+async function openChapterRecycleBin() {
+  if (!state.work || !canEditProse()) return toast("当前权限不能恢复正文", "error");
+  $("#chapter-recycle-bin-list").innerHTML = '<p class="entity-history-empty">正在读取已删除章节…</p>';
+  $("#chapter-recycle-bin-dialog").showModal();
+  try {
+    await loadChapterRecycleBin();
+  } catch (error) {
+    $("#chapter-recycle-bin-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
 async function showChapterInsight() {
   if (!state.chapter) return;
   const chapterId = state.chapter.id;
@@ -8800,6 +8969,7 @@ $("#insight-button").addEventListener("click", () => showChapterInsight().catch(
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
 $("#import-history-close").addEventListener("click", () => $("#import-history-dialog").close());
+$("#chapter-recycle-bin-close").addEventListener("click", () => $("#chapter-recycle-bin-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
 $("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });

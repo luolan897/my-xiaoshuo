@@ -661,7 +661,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
     expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");
-    expect(application.text).toContain('title="左键折叠，右键设置分卷"');
+    expect(application.text).toContain('title="左键折叠，右键设置分卷；可将章节拖到这里追加"');
     expect(application.text).toContain("const proseEditable = canEditProse();");
     expect(application.text).toContain("${proseEditable ? `<button class=\"add-button chapter-add-button\"");
     expect(application.text).toContain('class="add-button chapter-add-button"');

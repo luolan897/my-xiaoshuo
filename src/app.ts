@@ -1087,6 +1087,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const input = parse(z.object({ volumeId: identifier, title: nonEmpty.max(300), content: z.string().max(2_000_000).optional(), chapterType: chapterTypeSchema.optional() }), request.body);
     data(response, store.createChapter(request.params.workId, input), 201);
   });
+  app.get("/api/works/:workId/deleted-chapters", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listDeletedChaptersPage(request.params.workId, pagination)
+      : store.listDeletedChapters(request.params.workId));
+  });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
   app.patch("/api/chapters/:chapterId", (request, response) => {
     const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
