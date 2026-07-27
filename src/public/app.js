@@ -2716,7 +2716,8 @@ function renderWritingProgress(progress) {
   const chart = $("#writing-trend-chart");
   chart.innerHTML = progress.trend.map((item, index) => {
     const height = Math.max(3, Math.round(Number(item.words) / maxWords * 100));
-    const label = `${item.date}：累计 ${Number(item.words).toLocaleString("zh-CN")} 字，当日新增 ${Number(item.delta) >= 0 ? "+" : ""}${Number(item.delta).toLocaleString("zh-CN")} 字`;
+    const dailyWords = Math.max(0, Number(item.delta));
+    const label = `${item.date}：累计 ${Number(item.words).toLocaleString("zh-CN")} 字，当日新增 +${dailyWords.toLocaleString("zh-CN")} 字`;
     return `<span class="writing-trend-bar${index === progress.trend.length - 1 ? " is-today" : ""}" style="--bar-height:${height}%" data-writing-trend-label="${esc(label)}" tabindex="0" aria-label="${esc(label)}"><i></i><small>${index % 5 === 0 || index === progress.trend.length - 1 ? esc(item.date.slice(5)) : ""}</small></span>`;
   }).join("") + dailyLine + '<span class="writing-trend-legend" aria-hidden="true"><i></i>累计字数 <b></b>当日新增</span><output id="writing-trend-tooltip" class="writing-trend-tooltip" role="tooltip" hidden></output>';
   const tooltip = $("#writing-trend-tooltip");
