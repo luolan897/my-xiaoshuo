@@ -133,6 +133,7 @@ const acknowledgedCollaborativeChangeIds = new Set();
 let collaborativeChangePromptOpen = false;
 let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
+const chapterBatchSelectedIds = new Set();
 let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
@@ -278,6 +279,7 @@ function applyWorkAccessMode() {
   }
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
   $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
+  $("#chapter-batch-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#welcome-new-work").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#import-file-button").setAttribute("aria-disabled", String(proseReadOnly));
   $("#import-file-button").setAttribute("title", proseReadOnly ? "当前权限不能导入正文" : "导入 TXT / DOCX");
@@ -3116,6 +3118,89 @@ function renderTree() {
       });
     }
   });
+}
+
+function renderChapterBatchDialog() {
+  const chapters = state.work?.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({ ...chapter, volumeTitle: volume.title }))) ?? [];
+  for (const chapterId of chapterBatchSelectedIds) {
+    if (!chapters.some((chapter) => chapter.id === chapterId)) chapterBatchSelectedIds.delete(chapterId);
+  }
+  $("#chapter-batch-list").innerHTML = chapters.length ? chapters.map((chapter) => `<label class="chapter-batch-item">
+    <input type="checkbox" value="${esc(chapter.id)}" ${chapterBatchSelectedIds.has(chapter.id) ? "checked" : ""}>
+    <span><strong>${esc(chapter.title)}</strong><small>${esc(chapter.volumeTitle)} · ${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")} 字 · ${esc(chapter.chapterType || "正文")}</small></span>
+  </label>`).join("") : '<p class="entity-history-empty">当前作品还没有章节。</p>';
+  $("#chapter-batch-list").querySelectorAll('input[type="checkbox"]').forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) chapterBatchSelectedIds.add(input.value);
+    else chapterBatchSelectedIds.delete(input.value);
+    updateChapterBatchControls();
+  }));
+  $("#chapter-batch-volume").innerHTML = (state.work?.volumes ?? []).map((volume) => `<option value="${esc(volume.id)}">${esc(volume.title)}</option>`).join("");
+  updateChapterBatchControls();
+}
+
+function updateChapterBatchControls() {
+  const count = chapterBatchSelectedIds.size;
+  const action = $("#chapter-batch-action").value;
+  $("#chapter-batch-count").textContent = `已选择 ${count} 章`;
+  $("#chapter-batch-apply").disabled = count === 0;
+  $("#chapter-batch-volume-field").classList.toggle("hidden", action !== "move");
+  $("#chapter-batch-type-field").classList.toggle("hidden", action !== "setType");
+  $("#chapter-batch-apply").textContent = action === "delete" ? "软删除所选章节" : "应用到所选章节";
+}
+
+function openChapterBatchDialog() {
+  if (!state.work || !canEditProse()) return;
+  chapterBatchSelectedIds.clear();
+  renderChapterBatchDialog();
+  $("#chapter-batch-dialog").showModal();
+}
+
+async function submitChapterBatch(event) {
+  event.preventDefault();
+  if (!state.work || !chapterBatchSelectedIds.size) return;
+  const chapters = state.work.volumes.flatMap((volume) => volume.chapters).filter((chapter) => chapterBatchSelectedIds.has(chapter.id));
+  const actionValue = $("#chapter-batch-action").value;
+  const action = actionValue === "move"
+    ? { type: "move", volumeId: $("#chapter-batch-volume").value }
+    : actionValue === "setType"
+      ? { type: "setType", chapterType: $("#chapter-batch-type").value }
+      : actionValue === "exclude" || actionValue === "include"
+        ? { type: "setAnalysisExclusion", excludedFromAnalysis: actionValue === "exclude" }
+        : { type: "delete" };
+  const dialog = $("#chapter-batch-dialog");
+  if (action.type === "delete") {
+    dialog.close();
+    const confirmed = await confirmToast(`所选 ${chapters.length} 个章节的正文、版本和关联资料会保留，后续可以恢复。仍要删除吗？`, {
+      title: "批量删除需要再次确认",
+      confirmLabel: "确认软删除"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+  }
+  $("#chapter-batch-apply").disabled = true;
+  try {
+    await api(`/api/works/${encodeURIComponent(state.work.id)}/chapters/batch`, {
+      method: "POST",
+      body: { chapters: chapters.map((chapter) => ({ id: chapter.id, expectedVersionNo: chapter.versionNo })), action }
+    });
+    const workId = state.work.id;
+    state.work = await api(`/api/works/${encodeURIComponent(workId)}`);
+    const currentStillExists = state.chapter && state.work.volumes.some((volume) => volume.chapters.some((chapter) => chapter.id === state.chapter.id));
+    if (state.chapter && currentStillExists) state.chapter = await api(`/api/chapters/${encodeURIComponent(state.chapter.id)}`);
+    if (state.chapter && !currentStillExists) {
+      state.chapter = null;
+      showWelcome(true);
+    } else renderTree();
+    if (dialog.open) dialog.close();
+    chapterBatchSelectedIds.clear();
+    toast(`已批量处理 ${chapters.length} 个章节`);
+  } catch (error) {
+    if (!dialog.open) dialog.showModal();
+    $("#chapter-batch-apply").disabled = false;
+    toast(error.message, "error");
+  }
 }
 
 function findChapterLocation(chapterId) {
@@ -8867,6 +8952,19 @@ $("#chapter-delete-button").addEventListener("click", () => {
 $("#chapter-edit-button").addEventListener("click", enterChapterEditMode);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
+$("#chapter-batch-button").addEventListener("click", openChapterBatchDialog);
+$("#chapter-batch-close").addEventListener("click", () => $("#chapter-batch-dialog").close());
+$("#chapter-batch-cancel").addEventListener("click", () => $("#chapter-batch-dialog").close());
+$("#chapter-batch-action").addEventListener("change", updateChapterBatchControls);
+$("#chapter-batch-select-all").addEventListener("click", () => {
+  state.work?.volumes.flatMap((volume) => volume.chapters).forEach((chapter) => chapterBatchSelectedIds.add(chapter.id));
+  renderChapterBatchDialog();
+});
+$("#chapter-batch-clear").addEventListener("click", () => {
+  chapterBatchSelectedIds.clear();
+  renderChapterBatchDialog();
+});
+$("#chapter-batch-form").addEventListener("submit", submitChapterBatch);
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());

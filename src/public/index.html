@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260727-chapter-soft-delete-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260727-chapter-batch-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -140,6 +140,7 @@
             <span>作品目录</span>
             <div class="panel-heading-actions">
               <span id="chapter-count">0 章</span>
+              <button id="chapter-batch-button" class="chapter-batch-button" type="button">批量管理</button>
               <button id="new-volume-button" class="add-button" type="button" aria-label="新建分卷" title="新建分卷">+</button>
             </div>
           </div>
@@ -379,6 +380,30 @@
         <div class="dialog-actions">
           <button class="ghost-button" value="cancel" type="submit">取消</button>
           <button id="dialog-submit" class="primary-button" value="default" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="chapter-batch-dialog" class="dialog chapter-batch-dialog" aria-labelledby="chapter-batch-title">
+      <form id="chapter-batch-form">
+        <div class="dialog-header">
+          <div><span class="eyebrow">正文工具</span><h2 id="chapter-batch-title">章节批量管理</h2><p class="dialog-header-meta">选择多个章节后统一移动、修改属性或软删除。</p></div>
+          <button id="chapter-batch-close" class="dialog-close" type="button" aria-label="关闭章节批量管理">×</button>
+        </div>
+        <div class="chapter-batch-toolbar">
+          <button id="chapter-batch-select-all" class="ghost-button" type="button">全选</button>
+          <button id="chapter-batch-clear" class="ghost-button" type="button">清空</button>
+          <output id="chapter-batch-count">已选择 0 章</output>
+        </div>
+        <div id="chapter-batch-list" class="chapter-batch-list"></div>
+        <div class="chapter-batch-controls">
+          <label>批量操作<select id="chapter-batch-action"><option value="move">移动到分卷</option><option value="setType">修改章节类型</option><option value="exclude">排除 AI 分析</option><option value="include">纳入 AI 分析</option><option value="delete">软删除章节</option></select></label>
+          <label id="chapter-batch-volume-field">目标分卷<select id="chapter-batch-volume"></select></label>
+          <label id="chapter-batch-type-field" class="hidden">章节类型<select id="chapter-batch-type"><option value="正文">正文</option><option value="设定">设定</option><option value="作者的话">作者的话</option><option value="其他">其他</option></select></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="chapter-batch-cancel" class="ghost-button" type="button">取消</button>
+          <button id="chapter-batch-apply" class="primary-button" type="submit" disabled>应用到所选章节</button>
         </div>
       </form>
     </dialog>
@@ -801,6 +826,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260727-chapter-drag-move-v2"></script>
+    <script type="module" src="/app.js?v=20260727-chapter-batch-v1"></script>
   </body>
 </html>

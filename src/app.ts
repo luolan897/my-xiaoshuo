@@ -1123,6 +1123,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const { expectedVersionNo, ...moveInput } = input;
     data(response, store.moveChapter(request.params.chapterId, moveInput, expectedVersionNo));
   });
+  app.post("/api/works/:workId/chapters/batch", (request, response) => {
+    const selectedChapters = z.array(z.object({ id: identifier, expectedVersionNo: z.number().int().positive() }).strict()).min(1).max(200);
+    const action = z.discriminatedUnion("type", [
+      z.object({ type: z.literal("move"), volumeId: identifier }).strict(),
+      z.object({ type: z.literal("setType"), chapterType: chapterTypeSchema }).strict(),
+      z.object({ type: z.literal("setAnalysisExclusion"), excludedFromAnalysis: z.boolean() }).strict(),
+      z.object({ type: z.literal("delete") }).strict()
+    ]);
+    const input = parse(z.object({ chapters: selectedChapters, action }).strict(), request.body);
+    data(response, store.batchManageChapters(request.params.workId, input.chapters, input.action));
+  });
 
   app.get("/api/works/:workId/outlines", (request, response) => {
     const pagination = parsePagination(request.query);
