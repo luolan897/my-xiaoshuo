@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -92,13 +92,31 @@ describe("人物关系图数据与布局", () => {
   });
 
   it("普通关系图提供更多主题配色，并稳定分散未分组角色颜色", () => {
-    expect(OBSIDIAN_NODE_PALETTE.length).toBeGreaterThanOrEqual(16);
+    expect(OBSIDIAN_NODE_PALETTE.length).toBeGreaterThanOrEqual(24);
     expect(new Set(OBSIDIAN_NODE_PALETTE.map((palette: { color: string }) => palette.color)).size).toBe(OBSIDIAN_NODE_PALETTE.length);
     expect(new Set(OBSIDIAN_NODE_PALETTE.map((palette: { darkColor: string }) => palette.darkColor)).size).toBe(OBSIDIAN_NODE_PALETTE.length);
     const appearances = Array.from({ length: 24 }, (_, index) => getObsidianNodeAppearance({ id: `character-${index}`, name: `角色 ${index}` }));
     expect(new Set(appearances.map((appearance: { color: string }) => appearance.color)).size).toBeGreaterThanOrEqual(12);
     expect(getObsidianNodeAppearance({ id: "stable", name: "角色" }).color)
       .toBe(getObsidianNodeAppearance({ id: "stable", name: "角色" }).color);
+  });
+
+  it("优先为高连接节点分配互不重复且全局均衡的稳定颜色", () => {
+    const nodes = Array.from({ length: 48 }, (_, index) => ({
+      id: `character-${index}`,
+      name: `角色 ${index}`,
+      species: "人类",
+      degree: 48 - index,
+      weightedDegree: 60 - index
+    }));
+    const appearances = assignBalancedObsidianNodeAppearances(nodes, 48);
+    const colors = nodes.map((node) => appearances.get(node.id).color);
+    const counts = new Map(colors.map((color) => [color, colors.filter((item) => item === color).length]));
+    const reversedAppearances = assignBalancedObsidianNodeAppearances([...nodes].reverse(), 48);
+
+    expect(new Set(colors.slice(0, OBSIDIAN_NODE_PALETTE.length)).size).toBe(OBSIDIAN_NODE_PALETTE.length);
+    expect(Math.max(...counts.values()) - Math.min(...counts.values())).toBeLessThanOrEqual(1);
+    expect(nodes.map((node) => reversedAppearances.get(node.id).color)).toEqual(colors);
   });
 
   it("构建图谱时写入分组与度数相关节点尺寸", () => {
@@ -285,9 +303,13 @@ describe("人物关系图数据与布局", () => {
     expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
   });
 
-  it("默认生成更密集的银河背景星群", () => {
+  it("默认按两轮百分之十的复合比例增加边缘旋臂星点", () => {
     const stars = createGalaxyStarfield("dense-background");
-    expect(stars).toHaveLength(7200);
+    const edgeStars = stars.filter((star: { region: string }) => star.region === "edge-arm");
+    expect(GALAXY_EDGE_STAR_BOOST_RATIO).toBeCloseTo(1.1 * 1.1 - 1);
+    expect(stars).toHaveLength(8712);
+    expect(edgeStars).toHaveLength(1512);
+    expect(edgeStars.every((star: { originX: number; originZ: number }) => Math.hypot(star.originX, star.originZ) > 820)).toBe(true);
     expect(stars.filter((star: { y: number }) => Math.abs(star.y) < 120).length).toBeGreaterThan(3000);
   });
 
