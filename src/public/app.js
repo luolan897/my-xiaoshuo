@@ -2706,11 +2706,32 @@ function renderWritingProgress(progress) {
   $("#writing-deadline").value = progress.goal.deadline ?? "";
   $("#writing-goal-save").disabled = !canEditProse();
   const maxWords = Math.max(1, ...progress.trend.map((item) => Number(item.words)));
-  $("#writing-trend-chart").innerHTML = progress.trend.map((item, index) => {
+  const chart = $("#writing-trend-chart");
+  chart.innerHTML = progress.trend.map((item, index) => {
     const height = Math.max(3, Math.round(Number(item.words) / maxWords * 100));
     const label = `${item.date}：${Number(item.words).toLocaleString("zh-CN")} 字，较前日 ${Number(item.delta) >= 0 ? "+" : ""}${Number(item.delta).toLocaleString("zh-CN")}`;
-    return `<span class="writing-trend-bar${index === progress.trend.length - 1 ? " is-today" : ""}" style="--bar-height:${height}%" title="${esc(label)}" aria-label="${esc(label)}"><i></i><small>${index % 5 === 0 || index === progress.trend.length - 1 ? esc(item.date.slice(5)) : ""}</small></span>`;
-  }).join("");
+    return `<span class="writing-trend-bar${index === progress.trend.length - 1 ? " is-today" : ""}" style="--bar-height:${height}%" data-writing-trend-label="${esc(label)}" tabindex="0" aria-label="${esc(label)}"><i></i><small>${index % 5 === 0 || index === progress.trend.length - 1 ? esc(item.date.slice(5)) : ""}</small></span>`;
+  }).join("") + '<output id="writing-trend-tooltip" class="writing-trend-tooltip" role="tooltip" hidden></output>';
+  const tooltip = $("#writing-trend-tooltip");
+  const hideTooltip = () => { tooltip.hidden = true; };
+  const showTooltip = (bar) => {
+    const marker = bar.querySelector("i");
+    if (!marker) return;
+    tooltip.textContent = bar.dataset.writingTrendLabel;
+    tooltip.hidden = false;
+    const chartRect = chart.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+    const centeredLeft = markerRect.left + markerRect.width / 2 - chartRect.left;
+    const edgeInset = tooltip.offsetWidth / 2 + 8;
+    tooltip.style.left = `${Math.min(chart.clientWidth - edgeInset, Math.max(edgeInset, centeredLeft))}px`;
+    tooltip.style.top = `${Math.max(tooltip.offsetHeight + 8, markerRect.top - chartRect.top - 8)}px`;
+  };
+  chart.querySelectorAll(".writing-trend-bar").forEach((bar) => {
+    bar.addEventListener("mouseenter", () => showTooltip(bar));
+    bar.addEventListener("mouseleave", hideTooltip);
+    bar.addEventListener("focus", () => showTooltip(bar));
+    bar.addEventListener("blur", hideTooltip);
+  });
 }
 
 async function loadWritingProgress() {

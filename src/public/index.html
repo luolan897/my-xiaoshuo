@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260728-writing-progress-layout-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260728-writing-trend-tooltip-v3">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -676,7 +676,7 @@
         <div class="dialog-header"><div><span class="eyebrow">创作节奏</span><h2 id="writing-progress-title">写作目标与字数趋势</h2><p class="dialog-header-meta">趋势根据正文版本历史重建，软删除章节不会继续计入。</p></div><button id="writing-progress-close" class="dialog-close" aria-label="关闭写作目标" type="button">×</button></div>
         <div class="writing-progress-body">
           <div class="writing-progress-stats"><article><small>当前总字数</small><strong id="writing-current-words">0</strong></article><article><small>今日新增</small><strong id="writing-today-words">0</strong></article><article><small>每日目标完成</small><strong id="writing-daily-completion">0%</strong></article><article><small>总目标完成</small><strong id="writing-total-completion">0%</strong></article></div>
-          <div id="writing-trend-chart" class="writing-trend-chart" role="img" aria-label="近 30 天作品字数趋势"></div>
+          <div id="writing-trend-chart" class="writing-trend-chart" role="group" aria-label="近 30 天作品字数趋势"></div>
           <div class="writing-goal-fields"><label>每日目标字数<input id="writing-daily-goal" type="number" min="0" max="1000000" required></label><label>总字数目标<input id="writing-total-goal" type="number" min="0" max="100000000" required></label><label>计划完成日期<input id="writing-deadline" type="date"></label></div>
         </div>
         <div class="dialog-actions"><button id="writing-progress-refresh" class="ghost-button" type="button">刷新趋势</button><button id="writing-goal-save" class="primary-button" type="submit">保存目标</button></div>
@@ -863,6 +863,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260728-work-manuscript-export-v1"></script>
+    <script type="module" src="/app.js?v=20260728-writing-trend-tooltip-v1"></script>
   </body>
 </html>

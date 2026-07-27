@@ -560,12 +560,16 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .writing-progress-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .writing-progress-stats article { display: grid; align-content: center; gap: 7px; min-height: 78px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .writing-progress-stats small { color: var(--muted); font-size: 9px; }
-.writing-progress-stats strong { font: 20px/1.2 var(--font-mono), monospace; }
-.writing-trend-chart { display: grid; grid-template-columns: repeat(30, minmax(4px, 1fr)); align-items: end; gap: 3px; height: 210px; padding: 14px 10px 10px; border: 1px solid var(--line); border-radius: 6px; background: linear-gradient(to top, var(--panel) 0 22px, transparent 22px), linear-gradient(to top, var(--line) 1px, transparent 1px) 0 0 / 100% 25%; }
-.writing-trend-bar { display: grid; grid-template-rows: minmax(0, 1fr) 22px; align-items: end; height: 100%; min-width: 0; }
-.writing-trend-bar i { display: block; justify-self: center; width: clamp(4px, 68%, 14px); height: var(--bar-height); min-height: 3px; border-radius: 4px 4px 1px 1px; background: color-mix(in srgb, var(--accent) 62%, var(--surface)); }
+.writing-progress-stats strong { font: 20px/1.2 var(--font-latin), monospace; }
+.writing-trend-chart { position: relative; display: grid; grid-template-columns: repeat(30, minmax(4px, 1fr)); align-items: end; gap: 3px; height: 210px; padding: 14px 10px 10px; border: 1px solid var(--line); border-radius: 6px; background: linear-gradient(to top, var(--panel) 0 22px, transparent 22px), linear-gradient(to top, var(--line) 1px, transparent 1px) 0 0 / 100% 25%; }
+.writing-trend-bar { display: grid; grid-template-rows: minmax(0, 1fr) 22px; align-items: end; height: 100%; min-width: 0; cursor: default; }
+.writing-trend-bar:focus-visible { outline: none; }
+.writing-trend-bar i { display: block; justify-self: center; width: clamp(4px, 68%, 14px); height: var(--bar-height); min-height: 3px; border-radius: 4px 4px 1px 1px; background: color-mix(in srgb, var(--accent) 62%, var(--surface)); transition: background-color .14s ease, box-shadow .14s ease, transform .14s ease; }
 .writing-trend-bar.is-today i { background: var(--accent); }
-.writing-trend-bar small { align-self: center; justify-self: center; overflow: visible; color: var(--muted); font: 8px/22px var(--font-mono), monospace; white-space: nowrap; }
+.writing-trend-bar:hover i, .writing-trend-bar:focus-visible i { background: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); transform: translateY(-2px); }
+.writing-trend-bar small { align-self: center; justify-self: center; overflow: visible; color: var(--muted); font: 7px/22px var(--font-latin), monospace; white-space: nowrap; }
+.writing-trend-tooltip { position: absolute; z-index: 2; width: 220px; max-width: calc(100% - 16px); padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent); border-radius: 5px; background: color-mix(in srgb, var(--ink) 94%, transparent); box-shadow: 0 8px 22px rgba(0,0,0,.22); color: var(--panel); font: 10px/1.45 var(--font-latin), monospace; overflow-wrap: anywhere; text-align: center; pointer-events: none; transform: translate(-50%, -100%); }
+.writing-trend-tooltip[hidden] { display: none; }
 .writing-goal-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .writing-goal-fields label { display: grid; gap: 7px; color: var(--muted); font-size: 10px; font-weight: 650; }
 .writing-goal-fields input { width: 100%; min-height: 38px; padding: 8px 10px; background: var(--surface); font-size: 12px; font-weight: 500; }
