@@ -147,6 +147,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain('$("#work-picker")');
   });
 
+  it("登录成功后丢弃原作品路由并只进入书架", async () => {
+    const application = await request(runtime.app).get("/app.js").expect(200);
+    expect(application.text).toContain('window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));\n    window.location.reload();');
+  });
+
   it("全站使用黑体与等宽英文并提供可持久化显示和明暗主题", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
@@ -312,8 +317,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-integrated-authoring-v1');
-    expect(page.text).toContain('/styles.css?v=20260727-integrated-authoring-v1');
+    expect(page.text).toContain('/app.js?v=20260728-galaxy-edge-stars-v3');
+    expect(page.text).toContain('/styles.css?v=20260728-writing-daily-line-v2');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -335,6 +340,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
+    expect(styles.text).toContain(".settings-hub-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");
+    expect(styles.text).toContain(".settings-hub-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }");
     expect(styles.text).toContain(".usage-calendar-grid {");
     expect(styles.text).toContain(".usage-stat-grid {");
     expect(styles.text).toContain("@container usage-overview (max-width: 760px)");
@@ -356,7 +363,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
     expect(application.text).toContain("if (readOnly) editor?.disabled();");
     expect(application.text).not.toContain("if (readOnly) editor.disabled();");
-    expect(application.text).toContain('/relationship-graph.js?v=20260726-network-label-scale');
+    expect(application.text).toContain('/relationship-graph.js?v=20260728-galaxy-edge-stars-v3');
     expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
     expect(application.text).not.toContain('${item.evidence.length} 条');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
@@ -442,7 +449,26 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderWritingProgress(");
     expect(application.text).toContain("async function saveWritingGoal(");
     expect(styles.text).toContain(".writing-trend-chart");
+    expect(styles.text).toContain(".dialog.writing-progress-dialog { width: min(900px, 94vw); }");
+    expect(styles.text).toContain(".writing-trend-bar i { display: block; justify-self: center; width: clamp(4px, 68%, 14px);");
+    expect(styles.text).toContain(".writing-goal-fields input { width: 100%; min-height: 38px;");
+    expect(styles.text).toContain("font: 7px/22px var(--font-latin), monospace;");
+    expect(styles.text).toContain(".writing-trend-tooltip { position: absolute;");
+    expect(styles.text).toContain(".writing-trend-daily-line polyline { fill: none; stroke: var(--green);");
+    expect(styles.text).toContain(".writing-trend-daily-points i { position: absolute;");
+    expect(styles.text).toContain(".writing-trend-legend { position: absolute; z-index: 2; top: -27px;");
+    expect(application.text).toContain('id="writing-trend-tooltip" class="writing-trend-tooltip" role="tooltip" hidden');
+    expect(application.text).toContain('class="writing-trend-daily-line"');
+    expect(application.text).toContain('class="writing-trend-daily-points"');
+    expect(application.text).toContain("当日新增");
+    expect(application.text).toContain("const dailyWords = Math.max(0, Number(item.delta));");
+    expect(application.text).toContain('bar.addEventListener("mouseenter", () => showTooltip(bar))');
     expect(page.text).toContain('id="work-audit-button" class="settings-hub-card"');
+    expect(page.text).toContain('<span class="settings-card-mark">ZIP</span><strong>导出正文</strong><small>以 ZIP 下载 Markdown 正文，不包含角色和设定资料</small>');
+    expect(application.text).toContain('id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>');
+    expect(application.text).toContain("导出的 ZIP 内含 Markdown 正文");
+    expect(application.text).toContain('function downloadWorkManuscript(work)');
+    expect(application.text).toContain('不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料');
     expect(page.text).toContain('id="work-audit-dialog"');
     expect(application.text).toContain("async function openWorkAuditDialog(");
     expect(application.text).toContain("workAuditActionLabels");
@@ -668,6 +694,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openVolumeDialog(item)");
     expect(application.text).toContain('field("keywords", "分卷关键词", "keyword-chips"');
     expect(application.text).toContain('keywords: uniqueRelationshipKeywords(form.getAll("keywords").map(String))');
+    expect(application.text).toContain('data-dialog-volume-delete');
+    expect(application.text).toContain('async function deleteVolume(item)');
+    expect(application.text).toContain('$("#form-dialog").close();');
+    expect(application.text).toContain('body: { expectedVersionNo: item.versionNo }');
     expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
     expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");

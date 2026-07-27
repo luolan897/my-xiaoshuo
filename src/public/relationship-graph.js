@@ -6,7 +6,7 @@ const RELATION_STYLE = Object.freeze({
   uncertain: { label: "未确定", color: "#9aa5b5" }
 });
 
-/** Obsidian Graph View 风格：为浅色和深色背景分别提供可辨识的低饱和度分组配色 */
+/** Obsidian Graph View 风格：为浅色和深色背景提供可辨识的低饱和度均衡配色 */
 export const OBSIDIAN_NODE_PALETTE = Object.freeze([
   Object.freeze({ key: "blue", color: "#3f6f99", darkColor: "#7fb7e3", glow: "rgba(63,111,153,.42)", darkGlow: "rgba(127,183,227,.56)" }),
   Object.freeze({ key: "indigo", color: "#5b5fa3", darkColor: "#9ea6ed", glow: "rgba(91,95,163,.42)", darkGlow: "rgba(158,166,237,.56)" }),
@@ -25,7 +25,13 @@ export const OBSIDIAN_NODE_PALETTE = Object.freeze([
   Object.freeze({ key: "steel", color: "#576f86", darkColor: "#98afc5", glow: "rgba(87,111,134,.42)", darkGlow: "rgba(152,175,197,.56)" }),
   Object.freeze({ key: "slate", color: "#626b78", darkColor: "#aab3c0", glow: "rgba(98,107,120,.42)", darkGlow: "rgba(170,179,192,.56)" }),
   Object.freeze({ key: "sand", color: "#806e58", darkColor: "#c5ad91", glow: "rgba(128,110,88,.42)", darkGlow: "rgba(197,173,145,.56)" }),
-  Object.freeze({ key: "taupe", color: "#75636d", darkColor: "#b9a0ad", glow: "rgba(117,99,109,.42)", darkGlow: "rgba(185,160,173,.56)" })
+  Object.freeze({ key: "taupe", color: "#75636d", darkColor: "#b9a0ad", glow: "rgba(117,99,109,.42)", darkGlow: "rgba(185,160,173,.56)" }),
+  Object.freeze({ key: "gold", color: "#8b702b", darkColor: "#dfbd63", glow: "rgba(139,112,43,.42)", darkGlow: "rgba(223,189,99,.56)" }),
+  Object.freeze({ key: "lime", color: "#5e7a35", darkColor: "#a4cd74", glow: "rgba(94,122,53,.42)", darkGlow: "rgba(164,205,116,.56)" }),
+  Object.freeze({ key: "mint", color: "#397d59", darkColor: "#78ce99", glow: "rgba(57,125,89,.42)", darkGlow: "rgba(120,206,153,.56)" }),
+  Object.freeze({ key: "turquoise", color: "#287d78", darkColor: "#69cec8", glow: "rgba(40,125,120,.42)", darkGlow: "rgba(105,206,200,.56)" }),
+  Object.freeze({ key: "azure", color: "#326ea3", darkColor: "#76b7ee", glow: "rgba(50,110,163,.42)", darkGlow: "rgba(118,183,238,.56)" }),
+  Object.freeze({ key: "peach", color: "#a35d50", darkColor: "#eda197", glow: "rgba(163,93,80,.42)", darkGlow: "rgba(237,161,151,.56)" })
 ]);
 
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
@@ -87,6 +93,8 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
   outer: Object.freeze(["rocky", "ocean", "ice", "volcanic", "dwarf", "ringed"])
 });
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
+export const GALAXY_BASE_STAR_COUNT = 7200;
+export const GALAXY_EDGE_STAR_BOOST_RATIO = 1.1 * 1.1 - 1;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
   minimumRadius: 220,
   radialSpan: 830,
@@ -220,15 +228,9 @@ export function resolveRelationshipNodeGroup(node) {
   return { type: "default", key: "default", label: "未分组" };
 }
 
-export function getObsidianNodeAppearance(node, maxDegree = 1) {
-  const group = resolveRelationshipNodeGroup(node);
+function createObsidianNodeAppearance(node, maxDegree, group, paletteIndex) {
   const degree = Math.max(0, Number(node?.degree) || 0);
   const normalizedDegree = clamp(degree / Math.max(1, Number(maxDegree) || 1), 0, 1);
-  // 未分组角色没有可共享的分组语义，按角色稳定标识散列，避免资料不完整时大片同色。
-  const colorKey = group.key === "default"
-    ? `node:${String(node?.id ?? node?.name ?? "default")}`
-    : group.key;
-  const paletteIndex = hashString(colorKey) % OBSIDIAN_NODE_PALETTE.length;
   const palette = OBSIDIAN_NODE_PALETTE[paletteIndex];
   return {
     group,
@@ -240,6 +242,52 @@ export function getObsidianNodeAppearance(node, maxDegree = 1) {
     degree,
     normalizedDegree
   };
+}
+
+function getObsidianNodeColorSeed(node, group = resolveRelationshipNodeGroup(node)) {
+  return mixHash(hashString([
+    String(node?.id ?? ""),
+    String(node?.name ?? ""),
+    group.key,
+    String(node?.species ?? ""),
+    String(node?.identity ?? "")
+  ].join("|")));
+}
+
+export function getObsidianNodeAppearance(node, maxDegree = 1) {
+  const group = resolveRelationshipNodeGroup(node);
+  const paletteIndex = getObsidianNodeColorSeed(node, group) % OBSIDIAN_NODE_PALETTE.length;
+  return createObsidianNodeAppearance(node, maxDegree, group, paletteIndex);
+}
+
+export function assignBalancedObsidianNodeAppearances(nodes, maxDegree = 1) {
+  // 高连接节点优先占用尚未使用的颜色，再按稳定散列打散同一轮的色槽顺序。
+  const orderedNodes = [...(Array.isArray(nodes) ? nodes : [])].sort((left, right) => (
+    Number(right?.degree ?? 0) - Number(left?.degree ?? 0)
+    || Number(right?.weightedDegree ?? 0) - Number(left?.weightedDegree ?? 0)
+    || String(left?.name ?? "").localeCompare(String(right?.name ?? ""), "zh-CN")
+    || String(left?.id ?? "").localeCompare(String(right?.id ?? ""))
+  ));
+  const paletteUsage = Array.from({ length: OBSIDIAN_NODE_PALETTE.length }, () => 0);
+  const appearances = new Map();
+  for (const node of orderedNodes) {
+    const group = resolveRelationshipNodeGroup(node);
+    const seed = getObsidianNodeColorSeed(node, group);
+    const minimumUsage = Math.min(...paletteUsage);
+    let paletteIndex = 0;
+    let bestScore = -1;
+    for (let index = 0; index < paletteUsage.length; index += 1) {
+      if (paletteUsage[index] !== minimumUsage) continue;
+      const score = mixHash(seed ^ Math.imul(index + 1, 0x9e3779b1));
+      if (score > bestScore) {
+        bestScore = score;
+        paletteIndex = index;
+      }
+    }
+    paletteUsage[paletteIndex] += 1;
+    appearances.set(String(node?.id ?? node?.name ?? appearances.size), createObsidianNodeAppearance(node, maxDegree, group, paletteIndex));
+  }
+  return appearances;
 }
 
 function hashString(value) {
@@ -341,7 +389,10 @@ export function buildRelationshipGraph(characters, relationships) {
   const maxDegree = Math.max(1, ...nodes.map((node) => node.degree));
   for (const node of nodes) {
     node.importance = node.weightedDegree + Math.sqrt(node.degree) * 0.8;
-    const appearance = getObsidianNodeAppearance(node, maxDegree);
+  }
+  const nodeAppearances = assignBalancedObsidianNodeAppearances(nodes, maxDegree);
+  for (const node of nodes) {
+    const appearance = nodeAppearances.get(node.id) ?? getObsidianNodeAppearance(node, maxDegree);
     node.color = appearance.color;
     node.darkColor = appearance.darkColor;
     node.glow = appearance.glow;
@@ -854,7 +905,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
 
   const focusBadge = document.createElement("div");
   focusBadge.className = "relationship-network-focus";
-  focusBadge.innerHTML = "<strong>人物关系图谱</strong><span>力导向布局 · 按阵营/种族着色</span>";
+  focusBadge.innerHTML = "<strong>人物关系图谱</strong><span>力导向布局 · 稳定均衡配色</span>";
   const focusText = focusBadge.querySelector("span");
   const help = document.createElement("div");
   help.className = "relationship-network-help";
@@ -1212,7 +1263,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     edgeElements.forEach((item) => {
       item.path.classList.remove("is-highlighted", "is-dimmed");
     });
-    focusText.textContent = "力导向布局 · 按阵营/种族着色";
+    focusText.textContent = "力导向布局 · 稳定均衡配色";
     edgeDetail.classList.add("hidden");
     edgeDetail.replaceChildren();
   };
@@ -1629,26 +1680,32 @@ export function layoutGalaxy(graph, seed) {
   return { nodes, byId };
 }
 
-export function createGalaxyStarfield(seed, count = 7200) {
+export function createGalaxyStarfield(seed, count) {
   const random = seededRandom(hashString(seed));
   const stars = [];
   const armCount = 4;
-  for (let index = 0; index < count; index += 1) {
+  const baseCount = count === undefined ? GALAXY_BASE_STAR_COUNT : Math.max(0, Math.floor(Number(count) || 0));
+  const edgeBoostCount = count === undefined ? Math.round(baseCount * GALAXY_EDGE_STAR_BOOST_RATIO) : 0;
+  const totalCount = baseCount + edgeBoostCount;
+  for (let index = 0; index < totalCount; index += 1) {
+    const isEdgeBoost = index >= baseCount;
     const population = random();
-    const isCore = population < 0.62;
-    const isHalo = !isCore && population > 0.9;
-    const radius = isCore
+    const isCore = !isEdgeBoost && population < 0.62;
+    const isHalo = !isEdgeBoost && !isCore && population > 0.9;
+    const radius = isEdgeBoost
+      ? 900 + Math.pow(random(), 0.82) * 900
+      : isCore
       ? 32 + Math.pow(random(), 1.72) * 720
       : 160 + Math.pow(random(), 0.68) * 1510;
     const arm = index % armCount;
     const armAngle = arm / armCount * Math.PI * 2;
     const angle = isHalo
       ? random() * Math.PI * 2
-      : armAngle + radius * 0.0065 + (random() - 0.5) * (isCore ? 0.72 : 0.42 + radius / 1100);
-    const thickness = isHalo ? 70 + radius * 0.2 : (isCore ? 8 + radius * 0.045 : 22 + radius * 0.105);
+      : armAngle + radius * 0.0065 + (random() - 0.5) * (isEdgeBoost ? 0.36 + radius / 1700 : isCore ? 0.72 : 0.42 + radius / 1100);
+    const thickness = isHalo ? 70 + radius * 0.2 : (isEdgeBoost ? 26 + radius * 0.11 : isCore ? 8 + radius * 0.045 : 22 + radius * 0.105);
     const temperature = random();
-    const x = Math.cos(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78);
-    const z = Math.sin(angle) * radius + (random() - 0.5) * (isCore ? 42 : 78);
+    const x = Math.cos(angle) * radius + (random() - 0.5) * (isCore ? 42 : isEdgeBoost ? 68 : 78);
+    const z = Math.sin(angle) * radius + (random() - 0.5) * (isCore ? 42 : isEdgeBoost ? 68 : 78);
     stars.push({
       x,
       y: (random() + random() + random() - 1.5) * thickness,
@@ -1659,7 +1716,8 @@ export function createGalaxyStarfield(seed, count = 7200) {
       vz: 0,
       size: isCore && random() > 0.94 ? 1.25 + random() * 1.25 : 0.38 + random() * 0.82,
       brightness: isCore ? 0.3 + random() * 0.7 : 0.16 + random() * 0.66,
-      color: temperature < 0.2 ? "255,218,176" : temperature > 0.78 ? "174,211,255" : "226,237,255"
+      color: temperature < 0.2 ? "255,218,176" : temperature > 0.78 ? "174,211,255" : "226,237,255",
+      region: isEdgeBoost ? "edge-arm" : isCore ? "core" : isHalo ? "halo" : "arm"
     });
   }
   return stars;

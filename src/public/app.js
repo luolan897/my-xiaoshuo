@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260726-network-label-scale";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
@@ -388,7 +388,7 @@ const workspaceOnboardingSteps = [
   { selector: "#top-search-button", eyebrow: "全文检索", title: "搜索整部作品", description: "一次检索正文、角色、设定、种族与组织，快速定位创作依据。", placement: "bottom" },
   { selector: ".quick-actions button[data-task=\"continue\"]", eyebrow: "AI 快捷指令", title: "让创作助手基于正文工作", description: "总结、续写、剧情方向和冲突检查都以已保存内容为依据。", placement: "left" },
   { selector: "#ai-send", eyebrow: "AI 对话", title: "发送你的创作要求", description: "选择上下文范围与模型后发送任务。AI 结果默认只是建议，不会直接覆盖正文。", placement: "left" },
-  { selector: "#settings-button", eyebrow: "工作台设置", title: "管理 AI、协作与导出", description: "供应商、显示偏好、作品成员和 Markdown 导出都集中在这里。", placement: "bottom" },
+  { selector: "#settings-button", eyebrow: "工作台设置", title: "管理 AI、协作与导出", description: "供应商、显示偏好、作品成员和正文 ZIP 导出都集中在这里。", placement: "bottom" },
   { selector: "#account-button", eyebrow: "账户", title: "管理账户并重看导览", description: "账户菜单保存个人设置入口，也可以随时重新打开这套功能导览。", placement: "bottom" }
 ];
 
@@ -903,7 +903,7 @@ function applyChapterEditorMode() {
   $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
-  $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || !state.chapter);
+  $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
   if (viewOnly) cancelChapterAutoSave();
 }
@@ -2692,7 +2692,7 @@ function renderSettingsHub() {
   $("#export-button").disabled = !canReadAggregate;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
-    ? `当前作品：《${state.work.title}》。导出将作用于这部作品。`
+    ? `当前作品：《${state.work.title}》。导出的 ZIP 内含 Markdown 正文，仅包含分卷、章节标题与正文。`
     : "当前未选择作品；打开作品后可使用导出。";
 }
 
@@ -2706,11 +2706,40 @@ function renderWritingProgress(progress) {
   $("#writing-deadline").value = progress.goal.deadline ?? "";
   $("#writing-goal-save").disabled = !canEditProse();
   const maxWords = Math.max(1, ...progress.trend.map((item) => Number(item.words)));
-  $("#writing-trend-chart").innerHTML = progress.trend.map((item, index) => {
+  const maxDailyWords = Math.max(1, ...progress.trend.map((item) => Math.max(0, Number(item.delta))));
+  const dailyPoints = progress.trend.map((item, index) => {
+    const x = progress.trend.length > 0 ? (index + 0.5) / progress.trend.length * 1000 : 0;
+    const y = 94 - Math.max(0, Number(item.delta)) / maxDailyWords * 88;
+    return { x: x.toFixed(2), y: y.toFixed(2) };
+  });
+  const dailyLine = `<svg class="writing-trend-daily-line" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${dailyPoints.map((point) => `${point.x},${point.y}`).join(" ")}"></polyline></svg><span class="writing-trend-daily-points" aria-hidden="true">${dailyPoints.map((point) => `<i style="--point-x:${(Number(point.x) / 10).toFixed(2)}%;--point-y:${point.y}%"></i>`).join("")}</span>`;
+  const chart = $("#writing-trend-chart");
+  chart.innerHTML = progress.trend.map((item, index) => {
     const height = Math.max(3, Math.round(Number(item.words) / maxWords * 100));
-    const label = `${item.date}：${Number(item.words).toLocaleString("zh-CN")} 字，较前日 ${Number(item.delta) >= 0 ? "+" : ""}${Number(item.delta).toLocaleString("zh-CN")}`;
-    return `<span class="writing-trend-bar${index === progress.trend.length - 1 ? " is-today" : ""}" style="--bar-height:${height}%" title="${esc(label)}" aria-label="${esc(label)}"><i></i><small>${index % 5 === 0 || index === progress.trend.length - 1 ? esc(item.date.slice(5)) : ""}</small></span>`;
-  }).join("");
+    const dailyWords = Math.max(0, Number(item.delta));
+    const label = `${item.date}：累计 ${Number(item.words).toLocaleString("zh-CN")} 字，当日新增 +${dailyWords.toLocaleString("zh-CN")} 字`;
+    return `<span class="writing-trend-bar${index === progress.trend.length - 1 ? " is-today" : ""}" style="--bar-height:${height}%" data-writing-trend-label="${esc(label)}" tabindex="0" aria-label="${esc(label)}"><i></i><small>${index % 5 === 0 || index === progress.trend.length - 1 ? esc(item.date.slice(5)) : ""}</small></span>`;
+  }).join("") + dailyLine + '<span class="writing-trend-legend" aria-hidden="true"><i></i>累计字数 <b></b>当日新增</span><output id="writing-trend-tooltip" class="writing-trend-tooltip" role="tooltip" hidden></output>';
+  const tooltip = $("#writing-trend-tooltip");
+  const hideTooltip = () => { tooltip.hidden = true; };
+  const showTooltip = (bar) => {
+    const marker = bar.querySelector("i");
+    if (!marker) return;
+    tooltip.textContent = bar.dataset.writingTrendLabel;
+    tooltip.hidden = false;
+    const chartRect = chart.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+    const centeredLeft = markerRect.left + markerRect.width / 2 - chartRect.left;
+    const edgeInset = tooltip.offsetWidth / 2 + 8;
+    tooltip.style.left = `${Math.min(chart.clientWidth - edgeInset, Math.max(edgeInset, centeredLeft))}px`;
+    tooltip.style.top = `${Math.max(tooltip.offsetHeight + 8, markerRect.top - chartRect.top - 8)}px`;
+  };
+  chart.querySelectorAll(".writing-trend-bar").forEach((bar) => {
+    bar.addEventListener("mouseenter", () => showTooltip(bar));
+    bar.addEventListener("mouseleave", hideTooltip);
+    bar.addEventListener("focus", () => showTooltip(bar));
+    bar.addEventListener("blur", hideTooltip);
+  });
 }
 
 async function loadWritingProgress() {
@@ -3329,13 +3358,18 @@ function renderTree() {
 
 function renderChapterBatchDialog() {
   const chapters = state.work?.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({ ...chapter, volumeTitle: volume.title }))) ?? [];
+  const searchQuery = $("#chapter-batch-search").value.trim().toLocaleLowerCase("zh-CN");
+  const visibleChapters = searchQuery
+    ? chapters.filter((chapter) => chapter.title.toLocaleLowerCase("zh-CN").includes(searchQuery))
+    : chapters;
   for (const chapterId of chapterBatchSelectedIds) {
     if (!chapters.some((chapter) => chapter.id === chapterId)) chapterBatchSelectedIds.delete(chapterId);
   }
-  $("#chapter-batch-list").innerHTML = chapters.length ? chapters.map((chapter) => `<label class="chapter-batch-item">
+  $("#chapter-batch-list").innerHTML = visibleChapters.length ? visibleChapters.map((chapter) => `<label class="chapter-batch-item">
     <input type="checkbox" value="${esc(chapter.id)}" ${chapterBatchSelectedIds.has(chapter.id) ? "checked" : ""}>
     <span><strong>${esc(chapter.title)}</strong><small>${esc(chapter.volumeTitle)} · ${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")} 字 · ${esc(chapter.chapterType || "正文")}</small></span>
-  </label>`).join("") : '<p class="entity-history-empty">当前作品还没有章节。</p>';
+  </label>`).join("") : `<p class="entity-history-empty">${chapters.length ? "没有匹配的章节。" : "当前作品还没有章节。"}</p>`;
+  $("#chapter-batch-search-count").textContent = `${visibleChapters.length} 章`;
   $("#chapter-batch-list").querySelectorAll('input[type="checkbox"]').forEach((input) => input.addEventListener("change", () => {
     if (input.checked) chapterBatchSelectedIds.add(input.value);
     else chapterBatchSelectedIds.delete(input.value);
@@ -3358,6 +3392,7 @@ function updateChapterBatchControls() {
 function openChapterBatchDialog() {
   if (!state.work || !canEditProse()) return;
   chapterBatchSelectedIds.clear();
+  $("#chapter-batch-search").value = "";
   renderChapterBatchDialog();
   $("#chapter-batch-dialog").showModal();
 }
@@ -6293,6 +6328,11 @@ function bindWorkCoverControls(work) {
   });
 }
 
+function downloadWorkManuscript(work) {
+  if (!work?.id) return;
+  window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=markdown`;
+}
+
 function openWorkSettingsDialog(work) {
   if (!work) return;
   const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
@@ -6309,6 +6349,10 @@ function openWorkSettingsDialog(work) {
     <div><strong id="import-history-settings-title">正文导入历史</strong><small>查看导入前快照并恢复被覆盖的分卷、章节标题和正文；大纲、伏笔等章节关联资料不在快照中。</small></div>
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
+  const exportField = `<section class="work-access-field" aria-labelledby="work-export-settings-title">
+    <div><strong id="work-export-settings-title">导出正文</strong><small>服务器将分卷、章节标题与正文压缩为 ZIP，压缩包内含 Markdown 文件；不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
+    <button id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>
+  </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
     <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>查看并恢复已软删除的章节，正文、版本和关联资料不会在删除时清理。</small></div>
     <button id="chapter-recycle-bin-button" class="ghost-button" type="button" aria-controls="chapter-recycle-bin-dialog" aria-haspopup="dialog" ${canEditProse() ? "" : "disabled"}>打开回收站</button>
@@ -6318,7 +6362,7 @@ function openWorkSettingsDialog(work) {
     <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
   </section>` : "";
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + recycleBinField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + exportField + recycleBinField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = (await apiPage("/api/works")).items;
@@ -6341,6 +6385,7 @@ function openWorkSettingsDialog(work) {
     $("#form-dialog").close();
     void openImportHistory();
   });
+  $("#work-export-button")?.addEventListener("click", () => downloadWorkManuscript(work));
   $("#chapter-recycle-bin-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openChapterRecycleBin();
@@ -6371,11 +6416,16 @@ function openVolumeDialog(item) {
   if (!state.work) return openWorkDialog();
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
+  const management = item ? `<section class="entity-dialog-management" aria-label="分卷操作">
+    <div><strong>分卷操作</strong><small>仅空分卷可以删除；卷内章节及回收站章节需先移动到其他分卷。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-volume-delete>删除分卷</button></div>
+  </section>` : "";
   openDialog(item ? "编辑分卷" : "新建分卷",
     field("title", "分卷名称", "text", item?.title) +
     field("kind", "分卷类型", "select", item?.kind ?? "main", kindOptions) +
     field("description", "分卷简介", "textarea", item?.description) +
-    field("keywords", "分卷关键词", "keyword-chips", item?.keywords ?? []),
+    field("keywords", "分卷关键词", "keyword-chips", item?.keywords ?? []) +
+    management,
     async (form) => {
       const body = {
         title: form.get("title"),
@@ -6388,6 +6438,28 @@ function openVolumeDialog(item) {
       renderTree();
       toast(item ? "分卷设置已保存" : "分卷已创建");
     }, "分卷设置");
+  $("#dialog-fields").querySelector("[data-dialog-volume-delete]")?.addEventListener("click", () => {
+    void deleteVolume(item);
+  });
+}
+
+async function deleteVolume(item) {
+  if (!state.work || !item || !canEditProse()) return toast("当前权限不能删除分卷", "error");
+  $("#form-dialog").close();
+  if (!await confirmToast(`确认删除空分卷“${item.title}”吗？分卷信息和版本记录仍会保留。`, {
+    title: "删除分卷",
+    confirmLabel: "确认删除"
+  })) return openVolumeDialog(item);
+  try {
+    await api(`/api/volumes/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    state.collapsedVolumeIds.delete(item.id);
+    state.work = await api(`/api/works/${state.work.id}`);
+    renderTree();
+    toast(`已删除分卷“${item.title}”`);
+  } catch (error) {
+    toast(error.message, "error");
+    openVolumeDialog(item);
+  }
 }
 
 function openSettingEditor(item = null, { readOnly = false } = {}) {
@@ -9015,6 +9087,7 @@ $("#login-form").addEventListener("submit", async (event) => {
         captchaAnswer: form.get("captchaAnswer")
       }
     });
+    window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));
     window.location.reload();
   } catch (error) {
     $("#auth-error").textContent = error.message;
@@ -9174,8 +9247,12 @@ $("#chapter-batch-button").addEventListener("click", openChapterBatchDialog);
 $("#chapter-batch-close").addEventListener("click", () => $("#chapter-batch-dialog").close());
 $("#chapter-batch-cancel").addEventListener("click", () => $("#chapter-batch-dialog").close());
 $("#chapter-batch-action").addEventListener("change", updateChapterBatchControls);
+$("#chapter-batch-search").addEventListener("input", renderChapterBatchDialog);
 $("#chapter-batch-select-all").addEventListener("click", () => {
-  state.work?.volumes.flatMap((volume) => volume.chapters).forEach((chapter) => chapterBatchSelectedIds.add(chapter.id));
+  const searchQuery = $("#chapter-batch-search").value.trim().toLocaleLowerCase("zh-CN");
+  state.work?.volumes.flatMap((volume) => volume.chapters)
+    .filter((chapter) => !searchQuery || chapter.title.toLocaleLowerCase("zh-CN").includes(searchQuery))
+    .forEach((chapter) => chapterBatchSelectedIds.add(chapter.id));
   renderChapterBatchDialog();
 });
 $("#chapter-batch-clear").addEventListener("click", () => {
@@ -9598,9 +9675,7 @@ $("#search-form").addEventListener("submit", async (event) => {
     $("#search-results").innerHTML = `<p class="search-results-status">${esc(error.message)}</p>`;
   });
 });
-$("#export-button").addEventListener("click", () => {
-  if (state.work) window.location.href = `/api/works/${state.work.id}/export?format=markdown`;
-});
+$("#export-button").addEventListener("click", () => downloadWorkManuscript(state.work));
 window.addEventListener("beforeunload", (event) => { if (state.dirty || entityEditorDirty || characterSectionEditorDirty) event.preventDefault(); });
 
 initializePage().catch((error) => {
