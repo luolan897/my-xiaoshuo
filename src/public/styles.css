@@ -1116,8 +1116,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-batch-item span { display: grid; min-width: 0; gap: 2px; }
 .chapter-batch-item strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-batch-item small { color: var(--muted); font-size: 9px; }
-.chapter-batch-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0 24px; }
-.chapter-batch-controls label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
+.chapter-batch-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 24px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.chapter-batch-controls label { display: grid; min-width: 0; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 650; line-height: 1.35; }
+.chapter-batch-controls select { width: 100%; min-width: 0; min-height: 40px; appearance: none; -webkit-appearance: none; padding: 8px 40px 8px 12px; border-color: color-mix(in srgb, var(--line) 82%, var(--ink)); border-radius: 5px; background-color: var(--surface); background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: right 20px center, right 15px center; background-repeat: no-repeat; background-size: 5px 5px, 5px 5px; color: var(--ink); font-size: 12px; font-weight: 500; line-height: 1.4; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease; }
+.chapter-batch-controls select:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); }
+.chapter-batch-controls select:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.chapter-batch-controls select:disabled { cursor: not-allowed; opacity: .52; }
 @media (max-width: 620px) { .chapter-batch-controls { grid-template-columns: 1fr; } }
 
 .ghost-button, .primary-button { border-radius: 4px; padding: 8px 13px; font-size: 12px; }

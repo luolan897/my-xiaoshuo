@@ -47,6 +47,8 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("async function submitChapterBatch(");
     expect(application.text).toContain("批量删除需要再次确认");
     expect(styles.text).toContain(".chapter-batch-controls");
+    expect(styles.text).toContain(".chapter-batch-controls select {");
+    expect(styles.text).toContain(".chapter-batch-controls select:focus-visible");
     expect(page.text).not.toContain('id="new-chapter-button"');
     expect(application.text).toContain('data-new-chapter-volume');
     expect(application.text).toContain('async function openChapterDialog(volumeId = null)');
