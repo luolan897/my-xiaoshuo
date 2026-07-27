@@ -413,6 +413,15 @@ describe("作品、导入和章节版本 API", () => {
     await request(runtime.app).get(`/api/chapters/${first.body.data.id}`).expect(404);
     const versions = await request(runtime.app).get(`/api/chapters/${first.body.data.id}/versions`).expect(200);
     expect(versions.body.data[0]).toMatchObject({ versionNo: 3, content: "第一章正文", source: "delete" });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM analysis_tasks WHERE work_id = ? AND status = 'pending'",
+      work.body.data.id
+    )).toEqual({ count: 0 });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_paragraph_search WHERE chapter_id IN (?, ?)",
+      first.body.data.id,
+      second.body.data.id
+    )).toEqual({ count: 0 });
   });
 
   it("规范化同卷排序并支持章节跨卷移动", async () => {
