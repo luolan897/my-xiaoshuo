@@ -1530,14 +1530,22 @@ export class Store {
   }
 
   deleteVolume(volumeId: string, expectedVersionNo?: number): void {
-    const volume = this.getVolume(volumeId);
-    const count = this.db.get("SELECT COUNT(*) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId);
-    if (numberValue(count ?? {}, "value") > 0) {
-      throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
-    }
     this.db.transaction(() => {
       const current = this.getVolume(volumeId);
       this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", Number(current.versionNo));
+      const counts = this.db.get(
+        `SELECT
+          SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS active_count,
+          SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS deleted_count
+        FROM chapters WHERE volume_id = ?`,
+        volumeId
+      );
+      if (numberValue(counts ?? {}, "active_count") > 0) {
+        throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
+      }
+      if (numberValue(counts ?? {}, "deleted_count") > 0) {
+        throw new AppError(409, "VOLUME_HAS_DELETED_CHAPTERS", "分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷");
+      }
       this.recordEntityVersion("volume", volumeId, "delete", null, "删除分卷");
       this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
       this.audit(String(current.workId), "volume.deleted", "volume", volumeId, { versionNo: Number(current.versionNo) });
