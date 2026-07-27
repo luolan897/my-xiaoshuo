@@ -346,9 +346,23 @@ describe("作品、导入和章节版本 API", () => {
       content: "原始正文。"
     }).expect(201);
     const chapterId = chapter.body.data.id;
+    expect(runtime.store.searchChapterParagraphs(workId, "原始正文")).toHaveLength(1);
 
     await request(runtime.app).delete(`/api/chapters/${chapterId}`).expect(204);
     await request(runtime.app).get(`/api/chapters/${chapterId}`).expect(404);
+    expect(runtime.database.get("SELECT title, content, version_no, deleted_at FROM chapters WHERE id = ?", chapterId)).toMatchObject({
+      title: "第一章",
+      content: "原始正文。",
+      version_no: 2
+    });
+    expect(runtime.database.get("SELECT deleted_at FROM chapters WHERE id = ?", chapterId)?.deleted_at).toEqual(expect.any(String));
+
+    const directory = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(directory.body.data.chapterCount).toBe(0);
+    expect(directory.body.data.wordCount).toBe(0);
+    expect(directory.body.data.volumes[0].chapters).toEqual([]);
+    expect(runtime.store.searchChapterParagraphs(workId, "原始正文")).toEqual([]);
+    expect((await request(runtime.app).get(`/api/works/${workId}/search?q=${encodeURIComponent("原始正文")}`).expect(200)).body.data).toEqual([]);
 
     const versions = await request(runtime.app).get(`/api/chapters/${chapterId}/versions`).expect(200);
     expect(versions.body.data[0]).toMatchObject({ versionNo: 2, source: "delete", title: "第一章", content: "原始正文。" });
@@ -357,6 +371,8 @@ describe("作品、导入和章节版本 API", () => {
     const restored = await request(runtime.app).post(`/api/chapters/${chapterId}/restore`).send({ versionNo: 1 }).expect(200);
     expect(restored.body.data).toMatchObject({ id: chapterId, title: "第一章", content: "原始正文。", volumeId: volume.body.data.id });
     expect(restored.body.data.versionNo).toBeGreaterThan(2);
+    expect(runtime.database.get("SELECT deleted_at FROM chapters WHERE id = ?", chapterId)?.deleted_at).toBeNull();
+    expect((await request(runtime.app).get(`/api/works/${workId}`).expect(200)).body.data.chapterCount).toBe(1);
   });
 
   it("可从文件版本快照恢复作品正文树", async () => {

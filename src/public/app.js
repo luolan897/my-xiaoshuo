@@ -897,6 +897,7 @@ function applyChapterEditorMode() {
   $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
+  $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || !state.chapter);
   if (viewOnly) cancelChapterAutoSave();
 }
 
@@ -3083,6 +3084,57 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - rect.width - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - rect.height - 8))}px`;
+}
+
+async function deleteChapter(chapterId) {
+  if (!state.work || !canEditProse()) return toast("当前权限不能删除正文", "error");
+  const chaptersBeforeDelete = state.work.volumes.flatMap((volume) => volume.chapters);
+  const chapterIndex = chaptersBeforeDelete.findIndex((chapter) => chapter.id === chapterId);
+  const chapter = chaptersBeforeDelete[chapterIndex];
+  if (!chapter) return toast("章节不存在或已被删除", "error");
+  const deletingCurrentChapter = state.chapter?.id === chapterId;
+  if (deletingCurrentChapter) cancelChapterAutoSave();
+  const resumeAutoSave = () => {
+    if (deletingCurrentChapter && state.dirty && !chapterEditorReadOnly) scheduleChapterAutoSave();
+  };
+  const dirtyWarning = deletingCurrentChapter && state.dirty ? "，当前未保存修改不会保留" : "";
+  if (!await confirmToast(`确认删除章节“${chapter.title}”吗？删除后将从正文目录隐藏${dirtyWarning}。`, {
+    title: "删除章节",
+    confirmLabel: "继续删除"
+  })) {
+    resumeAutoSave();
+    return;
+  }
+  if (!await confirmToast(`章节“${chapter.title}”的正文、版本和关联资料会保留，后续可以恢复。仍要删除吗？`, {
+    title: "删除操作需要再次确认",
+    confirmLabel: "确认删除"
+  })) {
+    resumeAutoSave();
+    return;
+  }
+  try {
+    const deletingSelectedChapter = state.chapter?.id === chapterId;
+    const expectedVersionNo = deletingSelectedChapter ? state.chapter.versionNo : chapter.versionNo;
+    await api(`/api/chapters/${chapterId}`, { method: "DELETE", body: { expectedVersionNo } });
+    const workId = state.work.id;
+    state.work = await api(`/api/works/${workId}`);
+    if (deletingSelectedChapter) {
+      state.chapter = null;
+      state.dirty = false;
+      lastSavedChapterSnapshot = null;
+      setSaveState("已删除");
+      const remainingChapters = state.work.volumes.flatMap((volume) => volume.chapters);
+      const nextChapter = remainingChapters[Math.min(Math.max(chapterIndex, 0), remainingChapters.length - 1)];
+      if (nextChapter) await selectChapter(nextChapter.id);
+      else showWelcome(true);
+    } else {
+      renderTree();
+    }
+    toast(`已删除章节“${chapter.title}”，正文和版本记录已保留`);
+  } catch (error) {
+    resumeAutoSave();
+    toast(error.message, "error");
+  }
 }
 
 async function selectChapter(chapterId, { editMode = false } = {}) {
@@ -8640,6 +8692,9 @@ $("#platform-new-provider").addEventListener("click", () => openProviderDialog()
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
+$("#chapter-delete-button").addEventListener("click", () => {
+  if (state.chapter) void deleteChapter(state.chapter.id);
+});
 $("#chapter-edit-button").addEventListener("click", enterChapterEditMode);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
@@ -8894,6 +8949,13 @@ $("#cover-file").addEventListener("change", async (event) => {
   }
 });
 $("#chapter-type-menu").addEventListener("click", async (event) => {
+  const deleteButton = event.target.closest("[data-delete-chapter]");
+  if (deleteButton) {
+    const chapterId = state.contextChapterId;
+    closeChapterTypeMenu();
+    if (chapterId) await deleteChapter(chapterId);
+    return;
+  }
   const button = event.target.closest("[data-chapter-type]");
   const chapterId = state.contextChapterId;
   if (!button || !chapterId) return;

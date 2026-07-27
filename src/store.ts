@@ -1204,7 +1204,7 @@ export class Store {
   getWorkTree(workId: string): Record<string, unknown> {
     const work = this.getWork(workId);
     const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
-    const chapterRows = this.db.all("SELECT * FROM chapters WHERE work_id = ? ORDER BY sort_order, created_at", workId);
+    const chapterRows = this.db.all("SELECT * FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at", workId);
     const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
     for (const row of chapterRows) {
       const chapter = this.mapChapter(row);
@@ -1228,7 +1228,7 @@ export class Store {
     const chapterRows = this.db.all(
       `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
         analysis_status, excluded_from_analysis, created_at, updated_at
-       FROM chapters WHERE work_id = ? ORDER BY sort_order, created_at`,
+       FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at`,
       workId
     );
     const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
@@ -1255,7 +1255,7 @@ export class Store {
     const chapterRows = this.db.all(
       `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
         analysis_status, excluded_from_analysis, created_at, updated_at
-       FROM chapters WHERE work_id = ? ORDER BY sort_order, created_at${page.sql}`,
+       FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at${page.sql}`,
       workId,
       ...page.params
     );
@@ -1327,7 +1327,7 @@ export class Store {
       const current = this.getWork(workId);
       this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
       const currentTree = this.getWorkTree(workId);
-      const currentChapters = this.db.all("SELECT content FROM chapters WHERE work_id = ?", workId);
+      const currentChapters = this.db.all("SELECT content FROM chapters WHERE work_id = ? AND deleted_at IS NULL", workId);
       const wordCount = currentChapters.reduce((sum, row) => sum + countWords(requiredString(row, "content")), 0);
       const paragraphCount = currentChapters.reduce((sum, row) => {
         const content = requiredString(row, "content").trim();
@@ -1531,7 +1531,7 @@ export class Store {
 
   deleteVolume(volumeId: string, expectedVersionNo?: number): void {
     const volume = this.getVolume(volumeId);
-    const count = this.db.get("SELECT COUNT(*) AS value FROM chapters WHERE volume_id = ?", volumeId);
+    const count = this.db.get("SELECT COUNT(*) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId);
     if (numberValue(count ?? {}, "value") > 0) {
       throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
     }
@@ -1548,7 +1548,7 @@ export class Store {
     this.getWork(workId);
     const volume = this.getVolume(input.volumeId);
     if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
-    const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ?", input.volumeId);
+    const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId);
     const chapterId = this.insertChapter(
       workId,
       input.volumeId,
@@ -1564,7 +1564,7 @@ export class Store {
   }
 
   getChapter(chapterId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM chapters WHERE id = ?", chapterId);
+    const row = this.db.get("SELECT * FROM chapters WHERE id = ? AND deleted_at IS NULL", chapterId);
     if (!row) throw notFound("章节");
     return this.mapChapter(row);
   }
@@ -1708,7 +1708,7 @@ export class Store {
        FROM chapters chapter
        JOIN volumes volume ON volume.id = chapter.volume_id
        JOIN chapter_insights insight ON insight.chapter_id = chapter.id AND insight.chapter_version = chapter.version_no
-       WHERE chapter.work_id = ?
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL
          AND NOT EXISTS (
            SELECT 1 FROM chapter_insights newer
            WHERE newer.chapter_id = insight.chapter_id
@@ -1789,7 +1789,10 @@ export class Store {
   restoreChapter(chapterId: string, versionNo: number, expectedVersionNo?: number): Record<string, unknown> {
     const version = this.db.get("SELECT * FROM chapter_versions WHERE chapter_id = ? AND version_no = ?", chapterId, versionNo);
     if (!version) throw notFound("章节版本");
-    const existing = this.db.get("SELECT id FROM chapters WHERE id = ?", chapterId);
+    const existing = this.db.get("SELECT id, deleted_at FROM chapters WHERE id = ?", chapterId);
+    if (existing?.deleted_at) {
+      return this.restoreSoftDeletedChapterFromVersion(chapterId, version, expectedVersionNo);
+    }
     if (!existing) {
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", this.currentChapterVersionNo(chapterId));
       return this.recreateChapterFromVersion(chapterId, version);
@@ -1814,7 +1817,7 @@ export class Store {
     const content = requiredString(version, "content");
     const chapterType = (optionalString(version, "chapter_type") ?? "正文") as ChapterType;
     const sortOrder = version.sort_order === null || version.sort_order === undefined
-      ? numberValue(this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS sort_order FROM chapters WHERE volume_id = ?", volumeId) ?? {}, "sort_order") + 1
+      ? numberValue(this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS sort_order FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId) ?? {}, "sort_order") + 1
       : numberValue(version, "sort_order");
     const timestamp = now();
     const nextVersionNo = numberValue(
@@ -1858,6 +1861,73 @@ export class Store {
     return this.getChapter(chapterId);
   }
 
+  private restoreSoftDeletedChapterFromVersion(
+    chapterId: string,
+    version: Row,
+    expectedVersionNo?: number
+  ): Record<string, unknown> {
+    const deleted = this.db.get("SELECT * FROM chapters WHERE id = ? AND deleted_at IS NOT NULL", chapterId);
+    if (!deleted) throw notFound("章节");
+    const currentVersionNo = numberValue(deleted, "version_no");
+    this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", currentVersionNo);
+    const workId = requiredString(deleted, "work_id");
+    const volumeId = optionalString(version, "volume_id");
+    if (!volumeId) throw new AppError(400, "CHAPTER_RESTORE_INCOMPLETE", "历史版本缺少分卷信息，无法恢复已删除章节");
+    const volume = this.getVolume(volumeId);
+    if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
+    const title = requiredString(version, "title");
+    const content = requiredString(version, "content");
+    const chapterType = (optionalString(version, "chapter_type") ?? "正文") as ChapterType;
+    const sortOrder = version.sort_order === null || version.sort_order === undefined
+      ? numberValue(this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS sort_order FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId) ?? {}, "sort_order") + 1
+      : numberValue(version, "sort_order");
+    const nextVersionNo = Math.max(
+      currentVersionNo,
+      numberValue(this.db.get("SELECT COALESCE(MAX(version_no), 0) AS version_no FROM chapter_versions WHERE chapter_id = ?", chapterId) ?? {}, "version_no")
+    ) + 1;
+    const timestamp = now();
+    this.db.transaction(() => {
+      const locked = this.db.get("SELECT version_no, deleted_at FROM chapters WHERE id = ?", chapterId);
+      if (!locked?.deleted_at) throw new AppError(409, "CHAPTER_ALREADY_RESTORED", "章节已经恢复");
+      this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", numberValue(locked, "version_no"));
+      this.db.run(
+        `UPDATE chapters SET volume_id = ?, title = ?, content = ?, chapter_type = ?, sort_order = ?, word_count = ?,
+          version_no = ?, analysis_status = 'pending', deleted_at = NULL, updated_at = ? WHERE id = ?`,
+        volumeId,
+        title,
+        content,
+        chapterType,
+        sortOrder,
+        countWords(content),
+        nextVersionNo,
+        timestamp,
+        chapterId
+      );
+      this.syncChapterParagraphSearch(workId, chapterId, content);
+      this.insertChapterVersionRow({
+        workId,
+        chapterId,
+        versionNo: nextVersionNo,
+        title,
+        content,
+        volumeId,
+        sortOrder,
+        chapterType,
+        source: "restore",
+        sourceRef: requiredString(version, "id"),
+        changeNote: `恢复至 v${numberValue(version, "version_no")}`,
+        timestamp
+      });
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      this.invalidateChapter(workId, chapterId, nextVersionNo);
+      this.audit(workId, "chapter.restored", "chapter", chapterId, {
+        versionNo: nextVersionNo,
+        fromVersion: numberValue(version, "version_no")
+      });
+    });
+    return this.getChapter(chapterId);
+  }
+
   moveChapter(chapterId: string, input: { volumeId: string; sortOrder: number }, expectedVersionNo?: number): Record<string, unknown> {
     const chapter = this.getChapter(chapterId);
     this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(chapter.versionNo));
@@ -1895,7 +1965,7 @@ export class Store {
     this.db.transaction(() => {
       const lockedChapter = this.getChapter(chapterId);
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedChapter.versionNo));
-      this.db.run("UPDATE chapters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, chapterId);
+      this.db.run("UPDATE chapters SET version_no = ?, deleted_at = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, chapterId);
       this.insertChapterVersionRow({
         workId: String(chapter.workId),
         chapterId,
@@ -1910,7 +1980,20 @@ export class Store {
         changeNote: "删除章节",
         timestamp
       });
-      this.db.run("DELETE FROM chapters WHERE id = ?", chapterId);
+      this.db.run("DELETE FROM chapter_paragraph_search WHERE chapter_id = ?", chapterId);
+      this.db.run(
+        `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
+         WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
+         AND (json_extract(scope_json, '$.chapterId') = ?
+           OR json_extract(scope_json, '$.type') = 'book'
+           OR (json_extract(scope_json, '$.type') = 'volume'
+             AND json_extract(scope_json, '$.volumeId') = ?))`,
+        timestamp,
+        String(chapter.workId),
+        chapterId,
+        String(chapter.volumeId)
+      );
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, String(chapter.workId));
       this.audit(String(chapter.workId), "chapter.deleted", "chapter", chapterId, { versionNo });
     });
   }
@@ -2000,7 +2083,7 @@ export class Store {
       ? this.db.all(
           `${columns}
            JOIN chapter_paragraph_short_terms term ON term.paragraph_id = paragraph.id
-           WHERE paragraph.work_id = ? AND term.term = ?
+           WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND term.term = ?
            ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
            LIMIT ?`,
           workId,
@@ -2010,7 +2093,7 @@ export class Store {
       : this.db.all(
           `${columns}
            JOIN chapter_paragraph_search_fts fts ON fts.rowid = paragraph.id
-           WHERE paragraph.work_id = ? AND chapter_paragraph_search_fts MATCH ?
+           WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND chapter_paragraph_search_fts MATCH ?
            ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
            LIMIT ?`,
           workId,
@@ -2090,7 +2173,7 @@ export class Store {
         ? "admin"
         : membershipRole ? classifyWorkModulePermissions(modulePermissions) : null;
     const count = this.db.get(
-      "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ?",
+      "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ? AND deleted_at IS NULL",
       requiredString(row, "id")
     );
     const cover = this.db.get("SELECT updated_at FROM work_covers WHERE work_id = ?", requiredString(row, "id"));
@@ -2178,7 +2261,7 @@ export class Store {
        FROM chapters c
        JOIN volumes v ON v.id = c.volume_id
        LEFT JOIN chapter_outlines o ON o.chapter_id = c.id
-       WHERE c.work_id = ?
+       WHERE c.work_id = ? AND c.deleted_at IS NULL
        ORDER BY v.sort_order, c.sort_order, c.created_at`,
       workId
     );
@@ -2211,7 +2294,7 @@ export class Store {
        FROM chapters c
        JOIN volumes v ON v.id = c.volume_id
        LEFT JOIN chapter_outlines o ON o.chapter_id = c.id
-       WHERE c.work_id = ?
+       WHERE c.work_id = ? AND c.deleted_at IS NULL
        ORDER BY v.sort_order, c.sort_order, c.created_at${page.sql}`,
       workId,
       ...page.params
@@ -5471,7 +5554,7 @@ export class Store {
     const chapterSummaries = new Map(this.db.all(
       `SELECT chapter.id, chapter.title, volume.title AS volume_title
        FROM chapters chapter JOIN volumes volume ON volume.id = chapter.volume_id
-       WHERE chapter.work_id = ?`,
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL`,
       workId
     ).map((row) => [
       requiredString(row, "id"),
@@ -6476,7 +6559,7 @@ export class Store {
         `SELECT chapter.title AS title, volume.title AS volume_title
          FROM chapters chapter
          JOIN volumes volume ON volume.id = chapter.volume_id
-         WHERE chapter.id = ? AND chapter.work_id = ?`,
+         WHERE chapter.id = ? AND chapter.work_id = ? AND chapter.deleted_at IS NULL`,
         scope.chapterId,
         workId
       );
@@ -6563,7 +6646,7 @@ export class Store {
                 volume.id AS volume_id, volume.title AS volume_title
          FROM chapters chapter
          JOIN volumes volume ON volume.id = chapter.volume_id
-         WHERE chapter.id = ? AND chapter.work_id = ?`,
+         WHERE chapter.id = ? AND chapter.work_id = ? AND chapter.deleted_at IS NULL`,
         scope.chapterId,
         workId
       );
@@ -6581,7 +6664,7 @@ export class Store {
       const volume = this.db.get("SELECT id, title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);
       if (!volume) return [{ type: "volume", volumeId: scope.volumeId, missing: true }];
       const chapters = this.db.all(
-        "SELECT id, title, version_no FROM chapters WHERE volume_id = ? ORDER BY sort_order, created_at",
+        "SELECT id, title, version_no FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
         scope.volumeId
       );
       return [{
@@ -6612,7 +6695,7 @@ export class Store {
     this.getWork(workId);
     const pattern = `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
     const chapters = this.db.all(
-      "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
+      "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
       pattern,
       pattern

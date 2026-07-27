@@ -129,6 +129,12 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("overflow-wrap: anywhere; line-height: 1.45; white-space: normal");
     expect(page.text).toContain('id="ai-citations"');
     expect(page.text).toContain('id="line-citation-menu"');
+    expect(page.text).toContain('<button id="chapter-delete-button" class="danger-button" type="button">删除章节</button>');
+    expect(page.text).toContain('data-delete-chapter');
+    expect(application.text).toContain("async function deleteChapter(chapterId)");
+    expect(application.text).toContain('title: "删除章节"');
+    expect(application.text).toContain('title: "删除操作需要再次确认"');
+    expect(application.text).toContain('method: "DELETE", body: { expectedVersionNo }');
   });
 
   it("作品切换和新建只保留在书架首页", async () => {
@@ -306,8 +312,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-race-tree-pagination-v1');
-    expect(page.text).toContain('/styles.css?v=20260727-inline-save-spacing-v2');
+    expect(page.text).toContain('/app.js?v=20260727-chapter-soft-delete-v1');
+    expect(page.text).toContain('/styles.css?v=20260727-chapter-soft-delete-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
