@@ -303,11 +303,12 @@ describe("人物关系图数据与布局", () => {
     expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
   });
 
-  it("默认在原星群外为边缘旋臂增加百分之二十星点", () => {
+  it("默认按两轮百分之十的复合比例增加边缘旋臂星点", () => {
     const stars = createGalaxyStarfield("dense-background");
     const edgeStars = stars.filter((star: { region: string }) => star.region === "edge-arm");
-    expect(stars).toHaveLength(GALAXY_BASE_STAR_COUNT + Math.round(GALAXY_BASE_STAR_COUNT * GALAXY_EDGE_STAR_BOOST_RATIO));
-    expect(edgeStars).toHaveLength(Math.round(GALAXY_BASE_STAR_COUNT * GALAXY_EDGE_STAR_BOOST_RATIO));
+    expect(GALAXY_EDGE_STAR_BOOST_RATIO).toBeCloseTo(1.1 * 1.1 - 1);
+    expect(stars).toHaveLength(8712);
+    expect(edgeStars).toHaveLength(1512);
     expect(edgeStars.every((star: { originX: number; originZ: number }) => Math.hypot(star.originX, star.originZ) > 820)).toBe(true);
     expect(stars.filter((star: { y: number }) => Math.abs(star.y) < 120).length).toBeGreaterThan(3000);
   });

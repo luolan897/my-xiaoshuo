@@ -94,7 +94,7 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
 });
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_BASE_STAR_COUNT = 7200;
-export const GALAXY_EDGE_STAR_BOOST_RATIO = 0.2;
+export const GALAXY_EDGE_STAR_BOOST_RATIO = 1.1 * 1.1 - 1;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
   minimumRadius: 220,
   radialSpan: 830,
