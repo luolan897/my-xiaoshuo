@@ -292,6 +292,36 @@ describe("作品、导入和章节版本 API", () => {
     await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/move`).send({ volumeId: secondVolume.body.data.id, sortOrder: 0 }).expect(400);
   });
 
+  it("保存写作目标并从正文版本重建字数趋势", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "写作目标作品" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "一二三四"
+    }).expect(201);
+
+    const savedGoal = await request(runtime.app).put(`/api/works/${work.body.data.id}/writing-goal`).send({
+      dailyGoal: 2000,
+      targetTotal: 120000,
+      deadline: "2026-12-31"
+    }).expect(200);
+    expect(savedGoal.body.data.goal).toMatchObject({ dailyGoal: 2000, targetTotal: 120000, deadline: "2026-12-31" });
+    expect(savedGoal.body.data).toMatchObject({ currentWords: 4, todayWords: 4 });
+    expect(savedGoal.body.data.trend).toHaveLength(30);
+    expect(savedGoal.body.data.trend.at(-1)).toMatchObject({ words: 4, delta: 4 });
+
+    await request(runtime.app).delete(`/api/chapters/${chapter.body.data.id}`).send({ expectedVersionNo: 1 }).expect(204);
+    const afterDelete = await request(runtime.app).get(`/api/works/${work.body.data.id}/writing-progress`).expect(200);
+    expect(afterDelete.body.data).toMatchObject({ currentWords: 0, todayWords: 0 });
+    expect(afterDelete.body.data.trend.at(-1)).toMatchObject({ words: 0, delta: 0 });
+
+    await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/restore`).send({ versionNo: 1, expectedVersionNo: 2 }).expect(200);
+    const afterRestore = await request(runtime.app).get(`/api/works/${work.body.data.id}/writing-progress`).expect(200);
+    expect(afterRestore.body.data).toMatchObject({ currentWords: 4, todayWords: 4 });
+    expect(afterRestore.body.data.trend.at(-1)).toMatchObject({ words: 4, delta: 4 });
+  });
+
   it("在单个事务中批量管理章节", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "批量章节作品" }).expect(201);
     const firstVolume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);

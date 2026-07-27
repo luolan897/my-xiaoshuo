@@ -1985,6 +1985,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listAuditLogsPage(request.params.workId, pagination) : store.listAuditLogs(request.params.workId));
   });
+  app.get("/api/works/:workId/writing-progress", (request, response) => data(response, store.getWritingProgress(request.params.workId)));
+  app.put("/api/works/:workId/writing-goal", (request, response) => {
+    const input = parse(z.object({
+      dailyGoal: z.number().int().min(0).max(1_000_000),
+      targetTotal: z.number().int().min(0).max(100_000_000),
+      deadline: z.string().date().nullable()
+    }).strict(), request.body);
+    data(response, store.updateWritingGoal(request.params.workId, input));
+  });
 
   if (options.serveUi ?? true) {
     const publicPath = options.publicPath ?? join(process.cwd(), "src", "public");
