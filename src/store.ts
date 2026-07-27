@@ -2274,7 +2274,19 @@ export class Store {
             changeNote: "批量删除章节（可恢复）",
             timestamp
           });
-          this.invalidateChapter(workId, chapterId, versionNo);
+          this.db.run("DELETE FROM chapter_paragraph_search WHERE chapter_id = ?", chapterId);
+          this.db.run(
+            `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
+             WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
+             AND (json_extract(scope_json, '$.chapterId') = ?
+               OR json_extract(scope_json, '$.type') = 'book'
+               OR (json_extract(scope_json, '$.type') = 'volume'
+                 AND json_extract(scope_json, '$.volumeId') = ?))`,
+            timestamp,
+            workId,
+            chapterId,
+            String(chapter.volumeId)
+          );
           this.audit(workId, "chapter.deleted", "chapter", chapterId, { versionNo, batch: true, recoverable: true });
         }
       }
