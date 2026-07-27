@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260727-chapter-soft-delete-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260727-chapter-annotations-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -223,6 +223,7 @@
               <span id="chapter-stats" class="chapter-stats">0 字 · v0</span>
               <button id="insight-button" class="ghost-button" type="button" aria-controls="chapter-insight-toast" aria-expanded="false">章节概览</button>
               <button id="versions-button" class="ghost-button" type="button">版本</button>
+              <button id="chapter-annotations-button" class="ghost-button" type="button">批注与待办</button>
               <button id="chapter-delete-button" class="danger-button" type="button">删除章节</button>
               <button id="chapter-edit-button" class="primary-button hidden" type="button">编辑</button>
               <button id="tidy-blank-lines-button" class="ghost-button" type="button">整理空行</button>
@@ -326,6 +327,8 @@
     <div id="line-citation-menu" class="line-citation-menu hidden" role="menu" aria-label="正文行引用操作">
       <strong id="line-citation-label">已选择正文</strong>
       <button id="add-line-citation" type="button" role="menuitem">添加到创作助手引用</button>
+      <button id="add-line-annotation" type="button" role="menuitem">添加批注</button>
+      <button id="add-line-todo" type="button" role="menuitem">添加待办</button>
     </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
@@ -616,6 +619,12 @@
       </div>
     </dialog>
 
+    <dialog id="chapter-annotations-dialog" class="dialog wide-dialog chapter-annotations-dialog" aria-labelledby="chapter-annotations-title">
+      <div class="dialog-header"><div><span class="eyebrow">正文协作</span><h2 id="chapter-annotations-title">批注与待办</h2><p id="chapter-annotations-meta" class="dialog-header-meta">选择正文行后可添加批注或待办。</p></div><button id="chapter-annotations-close" class="dialog-close" aria-label="关闭批注与待办" type="button">×</button></div>
+      <div id="chapter-annotations-list" class="chapter-annotations-list"></div>
+      <div class="dialog-actions"><button id="chapter-annotations-refresh" class="ghost-button" type="button">刷新</button><button id="chapter-annotations-done" class="primary-button" type="button">完成</button></div>
+    </dialog>
+
     <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面与分页</h2></div><div class="settings-dialog-header-actions"><button id="platform-ui-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
       <form id="platform-ui-settings-form">
@@ -790,6 +799,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260727-chapter-soft-delete-v1"></script>
+    <script type="module" src="/app.js?v=20260727-chapter-annotations-v1"></script>
   </body>
 </html>

@@ -2113,6 +2113,19 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .line-citation-menu { position: fixed; z-index: 82; display: grid; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .line-citation-menu strong { padding: 5px 7px 8px; color: var(--muted); font-size: 9px; }
 .line-citation-menu button { border: 0; border-radius: 4px; padding: 8px; background: transparent; text-align: left; font-size: 11px; }.line-citation-menu button:hover { background: var(--paper-deep); color: var(--accent-dark); }
+.chapter-annotations-dialog { width: min(820px, 94vw); }
+.chapter-annotations-list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; padding: 18px 24px; }
+.chapter-annotation-card { display: grid; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.chapter-annotation-card.is-resolved { opacity: .65; }
+.chapter-annotation-card header { display: flex; align-items: center; gap: 8px; }
+.chapter-annotation-card header strong { font-size: 11px; }
+.chapter-annotation-card header em { margin-left: auto; color: var(--muted); font-size: 9px; font-style: normal; }
+.chapter-annotation-kind { padding: 2px 6px; border: 1px solid var(--accent); border-radius: 10px; color: var(--accent-dark); font-size: 8px; }
+.chapter-annotation-card blockquote { max-height: 100px; overflow: auto; margin: 0; padding: 8px 10px; border-left: 3px solid var(--line); background: var(--surface); color: var(--muted); font: 10px/1.6 var(--font-mono), monospace; white-space: pre-wrap; }
+.chapter-annotation-card p { margin: 0; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.chapter-annotation-card > small { color: var(--muted); font-size: 9px; }
+.chapter-annotation-card footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.chapter-annotation-card footer button { min-height: 30px; padding: 5px 9px; font-size: 9px; }
 @keyframes toast-appear-top { from { opacity: 0; transform: translateY(-7px); } }
 @keyframes toast-appear-bottom { from { opacity: 0; transform: translateY(7px); } }
 

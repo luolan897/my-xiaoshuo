@@ -2148,6 +2148,45 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(50)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS chapter_annotations (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK(kind IN ('note', 'todo')),
+          start_line INTEGER NOT NULL CHECK(start_line > 0),
+          end_line INTEGER NOT NULL CHECK(end_line >= start_line),
+          quote TEXT NOT NULL,
+          note TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved')),
+          version_no INTEGER NOT NULL DEFAULT 1,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS chapter_annotation_versions (
+          id TEXT PRIMARY KEY,
+          annotation_id TEXT NOT NULL REFERENCES chapter_annotations(id) ON DELETE CASCADE,
+          version_no INTEGER NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          source TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          UNIQUE(annotation_id, version_no)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapter_annotations_chapter ON chapter_annotations(chapter_id, deleted_at, status, created_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (50, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {

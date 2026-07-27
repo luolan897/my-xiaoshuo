@@ -1107,6 +1107,26 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listChapterInsightsPage(request.params.chapterId, pagination) : store.listChapterInsights(request.params.chapterId));
   });
+  app.get("/api/chapters/:chapterId/annotations", (request, response) => data(response, store.listChapterAnnotations(request.params.chapterId)));
+  app.post("/api/chapters/:chapterId/annotations", (request, response) => {
+    const input = parse(z.object({
+      kind: z.enum(["note", "todo"]),
+      startLine: z.number().int().positive(),
+      endLine: z.number().int().positive(),
+      note: z.string().trim().min(1).max(2000)
+    }).strict().refine((value) => value.endLine >= value.startLine, { message: "结束行不能早于开始行", path: ["endLine"] }), request.body);
+    data(response, store.createChapterAnnotation(request.params.chapterId, input), 201);
+  });
+  app.patch("/api/chapter-annotations/:annotationId", (request, response) => {
+    const input = parse(z.object({ note: z.string().trim().min(1).max(2000).optional(), status: z.enum(["open", "resolved"]).optional(), expectedVersionNo: expectedVersionNoSchema }).strict().refine((value) => value.note !== undefined || value.status !== undefined, { message: "至少需要修改一项" }), request.body);
+    const { expectedVersionNo, ...update } = input;
+    data(response, store.updateChapterAnnotation(request.params.annotationId, update, expectedVersionNo));
+  });
+  app.delete("/api/chapter-annotations/:annotationId", (request, response) => {
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteChapterAnnotation(request.params.annotationId, input.expectedVersionNo);
+    noContent(response);
+  });
   app.post("/api/chapters/:chapterId/restore", (request, response) => {
     const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
     const chapter = store.restoreChapter(request.params.chapterId, input.versionNo, input.expectedVersionNo);
