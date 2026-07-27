@@ -292,6 +292,54 @@ describe("作品、导入和章节版本 API", () => {
     await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/move`).send({ volumeId: secondVolume.body.data.id, sortOrder: 0 }).expect(400);
   });
 
+  it("在单个事务中批量管理章节", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "批量章节作品" }).expect(201);
+    const firstVolume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const secondVolume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第二卷" }).expect(201);
+    const first = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({ volumeId: firstVolume.body.data.id, title: "第一章", content: "第一章正文" }).expect(201);
+    const second = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({ volumeId: firstVolume.body.data.id, title: "第二章", content: "第二章正文" }).expect(201);
+    const selected = [first, second].map((chapter) => ({ id: chapter.body.data.id, expectedVersionNo: 1 }));
+
+    await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
+      chapters: selected,
+      action: { type: "move", volumeId: secondVolume.body.data.id }
+    }).expect(200, { data: { processed: 2, action: "move" } });
+
+    const movedTree = await request(runtime.app).get(`/api/works/${work.body.data.id}`).expect(200);
+    expect(movedTree.body.data.volumes[1].chapters.map((chapter: { title: string; versionNo: number }) => [chapter.title, chapter.versionNo])).toEqual([
+      ["第一章", 2],
+      ["第二章", 2]
+    ]);
+
+    const movedSelection = selected.map((chapter) => ({ ...chapter, expectedVersionNo: 2 }));
+    await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
+      chapters: movedSelection,
+      action: { type: "setType", chapterType: "设定" }
+    }).expect(200);
+    await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
+      chapters: movedSelection,
+      action: { type: "setAnalysisExclusion", excludedFromAnalysis: true }
+    }).expect(200);
+
+    const updated = await request(runtime.app).get(`/api/chapters/${first.body.data.id}`).expect(200);
+    expect(updated.body.data).toMatchObject({ chapterType: "设定", excludedFromAnalysis: true, versionNo: 2 });
+
+    const conflict = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
+      chapters: [{ id: first.body.data.id, expectedVersionNo: 2 }, { id: second.body.data.id, expectedVersionNo: 99 }],
+      action: { type: "delete" }
+    }).expect(409);
+    expect(conflict.body.error.code).toBe("VERSION_CONFLICT");
+    await request(runtime.app).get(`/api/chapters/${first.body.data.id}`).expect(200);
+
+    await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters/batch`).send({
+      chapters: movedSelection,
+      action: { type: "delete" }
+    }).expect(200, { data: { processed: 2, action: "delete" } });
+    await request(runtime.app).get(`/api/chapters/${first.body.data.id}`).expect(404);
+    const versions = await request(runtime.app).get(`/api/chapters/${first.body.data.id}/versions`).expect(200);
+    expect(versions.body.data[0]).toMatchObject({ versionNo: 3, content: "第一章正文", source: "delete" });
+  });
+
   it("创建和编辑带简介及关键词的分卷", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "分卷设定作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({

@@ -34,6 +34,11 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
     expect(styles.text).toContain('.file-button, .add-button { display: grid; place-items: center;');
     expect(page.text).toContain('id="new-volume-button" class="add-button"');
+    expect(page.text).toContain('id="chapter-batch-dialog"');
+    expect(page.text).toContain('id="chapter-batch-button"');
+    expect(application.text).toContain("async function submitChapterBatch(");
+    expect(application.text).toContain("批量删除需要再次确认");
+    expect(styles.text).toContain(".chapter-batch-controls");
     expect(page.text).not.toContain('id="new-chapter-button"');
     expect(application.text).toContain('data-new-chapter-volume');
     expect(application.text).toContain('async function openChapterDialog(volumeId = null)');

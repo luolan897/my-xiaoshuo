@@ -1957,6 +1957,106 @@ export class Store {
     return this.getChapter(chapterId);
   }
 
+  batchManageChapters(
+    workId: string,
+    chapters: { id: string; expectedVersionNo: number }[],
+    action:
+      | { type: "move"; volumeId: string }
+      | { type: "setType"; chapterType: ChapterType }
+      | { type: "setAnalysisExclusion"; excludedFromAnalysis: boolean }
+      | { type: "delete" }
+  ): Record<string, unknown> {
+    this.getWork(workId);
+    const uniqueIds = new Set(chapters.map((chapter) => chapter.id));
+    if (uniqueIds.size !== chapters.length) throw new AppError(400, "DUPLICATE_CHAPTER", "批量操作中不能重复选择同一章节");
+    return this.db.transaction(() => {
+      const currentChapters = chapters.map((input) => {
+        const chapter = this.getChapter(input.id);
+        if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+        this.assertExpectedRevision("chapter", input.id, input.expectedVersionNo, "章节", Number(chapter.versionNo));
+        return chapter;
+      });
+      const timestamp = now();
+      if (action.type === "move") {
+        const targetVolume = this.getVolume(action.volumeId);
+        if (targetVolume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
+        const selectedIds = new Set(currentChapters.map((chapter) => String(chapter.id)));
+        const affectedVolumeIds = new Set(currentChapters.map((chapter) => String(chapter.volumeId)));
+        affectedVolumeIds.add(action.volumeId);
+        const orderedByVolume = new Map<string, string[]>();
+        for (const volumeId of affectedVolumeIds) {
+          orderedByVolume.set(volumeId, this.db.all(
+            "SELECT id FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at, id",
+            volumeId
+          ).map((row) => requiredString(row, "id")).filter((chapterId) => !selectedIds.has(chapterId)));
+        }
+        orderedByVolume.get(action.volumeId)?.push(...currentChapters.map((chapter) => String(chapter.id)));
+        for (const [volumeId, chapterIds] of orderedByVolume) {
+          chapterIds.forEach((chapterId, sortOrder) => {
+            this.db.run("UPDATE chapters SET volume_id = ?, sort_order = ?, updated_at = ? WHERE id = ?", volumeId, sortOrder, timestamp, chapterId);
+          });
+        }
+        for (const chapter of currentChapters) {
+          const chapterId = String(chapter.id);
+          const versionNo = Number(chapter.versionNo) + 1;
+          const sortOrder = orderedByVolume.get(action.volumeId)?.indexOf(chapterId) ?? 0;
+          this.db.run("UPDATE chapters SET version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?", versionNo, timestamp, chapterId);
+          this.insertChapterVersionRow({
+            workId,
+            chapterId,
+            versionNo,
+            title: String(chapter.title),
+            content: String(chapter.content),
+            volumeId: action.volumeId,
+            sortOrder,
+            chapterType: String(chapter.chapterType),
+            source: "manual",
+            sourceRef: null,
+            changeNote: "批量移动章节",
+            timestamp
+          });
+          this.invalidateChapter(workId, chapterId, versionNo);
+          this.audit(workId, "chapter.moved", "chapter", chapterId, { volumeId: action.volumeId, sortOrder, versionNo, batch: true });
+        }
+      } else if (action.type === "setType") {
+        for (const chapter of currentChapters) {
+          this.db.run("UPDATE chapters SET chapter_type = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?", action.chapterType, timestamp, String(chapter.id));
+          this.invalidateChapter(workId, String(chapter.id), Number(chapter.versionNo));
+          this.audit(workId, "chapter.saved", "chapter", String(chapter.id), { chapterType: action.chapterType, batch: true });
+        }
+      } else if (action.type === "setAnalysisExclusion") {
+        for (const chapter of currentChapters) {
+          this.db.run("UPDATE chapters SET excluded_from_analysis = ?, updated_at = ? WHERE id = ?", action.excludedFromAnalysis ? 1 : 0, timestamp, String(chapter.id));
+          this.audit(workId, "chapter.saved", "chapter", String(chapter.id), { excludedFromAnalysis: action.excludedFromAnalysis, batch: true });
+        }
+      } else {
+        for (const chapter of currentChapters) {
+          const chapterId = String(chapter.id);
+          const versionNo = Number(chapter.versionNo) + 1;
+          this.db.run("UPDATE chapters SET version_no = ?, deleted_at = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, chapterId);
+          this.insertChapterVersionRow({
+            workId,
+            chapterId,
+            versionNo,
+            title: String(chapter.title),
+            content: String(chapter.content),
+            volumeId: String(chapter.volumeId),
+            sortOrder: Number(chapter.sortOrder),
+            chapterType: String(chapter.chapterType),
+            source: "delete",
+            sourceRef: null,
+            changeNote: "批量删除章节（可恢复）",
+            timestamp
+          });
+          this.invalidateChapter(workId, chapterId, versionNo);
+          this.audit(workId, "chapter.deleted", "chapter", chapterId, { versionNo, batch: true, recoverable: true });
+        }
+      }
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      return { processed: currentChapters.length, action: action.type };
+    });
+  }
+
   deleteChapter(chapterId: string, expectedVersionNo?: number): void {
     const chapter = this.getChapter(chapterId);
     this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(chapter.versionNo));
