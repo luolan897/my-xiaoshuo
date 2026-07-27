@@ -147,6 +147,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain('$("#work-picker")');
   });
 
+  it("登录成功后丢弃原作品路由并只进入书架", async () => {
+    const application = await request(runtime.app).get("/app.js").expect(200);
+    expect(application.text).toContain('window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));\n    window.location.reload();');
+  });
+
   it("全站使用黑体与等宽英文并提供可持久化显示和明暗主题", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
@@ -312,7 +317,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260727-integrated-authoring-v1');
+    expect(page.text).toContain('/app.js?v=20260727-login-shelf-v1');
     expect(page.text).toContain('/styles.css?v=20260727-integrated-authoring-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');

@@ -9015,6 +9015,7 @@ $("#login-form").addEventListener("submit", async (event) => {
         captchaAnswer: form.get("captchaAnswer")
       }
     });
+    window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));
     window.location.reload();
   } catch (error) {
     $("#auth-error").textContent = error.message;
