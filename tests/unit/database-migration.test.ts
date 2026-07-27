@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 51 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 52 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -148,6 +148,12 @@ describe("数据库版本化迁移", () => {
     });
     expect(first.all("PRAGMA table_info(platform_ui_settings)").some((column) => column.name === "page_sizes_json")).toBe(true);
     expect(first.get("SELECT chapter_id, content FROM chapter_paragraph_search WHERE chapter_id = 'chapter-old'")).toEqual({ chapter_id: "chapter-old", content: "旧正文" });
+    expect(first.all("PRAGMA index_list(chapter_paragraph_short_terms)").some(
+      (index) => index.name === "idx_chapter_paragraph_short_terms_paragraph"
+    )).toBe(true);
+    expect(first.all("EXPLAIN QUERY PLAN DELETE FROM chapter_paragraph_short_terms WHERE paragraph_id = 1").some(
+      (step) => String(step.detail).includes("idx_chapter_paragraph_short_terms_paragraph")
+    )).toBe(true);
     expect(first.get(`SELECT paragraph.rowid AS id FROM chapter_paragraph_search_fts paragraph
       WHERE chapter_paragraph_search_fts MATCH '"旧正文"'`)).toEqual({ id: 1 });
     expect(first.all("PRAGMA table_info(work_ai_settings)").map((column) => column.name)).toEqual(

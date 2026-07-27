@@ -2209,6 +2209,19 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(52)) {
+      this.transaction(() => {
+        this.run(`CREATE INDEX IF NOT EXISTS idx_chapter_paragraph_short_terms_paragraph
+          ON chapter_paragraph_short_terms(paragraph_id)`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (52, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {
