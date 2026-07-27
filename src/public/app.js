@@ -903,7 +903,7 @@ function applyChapterEditorMode() {
   $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
-  $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || !state.chapter);
+  $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
   if (viewOnly) cancelChapterAutoSave();
 }
