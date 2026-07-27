@@ -42,7 +42,8 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('.file-button, .add-button { display: grid; place-items: center;');
     expect(page.text).toContain('id="new-volume-button" class="add-button"');
     expect(page.text).toContain('id="chapter-batch-dialog"');
-    expect(page.text).toContain('id="chapter-batch-button"');
+    expect(page.text).toContain('id="chapter-batch-button" class="chapter-batch-button" type="button" aria-label="批量管理章节" title="批量管理章节"><svg');
+    expect(styles.text).toContain(".chapter-batch-button svg");
     expect(application.text).toContain("async function submitChapterBatch(");
     expect(application.text).toContain("批量删除需要再次确认");
     expect(styles.text).toContain(".chapter-batch-controls");
