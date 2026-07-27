@@ -442,6 +442,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderWritingProgress(");
     expect(application.text).toContain("async function saveWritingGoal(");
     expect(styles.text).toContain(".writing-trend-chart");
+    expect(page.text).toContain('id="work-audit-button" class="settings-hub-card"');
+    expect(page.text).toContain('id="work-audit-dialog"');
+    expect(application.text).toContain("async function openWorkAuditDialog(");
+    expect(application.text).toContain("workAuditActionLabels");
+    expect(styles.text).toContain(".work-audit-row");
     expect(page.text).toContain('id="search-dialog"');
     expect(application.text).toContain('isGlobalSearchShortcut(event)');
     expect(application.text).toContain('const target = resolveGlobalSearchTarget(result);');
@@ -666,7 +671,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
     expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");
-    expect(application.text).toContain('title="左键折叠，右键设置分卷"');
+    expect(application.text).toContain('title="左键折叠，右键设置分卷；可将章节拖到这里追加"');
     expect(application.text).toContain("const proseEditable = canEditProse();");
     expect(application.text).toContain("${proseEditable ? `<button class=\"add-button chapter-add-button\"");
     expect(application.text).toContain('class="add-button chapter-add-button"');

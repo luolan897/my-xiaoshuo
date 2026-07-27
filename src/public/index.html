@@ -140,6 +140,7 @@
             <span>作品目录</span>
             <div class="panel-heading-actions">
               <span id="chapter-count">0 章</span>
+              <button id="chapter-batch-button" class="chapter-batch-button" type="button">批量管理</button>
               <button id="new-volume-button" class="add-button" type="button" aria-label="新建分卷" title="新建分卷">+</button>
             </div>
           </div>
@@ -194,6 +195,7 @@
             <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
+            <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">MD</span><strong>导出作品</strong><small>将当前作品安全导出为 Markdown</small></button>
           </div>
@@ -380,6 +382,30 @@
         <div class="dialog-actions">
           <button class="ghost-button" value="cancel" type="submit">取消</button>
           <button id="dialog-submit" class="primary-button" value="default" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="chapter-batch-dialog" class="dialog chapter-batch-dialog" aria-labelledby="chapter-batch-title">
+      <form id="chapter-batch-form">
+        <div class="dialog-header">
+          <div><span class="eyebrow">正文工具</span><h2 id="chapter-batch-title">章节批量管理</h2><p class="dialog-header-meta">选择多个章节后统一移动、修改属性或软删除。</p></div>
+          <button id="chapter-batch-close" class="dialog-close" type="button" aria-label="关闭章节批量管理">×</button>
+        </div>
+        <div class="chapter-batch-toolbar">
+          <button id="chapter-batch-select-all" class="ghost-button" type="button">全选</button>
+          <button id="chapter-batch-clear" class="ghost-button" type="button">清空</button>
+          <output id="chapter-batch-count">已选择 0 章</output>
+        </div>
+        <div id="chapter-batch-list" class="chapter-batch-list"></div>
+        <div class="chapter-batch-controls">
+          <label>批量操作<select id="chapter-batch-action"><option value="move">移动到分卷</option><option value="setType">修改章节类型</option><option value="exclude">排除 AI 分析</option><option value="include">纳入 AI 分析</option><option value="delete">软删除章节</option></select></label>
+          <label id="chapter-batch-volume-field">目标分卷<select id="chapter-batch-volume"></select></label>
+          <label id="chapter-batch-type-field" class="hidden">章节类型<select id="chapter-batch-type"><option value="正文">正文</option><option value="设定">设定</option><option value="作者的话">作者的话</option><option value="其他">其他</option></select></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="chapter-batch-cancel" class="ghost-button" type="button">取消</button>
+          <button id="chapter-batch-apply" class="primary-button" type="submit" disabled>应用到所选章节</button>
         </div>
       </form>
     </dialog>
@@ -610,6 +636,17 @@
       </div>
     </dialog>
 
+    <dialog id="chapter-recycle-bin-dialog" class="dialog wide-dialog" aria-labelledby="chapter-recycle-bin-title" aria-describedby="chapter-recycle-bin-description">
+      <div class="dialog-header">
+        <div><span class="eyebrow">正文安全</span><h2 id="chapter-recycle-bin-title">章节回收站</h2></div>
+        <button id="chapter-recycle-bin-close" class="dialog-close" aria-label="关闭章节回收站" type="button">×</button>
+      </div>
+      <div class="import-history-body">
+        <p id="chapter-recycle-bin-description" class="import-history-note">软删除的章节会保留正文、版本和关联资料。恢复后章节将重新出现在原分卷中。</p>
+        <div id="chapter-recycle-bin-list" class="entity-history-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
     <dialog id="users-dialog" class="dialog wide-dialog" aria-labelledby="users-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="users-dialog-title">用户管理</h2></div><div class="settings-dialog-header-actions"><button id="users-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="users-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
       <div class="access-dialog-body">
@@ -627,6 +664,12 @@
         </div>
         <div class="dialog-actions"><button id="writing-progress-refresh" class="ghost-button" type="button">刷新趋势</button><button id="writing-goal-save" class="primary-button" type="submit">保存目标</button></div>
       </form>
+    </dialog>
+
+    <dialog id="work-audit-dialog" class="dialog wide-dialog work-audit-dialog" aria-labelledby="work-audit-title">
+      <div class="dialog-header"><div><span class="eyebrow">作品安全</span><h2 id="work-audit-title">操作记录</h2><p class="dialog-header-meta">按时间倒序展示当前作品的写入与管理操作。</p></div><div class="settings-dialog-header-actions"><button id="work-audit-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="work-audit-close" class="dialog-close" aria-label="关闭操作记录" type="button">×</button></div></div>
+      <div id="work-audit-list" class="work-audit-list"></div>
+      <div class="dialog-actions"><button id="work-audit-refresh" class="ghost-button" type="button">刷新</button><button id="work-audit-load-more" class="primary-button hidden" type="button">加载更多</button></div>
     </dialog>
 
     <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">

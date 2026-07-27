@@ -872,6 +872,7 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/writing-progress$/u },
   { methods: ["PUT"], path: /^\/api\/works\/[^/]+\/writing-goal$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
+  { methods: ["POST"], path: /^\/api\/works\/[^/]+\/chapters\/batch$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/volumes\/[^/]+$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/chapters\/[^/]+$/u },
   { methods: ["GET"], path: /^\/api\/chapters\/[^/]+\/(?:versions|outline)$/u },
@@ -986,7 +987,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     return direct("organizations", write && (createsMembers || updatesMembers || replacesMembers) ? ["characters"] : []);
   }
   const rules: Array<[RegExp, WorkPermissionModule]> = [
-    [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters)(?:\/|$)/u, "prose"],
+    [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters|deleted-chapters)(?:\/|$)/u, "prose"],
     [/^\/api\/(?:volumes|chapters)\/[^/]+(?:\/|$)/u, "prose"],
     [/^\/api\/works\/[^/]+\/(?:settings|attachments)(?:\/|$)/u, "settings"],
     [/^\/api\/(?:settings|attachments)\/[^/]+(?:\/|$)/u, "settings"],
