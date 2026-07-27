@@ -317,8 +317,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260728-writing-trend-tooltip-v1');
-    expect(page.text).toContain('/styles.css?v=20260728-writing-trend-tooltip-v3');
+    expect(page.text).toContain('/app.js?v=20260728-writing-daily-line-v1');
+    expect(page.text).toContain('/styles.css?v=20260728-writing-daily-line-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -454,7 +454,10 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".writing-goal-fields input { width: 100%; min-height: 38px;");
     expect(styles.text).toContain("font: 7px/22px var(--font-latin), monospace;");
     expect(styles.text).toContain(".writing-trend-tooltip { position: absolute;");
+    expect(styles.text).toContain(".writing-trend-daily-line polyline { fill: none; stroke: var(--green);");
     expect(application.text).toContain('id="writing-trend-tooltip" class="writing-trend-tooltip" role="tooltip" hidden');
+    expect(application.text).toContain('class="writing-trend-daily-line"');
+    expect(application.text).toContain("当日新增");
     expect(application.text).toContain('bar.addEventListener("mouseenter", () => showTooltip(bar))');
     expect(page.text).toContain('id="work-audit-button" class="settings-hub-card"');
     expect(page.text).toContain('<strong>导出正文</strong><small>仅导出分卷、章节标题与正文，不包含角色和设定资料</small>');

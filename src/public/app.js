@@ -2706,12 +2706,19 @@ function renderWritingProgress(progress) {
   $("#writing-deadline").value = progress.goal.deadline ?? "";
   $("#writing-goal-save").disabled = !canEditProse();
   const maxWords = Math.max(1, ...progress.trend.map((item) => Number(item.words)));
+  const maxDailyWords = Math.max(1, ...progress.trend.map((item) => Math.max(0, Number(item.delta))));
+  const dailyPoints = progress.trend.map((item, index) => {
+    const x = progress.trend.length > 0 ? (index + 0.5) / progress.trend.length * 1000 : 0;
+    const y = 94 - Math.max(0, Number(item.delta)) / maxDailyWords * 88;
+    return { x: x.toFixed(2), y: y.toFixed(2) };
+  });
+  const dailyLine = `<svg class="writing-trend-daily-line" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${dailyPoints.map((point) => `${point.x},${point.y}`).join(" ")}"></polyline>${dailyPoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="3"></circle>`).join("")}</svg>`;
   const chart = $("#writing-trend-chart");
   chart.innerHTML = progress.trend.map((item, index) => {
     const height = Math.max(3, Math.round(Number(item.words) / maxWords * 100));
-    const label = `${item.date}：${Number(item.words).toLocaleString("zh-CN")} 字，较前日 ${Number(item.delta) >= 0 ? "+" : ""}${Number(item.delta).toLocaleString("zh-CN")}`;
+    const label = `${item.date}：累计 ${Number(item.words).toLocaleString("zh-CN")} 字，当日新增 ${Number(item.delta) >= 0 ? "+" : ""}${Number(item.delta).toLocaleString("zh-CN")} 字`;
     return `<span class="writing-trend-bar${index === progress.trend.length - 1 ? " is-today" : ""}" style="--bar-height:${height}%" data-writing-trend-label="${esc(label)}" tabindex="0" aria-label="${esc(label)}"><i></i><small>${index % 5 === 0 || index === progress.trend.length - 1 ? esc(item.date.slice(5)) : ""}</small></span>`;
-  }).join("") + '<output id="writing-trend-tooltip" class="writing-trend-tooltip" role="tooltip" hidden></output>';
+  }).join("") + dailyLine + '<span class="writing-trend-legend" aria-hidden="true"><i></i>累计字数 <b></b>当日新增</span><output id="writing-trend-tooltip" class="writing-trend-tooltip" role="tooltip" hidden></output>';
   const tooltip = $("#writing-trend-tooltip");
   const hideTooltip = () => { tooltip.hidden = true; };
   const showTooltip = (bar) => {

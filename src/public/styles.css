@@ -568,7 +568,13 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .writing-trend-bar.is-today i { background: var(--accent); }
 .writing-trend-bar:hover i, .writing-trend-bar:focus-visible i { background: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent); transform: translateY(-2px); }
 .writing-trend-bar small { align-self: center; justify-self: center; overflow: visible; color: var(--muted); font: 7px/22px var(--font-latin), monospace; white-space: nowrap; }
-.writing-trend-tooltip { position: absolute; z-index: 2; width: 220px; max-width: calc(100% - 16px); padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent); border-radius: 5px; background: color-mix(in srgb, var(--ink) 94%, transparent); box-shadow: 0 8px 22px rgba(0,0,0,.22); color: var(--panel); font: 10px/1.45 var(--font-latin), monospace; overflow-wrap: anywhere; text-align: center; pointer-events: none; transform: translate(-50%, -100%); }
+.writing-trend-daily-line { position: absolute; z-index: 1; top: 14px; right: 10px; bottom: 32px; left: 10px; width: calc(100% - 20px); height: calc(100% - 46px); overflow: visible; pointer-events: none; }
+.writing-trend-daily-line polyline { fill: none; stroke: var(--green); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.writing-trend-daily-line circle { fill: var(--panel); stroke: var(--green); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.writing-trend-legend { position: absolute; z-index: 2; top: 8px; right: 10px; display: flex; align-items: center; gap: 5px; padding: 3px 6px; border: 1px solid color-mix(in srgb, var(--line) 72%, transparent); border-radius: 4px; background: color-mix(in srgb, var(--panel) 88%, transparent); color: var(--muted); font: 8px/1.4 var(--font-latin), monospace; pointer-events: none; }
+.writing-trend-legend i { width: 10px; height: 5px; border-radius: 2px 2px 0 0; background: color-mix(in srgb, var(--accent) 62%, var(--surface)); }
+.writing-trend-legend b { width: 12px; height: 0; margin-left: 3px; border-top: 2px solid var(--green); }
+.writing-trend-tooltip { position: absolute; z-index: 3; width: 250px; max-width: calc(100% - 16px); padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--ink) 24%, transparent); border-radius: 5px; background: color-mix(in srgb, var(--ink) 94%, transparent); box-shadow: 0 8px 22px rgba(0,0,0,.22); color: var(--panel); font: 10px/1.45 var(--font-latin), monospace; overflow-wrap: anywhere; text-align: center; pointer-events: none; transform: translate(-50%, -100%); }
 .writing-trend-tooltip[hidden] { display: none; }
 .writing-goal-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .writing-goal-fields label { display: grid; gap: 7px; color: var(--muted); font-size: 10px; font-weight: 650; }
