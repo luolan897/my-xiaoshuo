@@ -609,6 +609,17 @@
       </div>
     </dialog>
 
+    <dialog id="chapter-recycle-bin-dialog" class="dialog wide-dialog" aria-labelledby="chapter-recycle-bin-title" aria-describedby="chapter-recycle-bin-description">
+      <div class="dialog-header">
+        <div><span class="eyebrow">正文安全</span><h2 id="chapter-recycle-bin-title">章节回收站</h2></div>
+        <button id="chapter-recycle-bin-close" class="dialog-close" aria-label="关闭章节回收站" type="button">×</button>
+      </div>
+      <div class="import-history-body">
+        <p id="chapter-recycle-bin-description" class="import-history-note">软删除的章节会保留正文、版本和关联资料。恢复后章节将重新出现在原分卷中。</p>
+        <div id="chapter-recycle-bin-list" class="entity-history-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
     <dialog id="users-dialog" class="dialog wide-dialog" aria-labelledby="users-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="users-dialog-title">用户管理</h2></div><div class="settings-dialog-header-actions"><button id="users-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="users-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
       <div class="access-dialog-body">

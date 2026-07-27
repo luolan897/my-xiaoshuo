@@ -337,6 +337,41 @@ describe("作品、导入和章节版本 API", () => {
     ]);
   });
 
+  it("阻止删除仍包含回收站章节的分卷", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "分卷删除保护" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "仍需恢复的章节",
+      content: "这段正文不能被分卷删除级联清理。"
+    }).expect(201);
+
+    const deleted = await request(runtime.app)
+      .delete(`/api/chapters/${chapter.body.data.id}`)
+      .send({ expectedVersionNo: 1 })
+      .expect(204);
+    expect(deleted.body).toEqual({});
+
+    const blocked = await request(runtime.app)
+      .delete(`/api/volumes/${volume.body.data.id}`)
+      .send({ expectedVersionNo: 1 })
+      .expect(409);
+    expect(blocked.body.error).toMatchObject({
+      code: "VOLUME_HAS_DELETED_CHAPTERS",
+      message: "分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷"
+    });
+
+    const restored = await request(runtime.app)
+      .post(`/api/chapters/${chapter.body.data.id}/restore`)
+      .send({ versionNo: 1, expectedVersionNo: 2 })
+      .expect(200);
+    expect(restored.body.data).toMatchObject({
+      title: "仍需恢复的章节",
+      content: "这段正文不能被分卷删除级联清理。",
+      volumeId: volume.body.data.id
+    });
+  });
+
   it("创建和编辑带简介及关键词的分卷", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "分卷设定作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({
@@ -409,6 +444,20 @@ describe("作品、导入和章节版本 API", () => {
     expect(runtime.store.searchChapterParagraphs(workId, "原始正文")).toEqual([]);
     expect((await request(runtime.app).get(`/api/works/${workId}/search?q=${encodeURIComponent("原始正文")}`).expect(200)).body.data).toEqual([]);
 
+    const recycleBin = await request(runtime.app).get(`/api/works/${workId}/deleted-chapters`).expect(200);
+    expect(recycleBin.body.data).toEqual([expect.objectContaining({
+      id: chapterId,
+      title: "第一章",
+      volumeTitle: "正文",
+      contentPreview: "原始正文。",
+      wordCount: 4,
+      versionNo: 2,
+      deletedAt: expect.any(String)
+    })]);
+    const recycleBinPage = await request(runtime.app).get(`/api/works/${workId}/deleted-chapters?page=1&limit=10`).expect(200);
+    expect(recycleBinPage.body.data).toMatchObject({ page: 1, limit: 10, hasMore: false, nextPage: null });
+    expect(recycleBinPage.body.data.items[0].id).toBe(chapterId);
+
     const versions = await request(runtime.app).get(`/api/chapters/${chapterId}/versions`).expect(200);
     expect(versions.body.data[0]).toMatchObject({ versionNo: 2, source: "delete", title: "第一章", content: "原始正文。" });
     expect(versions.body.data.some((item: { versionNo: number }) => item.versionNo === 1)).toBe(true);
@@ -418,6 +467,7 @@ describe("作品、导入和章节版本 API", () => {
     expect(restored.body.data.versionNo).toBeGreaterThan(2);
     expect(runtime.database.get("SELECT deleted_at FROM chapters WHERE id = ?", chapterId)?.deleted_at).toBeNull();
     expect((await request(runtime.app).get(`/api/works/${workId}`).expect(200)).body.data.chapterCount).toBe(1);
+    expect((await request(runtime.app).get(`/api/works/${workId}/deleted-chapters`).expect(200)).body.data).toEqual([]);
   });
 
   it("可从文件版本快照恢复作品正文树", async () => {

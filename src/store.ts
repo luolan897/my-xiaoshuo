@@ -1530,14 +1530,22 @@ export class Store {
   }
 
   deleteVolume(volumeId: string, expectedVersionNo?: number): void {
-    const volume = this.getVolume(volumeId);
-    const count = this.db.get("SELECT COUNT(*) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId);
-    if (numberValue(count ?? {}, "value") > 0) {
-      throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
-    }
     this.db.transaction(() => {
       const current = this.getVolume(volumeId);
       this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", Number(current.versionNo));
+      const counts = this.db.get(
+        `SELECT
+          SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS active_count,
+          SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS deleted_count
+        FROM chapters WHERE volume_id = ?`,
+        volumeId
+      );
+      if (numberValue(counts ?? {}, "active_count") > 0) {
+        throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
+      }
+      if (numberValue(counts ?? {}, "deleted_count") > 0) {
+        throw new AppError(409, "VOLUME_HAS_DELETED_CHAPTERS", "分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷");
+      }
       this.recordEntityVersion("volume", volumeId, "delete", null, "删除分卷");
       this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
       this.audit(String(current.workId), "volume.deleted", "volume", volumeId, { versionNo: Number(current.versionNo) });
@@ -1567,6 +1575,49 @@ export class Store {
     const row = this.db.get("SELECT * FROM chapters WHERE id = ? AND deleted_at IS NULL", chapterId);
     if (!row) throw notFound("章节");
     return this.mapChapter(row);
+  }
+
+  listDeletedChapters(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.findDeletedChapterRows(workId).map((row) => this.mapDeletedChapter(row));
+  }
+
+  listDeletedChaptersPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.findDeletedChapterRows(workId, page.sql, page.params);
+    return paginated(rows.map((row) => this.mapDeletedChapter(row)), pagination);
+  }
+
+  private findDeletedChapterRows(workId: string, pageSql = "", pageParams: Array<string | number> = []): Row[] {
+    return this.db.all(
+      `SELECT chapter.*, volume.title AS volume_title,
+        user.display_name AS actor_display_name, user.username AS actor_username
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       LEFT JOIN chapter_versions version
+         ON version.chapter_id = chapter.id AND version.version_no = chapter.version_no AND version.source = 'delete'
+       LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NOT NULL
+       ORDER BY chapter.deleted_at DESC, chapter.id DESC${pageSql}`,
+      workId,
+      ...pageParams
+    );
+  }
+
+  private mapDeletedChapter(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      volumeId: requiredString(row, "volume_id"),
+      volumeTitle: requiredString(row, "volume_title"),
+      title: requiredString(row, "title"),
+      contentPreview: requiredString(row, "content").slice(0, 300),
+      wordCount: numberValue(row, "word_count"),
+      versionNo: numberValue(row, "version_no"),
+      deletedAt: requiredString(row, "deleted_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    };
   }
 
   private findChapterVersionRows(chapterId: string): Row[] {
