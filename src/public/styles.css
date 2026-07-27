@@ -733,6 +733,7 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.prose-hidden-mode:not(.shelf-mode) #novel-tree { display: none !important; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
 .app-shell.prose-read-only-mode:not(.shelf-mode) #save-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-delete-button,
 .app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-edit-button { display: none !important; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-title[readonly],
@@ -741,6 +742,7 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.view-only-mode:not(.shelf-mode) [data-work-settings],
 .app-shell.view-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
 .app-shell.view-only-mode:not(.shelf-mode) #save-button,
+.app-shell.view-only-mode:not(.shelf-mode) #chapter-delete-button,
 .app-shell.view-only-mode:not(.shelf-mode) #chapter-edit-button { display: none !important; }
 .app-shell.view-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
 .app-shell.view-only-mode:not(.shelf-mode) #chapter-title[readonly],
@@ -2107,6 +2109,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-type-menu > div { display: grid; gap: 3px; }
 .chapter-type-menu button { border: 0; border-radius: 3px; padding: 7px 8px; background: transparent; text-align: left; font-size: 11px; }
 .chapter-type-menu button:hover, .chapter-type-menu button.active { background: var(--paper-deep); color: var(--accent-dark); }
+.chapter-type-menu .danger-button { margin-top: 5px; border-top: 1px solid var(--line); border-radius: 0; color: var(--accent-dark); }
 .line-citation-menu { position: fixed; z-index: 82; display: grid; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .line-citation-menu strong { padding: 5px 7px 8px; color: var(--muted); font-size: 9px; }
 .line-citation-menu button { border: 0; border-radius: 4px; padding: 8px; background: transparent; text-align: left; font-size: 11px; }.line-citation-menu button:hover { background: var(--paper-deep); color: var(--accent-dark); }

@@ -148,6 +148,7 @@ export class Database {
         version_no INTEGER NOT NULL DEFAULT 1,
         analysis_status TEXT NOT NULL DEFAULT 'pending',
         excluded_from_analysis INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -2123,6 +2124,22 @@ export class Database {
         );
         this.run("CREATE INDEX IF NOT EXISTS idx_calls_usage_daily ON ai_calls(created_at, work_id)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (48, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(49)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(chapters)").map((row) => String(row.name)));
+        if (!columns.has("deleted_at")) {
+          this.run("ALTER TABLE chapters ADD COLUMN deleted_at TEXT");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapters_active_work ON chapters(work_id, deleted_at, volume_id, sort_order)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (49, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

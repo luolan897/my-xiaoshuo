@@ -4504,7 +4504,7 @@ export class AiManager {
         `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
          SELECT chapter.work_id, 'chapter-outline', outline.chapter_id, ?
          FROM chapter_outlines outline JOIN chapters chapter ON chapter.id = outline.chapter_id
-         WHERE chapter.work_id = ?
+         WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL
          ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
         timestamp,
         workId
@@ -4608,7 +4608,7 @@ export class AiManager {
   }
 
   private indexRelationshipChapter(workId: string, chapterId: string): void {
-    const chapter = this.store.db.get("SELECT id FROM chapters WHERE id = ? AND work_id = ?", chapterId, workId);
+    const chapter = this.store.db.get("SELECT id FROM chapters WHERE id = ? AND work_id = ? AND deleted_at IS NULL", chapterId, workId);
     if (!chapter) return;
     const paragraphs = this.store.db.all(
       "SELECT id, search_content FROM chapter_paragraph_search WHERE chapter_id = ? ORDER BY paragraph_order",
@@ -4687,14 +4687,14 @@ export class AiManager {
       const volume = this.store.getVolume(scope.volumeId);
       if (String(volume.workId) !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "分卷不属于当前作品");
       return new Set(this.store.db.all(
-        `SELECT id FROM chapters WHERE work_id = ? AND volume_id = ?
+        `SELECT id FROM chapters WHERE work_id = ? AND volume_id = ? AND deleted_at IS NULL
          AND excluded_from_analysis = 0 AND chapter_type <> '作者的话'`,
         workId,
         scope.volumeId
       ).map((row) => String(row.id)));
     }
     return new Set(this.store.db.all(
-      `SELECT id FROM chapters WHERE work_id = ? AND excluded_from_analysis = 0 AND chapter_type <> '作者的话'`,
+      `SELECT id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND excluded_from_analysis = 0 AND chapter_type <> '作者的话'`,
       workId
     ).map((row) => String(row.id)));
   }
@@ -4785,14 +4785,14 @@ export class AiManager {
         ? {
             sql: `AND EXISTS (
               SELECT 1 FROM chapters chapter WHERE chapter.id = paragraph.chapter_id
-                AND chapter.volume_id = ? AND chapter.excluded_from_analysis = 0 AND chapter.chapter_type <> '作者的话'
+                AND chapter.deleted_at IS NULL AND chapter.volume_id = ? AND chapter.excluded_from_analysis = 0 AND chapter.chapter_type <> '作者的话'
             )`,
             params: [scope.volumeId ?? ""]
           }
         : {
             sql: `AND EXISTS (
               SELECT 1 FROM chapters chapter WHERE chapter.id = paragraph.chapter_id
-                AND chapter.excluded_from_analysis = 0 AND chapter.chapter_type <> '作者的话'
+                AND chapter.deleted_at IS NULL AND chapter.excluded_from_analysis = 0 AND chapter.chapter_type <> '作者的话'
             )`,
             params: []
           };
@@ -5262,7 +5262,7 @@ export class AiManager {
     }
     const chapterOrder = new Map(this.store.db.all(
       `SELECT chapter.id FROM chapters chapter JOIN volumes volume ON volume.id = chapter.volume_id
-       WHERE chapter.work_id = ? ORDER BY volume.sort_order, chapter.sort_order`,
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL ORDER BY volume.sort_order, chapter.sort_order`,
       workId
     ).map((row, index) => [String(row.id), index]));
     chapters.sort((left, right) => (chapterOrder.get(String(left.id)) ?? Number.MAX_SAFE_INTEGER) - (chapterOrder.get(String(right.id)) ?? Number.MAX_SAFE_INTEGER));
