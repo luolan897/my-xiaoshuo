@@ -1110,6 +1110,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-batch-dialog form { display: grid; gap: 14px; }
 .chapter-batch-toolbar { display: flex; align-items: center; gap: 8px; margin: 0 24px; }
 .chapter-batch-toolbar output { margin-left: auto; color: var(--muted); font-size: 11px; }
+.chapter-batch-search { display: grid; gap: 6px; margin: 0 24px; }
+.chapter-batch-search > label { color: var(--muted); font-size: 10px; font-weight: 650; }
+.chapter-batch-search-field { position: relative; display: flex; align-items: center; }
+.chapter-batch-search-field svg { position: absolute; left: 11px; width: 15px; height: 15px; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; pointer-events: none; }
+.chapter-batch-search-field input { width: 100%; min-height: 38px; padding: 8px 68px 8px 34px; background: var(--surface); font-size: 12px; }
+.chapter-batch-search-field input::-webkit-search-cancel-button { cursor: pointer; }
+.chapter-batch-search-field output { position: absolute; right: 11px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; pointer-events: none; }
 .chapter-batch-list { display: grid; max-height: min(44vh, 420px); margin: 0 24px; overflow: auto; border: 1px solid var(--line); border-radius: 5px; }
 .chapter-batch-item { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 9px; padding: 9px 11px; border-bottom: 1px solid var(--line); }
 .chapter-batch-item:last-child { border-bottom: 0; }

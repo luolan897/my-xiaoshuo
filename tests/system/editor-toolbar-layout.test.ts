@@ -50,6 +50,11 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".chapter-batch-controls");
     expect(styles.text).toContain(".chapter-batch-controls select {");
     expect(styles.text).toContain(".chapter-batch-controls select:focus-visible");
+    expect(page.text).toContain('id="chapter-batch-search" type="search"');
+    expect(page.text).toContain('id="chapter-batch-search-count"');
+    expect(styles.text).toContain(".chapter-batch-search-field input");
+    expect(application.text).toContain('$("#chapter-batch-search").addEventListener("input", renderChapterBatchDialog)');
+    expect(application.text).toContain('chapters.filter((chapter) => chapter.title.toLocaleLowerCase("zh-CN").includes(searchQuery))');
     expect(page.text).not.toContain('id="new-chapter-button"');
     expect(application.text).toContain('data-new-chapter-volume');
     expect(application.text).toContain('async function openChapterDialog(volumeId = null)');

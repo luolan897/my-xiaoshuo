@@ -3329,13 +3329,18 @@ function renderTree() {
 
 function renderChapterBatchDialog() {
   const chapters = state.work?.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({ ...chapter, volumeTitle: volume.title }))) ?? [];
+  const searchQuery = $("#chapter-batch-search").value.trim().toLocaleLowerCase("zh-CN");
+  const visibleChapters = searchQuery
+    ? chapters.filter((chapter) => chapter.title.toLocaleLowerCase("zh-CN").includes(searchQuery))
+    : chapters;
   for (const chapterId of chapterBatchSelectedIds) {
     if (!chapters.some((chapter) => chapter.id === chapterId)) chapterBatchSelectedIds.delete(chapterId);
   }
-  $("#chapter-batch-list").innerHTML = chapters.length ? chapters.map((chapter) => `<label class="chapter-batch-item">
+  $("#chapter-batch-list").innerHTML = visibleChapters.length ? visibleChapters.map((chapter) => `<label class="chapter-batch-item">
     <input type="checkbox" value="${esc(chapter.id)}" ${chapterBatchSelectedIds.has(chapter.id) ? "checked" : ""}>
     <span><strong>${esc(chapter.title)}</strong><small>${esc(chapter.volumeTitle)} · ${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")} 字 · ${esc(chapter.chapterType || "正文")}</small></span>
-  </label>`).join("") : '<p class="entity-history-empty">当前作品还没有章节。</p>';
+  </label>`).join("") : `<p class="entity-history-empty">${chapters.length ? "没有匹配的章节。" : "当前作品还没有章节。"}</p>`;
+  $("#chapter-batch-search-count").textContent = `${visibleChapters.length} 章`;
   $("#chapter-batch-list").querySelectorAll('input[type="checkbox"]').forEach((input) => input.addEventListener("change", () => {
     if (input.checked) chapterBatchSelectedIds.add(input.value);
     else chapterBatchSelectedIds.delete(input.value);
@@ -3358,6 +3363,7 @@ function updateChapterBatchControls() {
 function openChapterBatchDialog() {
   if (!state.work || !canEditProse()) return;
   chapterBatchSelectedIds.clear();
+  $("#chapter-batch-search").value = "";
   renderChapterBatchDialog();
   $("#chapter-batch-dialog").showModal();
 }
@@ -9202,8 +9208,12 @@ $("#chapter-batch-button").addEventListener("click", openChapterBatchDialog);
 $("#chapter-batch-close").addEventListener("click", () => $("#chapter-batch-dialog").close());
 $("#chapter-batch-cancel").addEventListener("click", () => $("#chapter-batch-dialog").close());
 $("#chapter-batch-action").addEventListener("change", updateChapterBatchControls);
+$("#chapter-batch-search").addEventListener("input", renderChapterBatchDialog);
 $("#chapter-batch-select-all").addEventListener("click", () => {
-  state.work?.volumes.flatMap((volume) => volume.chapters).forEach((chapter) => chapterBatchSelectedIds.add(chapter.id));
+  const searchQuery = $("#chapter-batch-search").value.trim().toLocaleLowerCase("zh-CN");
+  state.work?.volumes.flatMap((volume) => volume.chapters)
+    .filter((chapter) => !searchQuery || chapter.title.toLocaleLowerCase("zh-CN").includes(searchQuery))
+    .forEach((chapter) => chapterBatchSelectedIds.add(chapter.id));
   renderChapterBatchDialog();
 });
 $("#chapter-batch-clear").addEventListener("click", () => {
