@@ -2587,12 +2587,69 @@ function renderSettingsHub() {
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
+  $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#top-search-button").disabled = !canReadAggregate;
   $("#export-button").disabled = !canReadAggregate;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出将作用于这部作品。`
     : "当前未选择作品；打开作品后可使用导出。";
+}
+
+function renderWritingProgress(progress) {
+  $("#writing-current-words").textContent = Number(progress.currentWords).toLocaleString("zh-CN");
+  $("#writing-today-words").textContent = Number(progress.todayWords).toLocaleString("zh-CN");
+  $("#writing-daily-completion").textContent = `${Math.round(Number(progress.dailyCompletion) * 100)}%`;
+  $("#writing-total-completion").textContent = `${Math.round(Number(progress.totalCompletion) * 100)}%`;
+  $("#writing-daily-goal").value = String(progress.goal.dailyGoal);
+  $("#writing-total-goal").value = String(progress.goal.targetTotal);
+  $("#writing-deadline").value = progress.goal.deadline ?? "";
+  $("#writing-goal-save").disabled = !canEditProse();
+  const maxWords = Math.max(1, ...progress.trend.map((item) => Number(item.words)));
+  $("#writing-trend-chart").innerHTML = progress.trend.map((item, index) => {
+    const height = Math.max(3, Math.round(Number(item.words) / maxWords * 100));
+    const label = `${item.date}：${Number(item.words).toLocaleString("zh-CN")} 字，较前日 ${Number(item.delta) >= 0 ? "+" : ""}${Number(item.delta).toLocaleString("zh-CN")}`;
+    return `<span class="writing-trend-bar${index === progress.trend.length - 1 ? " is-today" : ""}" style="--bar-height:${height}%" title="${esc(label)}" aria-label="${esc(label)}"><i></i><small>${index % 5 === 0 || index === progress.trend.length - 1 ? esc(item.date.slice(5)) : ""}</small></span>`;
+  }).join("");
+}
+
+async function loadWritingProgress() {
+  if (!state.work) return;
+  renderWritingProgress(await api(`/api/works/${encodeURIComponent(state.work.id)}/writing-progress`));
+}
+
+async function openWritingProgressDialog() {
+  if (!state.work || !canReadModule("editor")) return;
+  $("#writing-progress-dialog").showModal();
+  try {
+    await loadWritingProgress();
+  } catch (error) {
+    $("#writing-progress-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
+async function saveWritingGoal(event) {
+  event.preventDefault();
+  if (!state.work || !canEditProse()) return;
+  const button = $("#writing-goal-save");
+  button.disabled = true;
+  try {
+    const progress = await api(`/api/works/${encodeURIComponent(state.work.id)}/writing-goal`, {
+      method: "PUT",
+      body: {
+        dailyGoal: Number($("#writing-daily-goal").value),
+        targetTotal: Number($("#writing-total-goal").value),
+        deadline: $("#writing-deadline").value || null
+      }
+    });
+    renderWritingProgress(progress);
+    toast("写作目标已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = !canEditProse();
+  }
 }
 
 function renderUsers(users) {
@@ -8606,6 +8663,10 @@ $("#platform-usage-refresh").addEventListener("click", async () => {
   }
 });
 $("#user-management-button").addEventListener("click", openUsersDialog);
+$("#writing-progress-button").addEventListener("click", () => openWritingProgressDialog().catch((error) => toast(error.message, "error")));
+$("#writing-progress-close").addEventListener("click", () => $("#writing-progress-dialog").close());
+$("#writing-progress-refresh").addEventListener("click", () => loadWritingProgress().catch((error) => toast(error.message, "error")));
+$("#writing-goal-form").addEventListener("submit", saveWritingGoal);
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {

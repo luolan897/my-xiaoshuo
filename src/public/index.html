@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260727-chapter-soft-delete-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260727-writing-progress-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -193,6 +193,7 @@
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
             <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
+            <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">MD</span><strong>导出作品</strong><small>将当前作品安全导出为 Markdown</small></button>
           </div>
@@ -616,6 +617,18 @@
       </div>
     </dialog>
 
+    <dialog id="writing-progress-dialog" class="dialog wide-dialog writing-progress-dialog" aria-labelledby="writing-progress-title">
+      <form id="writing-goal-form">
+        <div class="dialog-header"><div><span class="eyebrow">创作节奏</span><h2 id="writing-progress-title">写作目标与字数趋势</h2><p class="dialog-header-meta">趋势根据正文版本历史重建，软删除章节不会继续计入。</p></div><button id="writing-progress-close" class="dialog-close" aria-label="关闭写作目标" type="button">×</button></div>
+        <div class="writing-progress-body">
+          <div class="writing-progress-stats"><article><small>当前总字数</small><strong id="writing-current-words">0</strong></article><article><small>今日新增</small><strong id="writing-today-words">0</strong></article><article><small>每日目标完成</small><strong id="writing-daily-completion">0%</strong></article><article><small>总目标完成</small><strong id="writing-total-completion">0%</strong></article></div>
+          <div id="writing-trend-chart" class="writing-trend-chart" role="img" aria-label="近 30 天作品字数趋势"></div>
+          <div class="writing-goal-fields"><label>每日目标字数<input id="writing-daily-goal" type="number" min="0" max="1000000" required></label><label>总字数目标<input id="writing-total-goal" type="number" min="0" max="100000000" required></label><label>计划完成日期<input id="writing-deadline" type="date"></label></div>
+        </div>
+        <div class="dialog-actions"><button id="writing-progress-refresh" class="ghost-button" type="button">刷新趋势</button><button id="writing-goal-save" class="primary-button" type="submit">保存目标</button></div>
+      </form>
+    </dialog>
+
     <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面与分页</h2></div><div class="settings-dialog-header-actions"><button id="platform-ui-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
       <form id="platform-ui-settings-form">
@@ -790,6 +803,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260727-chapter-soft-delete-v1"></script>
+    <script type="module" src="/app.js?v=20260727-writing-progress-v1"></script>
   </body>
 </html>

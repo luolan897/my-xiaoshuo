@@ -6862,4 +6862,83 @@ export class Store {
       createdAt: requiredString(row, "created_at")
     })), pagination);
   }
+
+  getWritingProgress(workId: string, days = 30): Record<string, unknown> {
+    const work = this.getWork(workId);
+    const goal = this.db.get("SELECT * FROM writing_goals WHERE work_id = ?", workId);
+    const dailyGoal = goal ? numberValue(goal, "daily_goal") : 1000;
+    const targetTotal = goal ? numberValue(goal, "target_total") : 100000;
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const start = new Date(today);
+    start.setUTCDate(start.getUTCDate() - days + 1);
+    const startKey = start.toISOString().slice(0, 10);
+    const versions = this.db.all(
+      `SELECT chapter_id, content, source, created_at FROM chapter_versions
+       WHERE work_id = ? AND created_at <= ? ORDER BY created_at, version_no, id`,
+      workId,
+      `${today.toISOString().slice(0, 10)}T23:59:59.999Z`
+    );
+    const chapterWords = new Map<string, number>();
+    const events = new Map<string, Row[]>();
+    for (const version of versions) {
+      const day = requiredString(version, "created_at").slice(0, 10);
+      if (day < startKey) {
+        chapterWords.set(requiredString(version, "chapter_id"), requiredString(version, "source") === "delete" ? 0 : countWords(requiredString(version, "content")));
+      } else {
+        const dayEvents = events.get(day) ?? [];
+        dayEvents.push(version);
+        events.set(day, dayEvents);
+      }
+    }
+    let previousTotal = [...chapterWords.values()].reduce((sum, value) => sum + value, 0);
+    const trend: Record<string, unknown>[] = [];
+    for (let index = 0; index < days; index += 1) {
+      const date = new Date(start);
+      date.setUTCDate(start.getUTCDate() + index);
+      const day = date.toISOString().slice(0, 10);
+      for (const version of events.get(day) ?? []) {
+        chapterWords.set(requiredString(version, "chapter_id"), requiredString(version, "source") === "delete" ? 0 : countWords(requiredString(version, "content")));
+      }
+      const words = [...chapterWords.values()].reduce((sum, value) => sum + value, 0);
+      trend.push({ date: day, words, delta: words - previousTotal });
+      previousTotal = words;
+    }
+    const todayProgress = Number((trend.at(-1) as Record<string, unknown> | undefined)?.delta ?? 0);
+    return {
+      goal: {
+        dailyGoal,
+        targetTotal,
+        deadline: goal ? optionalString(goal, "deadline") : null,
+        updatedAt: goal ? requiredString(goal, "updated_at") : null
+      },
+      currentWords: Number(work.wordCount ?? 0),
+      todayWords: Math.max(0, todayProgress),
+      dailyCompletion: dailyGoal > 0 ? Math.min(1, Math.max(0, todayProgress) / dailyGoal) : 0,
+      totalCompletion: targetTotal > 0 ? Math.min(1, Number(work.wordCount ?? 0) / targetTotal) : 0,
+      trend
+    };
+  }
+
+  updateWritingGoal(workId: string, input: { dailyGoal: number; targetTotal: number; deadline: string | null }): Record<string, unknown> {
+    this.getWork(workId);
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO writing_goals (work_id, daily_goal, target_total, deadline, created_at, updated_at, updated_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(work_id) DO UPDATE SET daily_goal = excluded.daily_goal, target_total = excluded.target_total,
+         deadline = excluded.deadline, updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id`,
+        workId,
+        input.dailyGoal,
+        input.targetTotal,
+        input.deadline,
+        timestamp,
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      this.audit(workId, "work.writing_goal.updated", "work", workId, input);
+    });
+    return this.getWritingProgress(workId);
+  }
 }
