@@ -63,6 +63,28 @@ test("构建产物复制正式前端并注入预制数据适配层", async () =>
   assert.doesNotMatch(adapter, /novel\.db|sqlite/iu);
 });
 
+test("Demo 适配主干最新正文管理能力且不重写正式前端", async () => {
+  const build = await readFile(new URL("../scripts/build.mjs", import.meta.url), "utf8");
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  assert.match(build, /await cp\(publicSource, output, \{ recursive: true \}\)/);
+  assert.doesNotMatch(build, /writeFile\(new URL\("app\.js"|writeFile\(new URL\("styles\.css"/u);
+  for (const capability of [
+    "deleted-chapters",
+    "audit-logs",
+    "writing-progress",
+    "writing-goal",
+    "chapter-annotations",
+    "annotations",
+    "move",
+    "restore"
+  ]) assert.match(adapter, new RegExp(capability), `Demo 缺少 ${capability} 适配`);
+  assert.match(adapter, /chapters\\\/batch/);
+  assert.match(adapter, /softDeleteChapter/);
+  assert.match(adapter, /recordChapterVersion/);
+  assert.match(adapter, /chapter\.deletedAt/);
+  assert.match(adapter, /targetCount \+ index/);
+});
+
 test("AI 配置仅保存在浏览器并说明前端直连方式", async () => {
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
   const values = new Map();

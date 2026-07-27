@@ -97,16 +97,35 @@ function buildWork(source) {
     content: chapter.content,
     chapterType: "正文",
     order: chapter.number,
+    sortOrder: 0,
     wordCount: wordCount(chapter.content),
     versionNo: chapter.version,
+    excludedFromAnalysis: false,
+    analysisStatus: "completed",
+    deletedAt: null,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    versions: []
   }));
   const volumes = source.volumes.map((volume, index) => {
     const volumeId = `${id}-volume-${index + 1}`;
     const volumeChapters = chapters.filter((chapter) => chapter.order >= volume.range[0] && chapter.order <= volume.range[1]);
-    volumeChapters.forEach((chapter) => { chapter.volumeId = volumeId; });
-    return { id: volumeId, workId: id, title: volume.name, kind: "main", order: index + 1, versionNo: 1, chapters: volumeChapters };
+    volumeChapters.forEach((chapter, chapterIndex) => {
+      chapter.volumeId = volumeId;
+      chapter.sortOrder = chapterIndex;
+      chapter.versions = [{
+        id: `${chapter.id}-version-${chapter.versionNo}`,
+        chapterId: chapter.id,
+        versionNo: chapter.versionNo,
+        title: chapter.title,
+        content: chapter.content,
+        source: "manual",
+        changeNote: "演示站预制正文",
+        actor: "体验作者",
+        createdAt: now
+      }];
+    });
+    return { id: volumeId, workId: id, title: volume.name, kind: "main", order: index + 1, sortOrder: index, versionNo: 1, chapters: volumeChapters };
   });
   const races = source.races.map((race, index) => ({
     id: `${id}-race-${index + 1}`,
@@ -270,13 +289,19 @@ function buildWork(source) {
     foreshadows,
     relationships,
     reviews: [],
-    tasks
+    tasks,
+    chapterAnnotations: [],
+    auditLogs: [
+      { id: `${id}-audit-work`, action: "work.created", entityType: "work", entityId: id, actor: "体验作者", userId: "demo-user", detail: {}, createdAt: now },
+      { id: `${id}-audit-import`, action: "work.imported", entityType: "work", entityId: id, actor: "体验作者", userId: "demo-user", detail: { chapters: chapters.length }, createdAt: now }
+    ],
+    writingGoal: { dailyGoal: 1000, targetTotal: 100000, deadline: null, updatedAt: null }
   };
 }
 
 const works = sourceWorks.map(buildWork);
 const findWork = (id) => works.find((work) => work.id === id);
-const allChapters = () => works.flatMap((work) => work.chapters);
+const allChapters = (includeDeleted = false) => works.flatMap((work) => work.chapters.filter((chapter) => includeDeleted || !chapter.deletedAt));
 const success = (data, status = 200) => new Response(status === 204 ? null : JSON.stringify({ data }), {
   status,
   headers: { "content-type": "application/json; charset=utf-8" }
@@ -289,6 +314,114 @@ const bodyOf = async (init) => {
   if (!init?.body || init.body instanceof FormData) return {};
   try { return JSON.parse(String(init.body)); } catch { return {}; }
 };
+
+function findChapterRecord(chapterId, includeDeleted = false) {
+  for (const work of works) {
+    const chapter = work.chapters.find((item) => item.id === chapterId && (includeDeleted || !item.deletedAt));
+    if (chapter) return { work, chapter };
+  }
+  return null;
+}
+
+function syncWorkChapters(work) {
+  for (const volume of work.volumes) {
+    volume.chapters = work.chapters
+      .filter((chapter) => !chapter.deletedAt && chapter.volumeId === volume.id)
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+    volume.chapters.forEach((chapter, index) => { chapter.sortOrder = index; });
+  }
+  const active = work.chapters.filter((chapter) => !chapter.deletedAt);
+  work.chapterCount = active.length;
+  work.wordCount = active.reduce((total, chapter) => total + chapter.wordCount, 0);
+  work.updatedAt = new Date().toISOString();
+}
+
+function workView(work) {
+  return {
+    ...work,
+    chapters: work.chapters.filter((chapter) => !chapter.deletedAt),
+    volumes: work.volumes.map((volume) => ({ ...volume, chapters: [...volume.chapters] }))
+  };
+}
+
+function recordAudit(work, action, entityType, entityId, detail = {}) {
+  work.auditLogs.unshift({
+    id: demoId("audit"),
+    action,
+    entityType,
+    entityId,
+    actor: demoUser.displayName,
+    userId: demoUser.userId,
+    detail,
+    createdAt: new Date().toISOString()
+  });
+}
+
+function recordChapterVersion(chapter, source, changeNote) {
+  chapter.versions.unshift({
+    id: demoId("chapter-version"),
+    chapterId: chapter.id,
+    versionNo: chapter.versionNo,
+    title: chapter.title,
+    content: chapter.content,
+    source,
+    changeNote,
+    actor: demoUser.displayName,
+    createdAt: new Date().toISOString()
+  });
+}
+
+function moveChapter(work, chapter, volumeId, requestedSortOrder) {
+  const targetVolume = work.volumes.find((volume) => volume.id === volumeId);
+  if (!targetVolume) return false;
+  const sourceVolumeId = chapter.volumeId;
+  for (const volume of work.volumes) {
+    volume.chapters = volume.chapters.filter((item) => item.id !== chapter.id);
+  }
+  const targetChapters = work.chapters
+    .filter((item) => !item.deletedAt && item.id !== chapter.id && item.volumeId === volumeId)
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+  const targetIndex = Math.min(Math.max(0, Number(requestedSortOrder) || 0), targetChapters.length);
+  targetChapters.splice(targetIndex, 0, chapter);
+  chapter.volumeId = volumeId;
+  chapter.versionNo += 1;
+  chapter.analysisStatus = "expired";
+  chapter.updatedAt = new Date().toISOString();
+  targetChapters.forEach((item, index) => { item.sortOrder = index; });
+  syncWorkChapters(work);
+  recordChapterVersion(chapter, "manual", sourceVolumeId === volumeId ? "调整章节顺序" : "移动章节分卷");
+  recordAudit(work, "chapter.moved", "chapter", chapter.id, { volumeId, sortOrder: targetIndex, fromVolumeId: sourceVolumeId, versionNo: chapter.versionNo });
+  return true;
+}
+
+function softDeleteChapter(work, chapter, batch = false) {
+  chapter.versionNo += 1;
+  chapter.deletedAt = new Date().toISOString();
+  chapter.updatedAt = chapter.deletedAt;
+  recordChapterVersion(chapter, "delete", batch ? "批量删除章节（可恢复）" : "删除章节");
+  recordAudit(work, "chapter.deleted", "chapter", chapter.id, { versionNo: chapter.versionNo, batch, recoverable: true });
+  syncWorkChapters(work);
+}
+
+function writingProgress(work) {
+  const currentWords = work.wordCount;
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const trend = Array.from({ length: 30 }, (_, index) => {
+    const date = new Date(today);
+    date.setUTCDate(today.getUTCDate() - 29 + index);
+    const isToday = index === 29;
+    return { date: date.toISOString().slice(0, 10), words: isToday ? currentWords : 0, delta: isToday ? currentWords : 0 };
+  });
+  return {
+    goal: { ...work.writingGoal },
+    currentWords,
+    todayWords: currentWords,
+    dailyCompletion: work.writingGoal.dailyGoal > 0 ? Math.min(1, currentWords / work.writingGoal.dailyGoal) : 0,
+    totalCompletion: work.writingGoal.targetTotal > 0 ? Math.min(1, currentWords / work.writingGoal.targetTotal) : 0,
+    trend
+  };
+}
 
 const demoId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 const defaultWorkAiSettings = () => ({ systemPrompt: "", bookSummaryContextPercent: 20, contextCompactThreshold: 80, agentTools: [], autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 });
@@ -319,7 +452,7 @@ async function runBrowserAi(body, workId) {
   const conversation = body.conversationId ? findConversation(state, body.conversationId) : null;
   const settings = { ...defaultWorkAiSettings(), ...(state.workSettings[workId] ?? {}) };
   const messages = buildBrowserAiMessages({
-    work,
+    work: workView(work),
     scope: body.scope,
     instruction: String(body.instruction ?? ""),
     platformPrompt: state.platformSettings.systemPrompt,
@@ -550,25 +683,270 @@ async function mockApi(input, init = {}) {
       return failure(message, 502);
     }
   }
-  if (path === "/api/works" && method === "GET") return success(page(works.map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, relationships, reviews, tasks, ...work }) => work), url));
+  match = path.match(/^\/api\/works\/([^/]+)\/deleted-chapters$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    return success(work.chapters.filter((chapter) => chapter.deletedAt).sort((left, right) => String(right.deletedAt).localeCompare(String(left.deletedAt))).map((chapter) => ({
+      id: chapter.id,
+      workId: work.id,
+      volumeId: chapter.volumeId,
+      volumeTitle: work.volumes.find((volume) => volume.id === chapter.volumeId)?.title ?? "原分卷",
+      title: chapter.title,
+      contentPreview: chapter.content.slice(0, 240),
+      wordCount: chapter.wordCount,
+      versionNo: chapter.versionNo,
+      actor: demoUser.displayName,
+      deletedAt: chapter.deletedAt
+    })));
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/audit-logs$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    return work ? success(page(work.auditLogs, url)) : failure("未找到作品");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/writing-progress$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    return work ? success(writingProgress(work)) : failure("未找到作品");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/writing-goal$/u);
+  if (match && method === "PUT") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const body = await bodyOf(init);
+    work.writingGoal = {
+      dailyGoal: Number(body.dailyGoal ?? 0),
+      targetTotal: Number(body.targetTotal ?? 0),
+      deadline: body.deadline ?? null,
+      updatedAt: new Date().toISOString()
+    };
+    recordAudit(work, "work.writing_goal.updated", "work", work.id, work.writingGoal);
+    return success(writingProgress(work));
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/chapters\/batch$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const body = await bodyOf(init);
+    const selected = (body.chapters ?? []).map((input) => ({ input, chapter: work.chapters.find((chapter) => chapter.id === input.id && !chapter.deletedAt) }));
+    if (!selected.length || selected.some(({ input, chapter }) => !chapter || chapter.versionNo !== Number(input.expectedVersionNo))) return failure("章节版本已变化，请刷新后重试", 409);
+    if (body.action?.type === "move") {
+      const targetCount = work.chapters.filter((item) => !item.deletedAt && item.volumeId === body.action.volumeId && !selected.some((entry) => entry.chapter?.id === item.id)).length;
+      for (const [index, { chapter }] of selected.entries()) {
+        if (!moveChapter(work, chapter, body.action.volumeId, targetCount + index)) return failure("未找到目标分卷");
+      }
+    } else if (body.action?.type === "setType") {
+      for (const { chapter } of selected) {
+        chapter.chapterType = body.action.chapterType;
+        chapter.analysisStatus = "expired";
+        chapter.updatedAt = new Date().toISOString();
+        recordAudit(work, "chapter.saved", "chapter", chapter.id, { chapterType: chapter.chapterType, batch: true });
+      }
+    } else if (body.action?.type === "setAnalysisExclusion") {
+      for (const { chapter } of selected) {
+        chapter.excludedFromAnalysis = Boolean(body.action.excludedFromAnalysis);
+        chapter.updatedAt = new Date().toISOString();
+        recordAudit(work, "chapter.saved", "chapter", chapter.id, { excludedFromAnalysis: chapter.excludedFromAnalysis, batch: true });
+      }
+    } else if (body.action?.type === "delete") {
+      for (const { chapter } of selected) softDeleteChapter(work, chapter, true);
+    } else return failure("不支持的批量操作", 400);
+    syncWorkChapters(work);
+    return success({ processed: selected.length, action: body.action.type });
+  }
+  match = path.match(/^\/api\/chapters\/([^/]+)\/move$/u);
+  if (match && method === "POST") {
+    const found = findChapterRecord(decodeURIComponent(match[1]));
+    if (!found) return failure("未找到章节");
+    const body = await bodyOf(init);
+    if (found.chapter.versionNo !== Number(body.expectedVersionNo)) return failure("章节版本已变化，请刷新后重试", 409);
+    return moveChapter(found.work, found.chapter, body.volumeId, body.sortOrder) ? success(found.chapter) : failure("未找到目标分卷");
+  }
+  match = path.match(/^\/api\/chapters\/([^/]+)\/restore$/u);
+  if (match && method === "POST") {
+    const found = findChapterRecord(decodeURIComponent(match[1]), true);
+    if (!found?.chapter.deletedAt) return failure("未找到已删除章节");
+    const body = await bodyOf(init);
+    if (found.chapter.versionNo !== Number(body.expectedVersionNo)) return failure("章节版本已变化，请刷新后重试", 409);
+    found.chapter.deletedAt = null;
+    found.chapter.versionNo += 1;
+    found.chapter.updatedAt = new Date().toISOString();
+    syncWorkChapters(found.work);
+    recordChapterVersion(found.chapter, "restore", `恢复至 v${Number(body.versionNo)}`);
+    recordAudit(found.work, "chapter.restored", "chapter", found.chapter.id, { versionNo: found.chapter.versionNo, fromVersion: Number(body.versionNo) });
+    return success(found.chapter);
+  }
+  match = path.match(/^\/api\/chapters\/([^/]+)\/versions$/u);
+  if (match) {
+    const found = findChapterRecord(decodeURIComponent(match[1]), true);
+    return found ? success(found.chapter.versions) : failure("未找到章节");
+  }
+  match = path.match(/^\/api\/chapters\/([^/]+)\/annotations$/u);
+  if (match) {
+    const found = findChapterRecord(decodeURIComponent(match[1]));
+    if (!found) return failure("未找到章节");
+    if (method === "GET") return success(found.work.chapterAnnotations.filter((annotation) => annotation.chapterId === found.chapter.id && !annotation.deletedAt));
+    const body = await bodyOf(init);
+    const lines = found.chapter.content.replace(/\r\n?/gu, "\n").split("\n");
+    const startLine = Number(body.startLine);
+    const endLine = Number(body.endLine);
+    if (startLine < 1 || endLine < startLine || endLine > lines.length) return failure("批注行号超出当前正文范围", 400);
+    const timestamp = new Date().toISOString();
+    const annotation = {
+      id: demoId("chapter-annotation"),
+      workId: found.work.id,
+      chapterId: found.chapter.id,
+      kind: body.kind === "todo" ? "todo" : "note",
+      startLine,
+      endLine,
+      quote: lines.slice(startLine - 1, endLine).join("\n"),
+      note: String(body.note ?? "").trim(),
+      status: "open",
+      versionNo: 1,
+      actor: demoUser.displayName,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      deletedAt: null
+    };
+    found.work.chapterAnnotations.push(annotation);
+    recordAudit(found.work, "chapter.annotation.created", "chapter-annotation", annotation.id, { chapterId: found.chapter.id, kind: annotation.kind, startLine, endLine });
+    return success(annotation, 201);
+  }
+  match = path.match(/^\/api\/chapter-annotations\/([^/]+)$/u);
+  if (match) {
+    const annotationId = decodeURIComponent(match[1]);
+    const work = works.find((item) => item.chapterAnnotations.some((annotation) => annotation.id === annotationId));
+    const annotation = work?.chapterAnnotations.find((item) => item.id === annotationId && !item.deletedAt);
+    if (!work || !annotation) return failure("未找到章节批注");
+    const body = await bodyOf(init);
+    if (annotation.versionNo !== Number(body.expectedVersionNo)) return failure("批注版本已变化，请刷新后重试", 409);
+    annotation.versionNo += 1;
+    annotation.updatedAt = new Date().toISOString();
+    if (method === "DELETE") {
+      annotation.deletedAt = annotation.updatedAt;
+      recordAudit(work, "chapter.annotation.deleted", "chapter-annotation", annotation.id, { versionNo: annotation.versionNo, recoverable: true });
+      return success(null, 204);
+    }
+    if (typeof body.note === "string") annotation.note = body.note.trim();
+    if (body.status === "open" || body.status === "resolved") annotation.status = body.status;
+    recordAudit(work, "chapter.annotation.updated", "chapter-annotation", annotation.id, { status: annotation.status, versionNo: annotation.versionNo });
+    return success(annotation);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/volumes$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const body = await bodyOf(init);
+    const timestamp = new Date().toISOString();
+    const volume = {
+      id: demoId("volume"),
+      workId: work.id,
+      title: String(body.title ?? "新分卷").trim(),
+      kind: body.kind ?? "main",
+      description: String(body.description ?? ""),
+      keywords: body.keywords ?? [],
+      order: work.volumes.length + 1,
+      sortOrder: work.volumes.length,
+      versionNo: 1,
+      chapters: [],
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    work.volumes.push(volume);
+    recordAudit(work, "volume.created", "volume", volume.id);
+    return success(volume, 201);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/chapters$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const body = await bodyOf(init);
+    const volume = work.volumes.find((item) => item.id === body.volumeId);
+    if (!volume) return failure("未找到目标分卷");
+    const timestamp = new Date().toISOString();
+    const chapter = {
+      id: demoId("chapter"),
+      workId: work.id,
+      volumeId: volume.id,
+      title: String(body.title ?? "新章节").trim(),
+      content: String(body.content ?? ""),
+      chapterType: body.chapterType ?? "正文",
+      order: work.chapters.length + 1,
+      sortOrder: volume.chapters.length,
+      wordCount: wordCount(body.content),
+      versionNo: 1,
+      excludedFromAnalysis: false,
+      analysisStatus: "pending",
+      deletedAt: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      versions: []
+    };
+    recordChapterVersion(chapter, "manual", "创建章节");
+    work.chapters.push(chapter);
+    syncWorkChapters(work);
+    recordAudit(work, "chapter.created", "chapter", chapter.id);
+    return success(chapter, 201);
+  }
+  match = path.match(/^\/api\/volumes\/([^/]+)$/u);
+  if (match) {
+    const volumeId = decodeURIComponent(match[1]);
+    const work = works.find((item) => item.volumes.some((volume) => volume.id === volumeId));
+    const volume = work?.volumes.find((item) => item.id === volumeId);
+    if (!work || !volume) return failure("未找到分卷");
+    if (method === "DELETE") {
+      if (work.chapters.some((chapter) => chapter.volumeId === volumeId && !chapter.deletedAt)) return failure("分卷中仍有章节，无法删除", 409);
+      if (work.chapters.some((chapter) => chapter.volumeId === volumeId && chapter.deletedAt)) return failure("分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷", 409);
+      work.volumes = work.volumes.filter((item) => item.id !== volumeId);
+      recordAudit(work, "volume.deleted", "volume", volumeId, { versionNo: volume.versionNo });
+      return success(null, 204);
+    }
+    if (method === "PATCH") {
+      const body = await bodyOf(init);
+      if (typeof body.title === "string") volume.title = body.title.trim();
+      if (typeof body.kind === "string") volume.kind = body.kind;
+      if (typeof body.description === "string") volume.description = body.description;
+      if (Array.isArray(body.keywords)) volume.keywords = body.keywords;
+      volume.versionNo += 1;
+      volume.updatedAt = new Date().toISOString();
+      recordAudit(work, "volume.updated", "volume", volume.id, { versionNo: volume.versionNo });
+    }
+    return success(volume);
+  }
+  if (path === "/api/works" && method === "GET") return success(page(works.map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, relationships, reviews, tasks, chapterAnnotations, auditLogs, writingGoal, ...work }) => work), url));
   if (path === "/api/users") return success(page([], url));
   if (path === "/api/users/directory") return success([]);
   match = path.match(/^\/api\/works\/([^/]+)$/u);
   if (match) {
     const work = findWork(decodeURIComponent(match[1]));
     if (!work) return failure("未找到作品");
-    return success(work);
+    return success(workView(work));
   }
   match = path.match(/^\/api\/chapters\/([^/]+)$/u);
   if (match) {
-    const chapter = allChapters().find((item) => item.id === decodeURIComponent(match[1]));
-    if (!chapter) return failure("未找到章节");
+    const found = findChapterRecord(decodeURIComponent(match[1]));
+    if (!found) return failure("未找到章节");
+    const { work, chapter } = found;
+    if (method === "DELETE") {
+      const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && chapter.versionNo !== Number(body.expectedVersionNo)) return failure("章节版本已变化，请刷新后重试", 409);
+      softDeleteChapter(work, chapter);
+      return success(null, 204);
+    }
     if (method === "PATCH") {
       const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && chapter.versionNo !== Number(body.expectedVersionNo)) return failure("章节版本已变化，请刷新后重试", 409);
       if (typeof body.title === "string") chapter.title = body.title;
       if (typeof body.content === "string") chapter.content = body.content;
+      if (typeof body.chapterType === "string") chapter.chapterType = body.chapterType;
+      if (typeof body.excludedFromAnalysis === "boolean") chapter.excludedFromAnalysis = body.excludedFromAnalysis;
       chapter.wordCount = wordCount(chapter.content);
       chapter.versionNo += 1;
+      chapter.updatedAt = new Date().toISOString();
+      recordChapterVersion(chapter, "manual", "保存正文");
+      recordAudit(work, "chapter.saved", "chapter", chapter.id, { versionNo: chapter.versionNo });
+      syncWorkChapters(work);
     }
     return success(chapter);
   }
