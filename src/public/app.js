@@ -133,6 +133,8 @@ const acknowledgedCollaborativeChangeIds = new Set();
 let collaborativeChangePromptOpen = false;
 let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
+let workAuditRecords = [];
+let workAuditNextPage = null;
 const chapterBatchSelectedIds = new Set();
 let chapterMovePending = false;
 
@@ -2590,12 +2592,66 @@ function renderSettingsHub() {
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
+  $("#work-audit-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !canReadAggregate;
   $("#export-button").disabled = !canReadAggregate;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出将作用于这部作品。`
     : "当前未选择作品；打开作品后可使用导出。";
+}
+
+const workAuditActionLabels = {
+  "work.created": "创建作品",
+  "work.updated": "更新作品",
+  "volume.created": "创建分卷",
+  "volume.updated": "更新分卷",
+  "volume.deleted": "删除分卷",
+  "chapter.created": "创建章节",
+  "chapter.saved": "保存章节",
+  "chapter.moved": "移动章节",
+  "chapter.deleted": "删除章节",
+  "chapter.restored": "恢复章节",
+  "work.imported": "导入正文"
+};
+
+function workAuditEntityLabel(type) {
+  return ({ work: "作品", volume: "分卷", chapter: "章节", user: "用户" })[type] ?? type;
+}
+
+function workAuditDetailText(detail) {
+  const entries = Object.entries(detail ?? {}).filter(([, value]) => value !== null && value !== undefined && value !== "").slice(0, 6);
+  return entries.map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join(" · ");
+}
+
+function renderWorkAuditRecords() {
+  $("#work-audit-list").innerHTML = workAuditRecords.length ? workAuditRecords.map((record) => `<article class="work-audit-row">
+    <time>${esc(formatDateTime(record.createdAt))}</time>
+    <div><strong>${esc(workAuditActionLabels[record.action] ?? record.action)}</strong><span>${esc(record.actor)} · ${esc(workAuditEntityLabel(record.entityType))}${record.entityId ? ` · ${esc(record.entityId)}` : ""}</span>${workAuditDetailText(record.detail) ? `<small>${esc(workAuditDetailText(record.detail))}</small>` : ""}</div>
+  </article>`).join("") : '<p class="entity-history-empty">当前作品还没有操作记录。</p>';
+  $("#work-audit-load-more").classList.toggle("hidden", workAuditNextPage === null);
+}
+
+async function loadWorkAuditPage(page = 1, append = false) {
+  if (!state.work) return;
+  const result = await apiPage(`/api/works/${encodeURIComponent(state.work.id)}/audit-logs`, page, 30);
+  workAuditRecords = append ? [...workAuditRecords, ...result.items] : result.items;
+  workAuditNextPage = result.nextPage;
+  renderWorkAuditRecords();
+}
+
+async function openWorkAuditDialog() {
+  if (!state.work || !["admin", "owner"].includes(String(state.work.accessRole))) return;
+  workAuditRecords = [];
+  workAuditNextPage = null;
+  $("#work-audit-list").innerHTML = '<p class="entity-history-empty">正在加载操作记录…</p>';
+  $("#work-audit-dialog").showModal();
+  try {
+    await loadWorkAuditPage();
+  } catch (error) {
+    $("#work-audit-dialog").close();
+    toast(error.message, "error");
+  }
 }
 
 function renderUsers(users) {
@@ -8860,6 +8916,13 @@ $("#platform-usage-refresh").addEventListener("click", async () => {
   }
 });
 $("#user-management-button").addEventListener("click", openUsersDialog);
+$("#work-audit-button").addEventListener("click", () => openWorkAuditDialog().catch((error) => toast(error.message, "error")));
+$("#work-audit-close").addEventListener("click", () => $("#work-audit-dialog").close());
+$("#work-audit-settings-return").addEventListener("click", () => returnToSettingsHub("#work-audit-button", "#work-audit-dialog").catch((error) => toast(error.message, "error")));
+$("#work-audit-refresh").addEventListener("click", () => loadWorkAuditPage().catch((error) => toast(error.message, "error")));
+$("#work-audit-load-more").addEventListener("click", () => {
+  if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
+});
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {
