@@ -317,7 +317,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-race-tree-all-v1');
+    expect(page.text).toContain('/app.js?v=20260729-race-tree-staged-v1');
     expect(page.text).toContain('/styles.css?v=20260729-galaxy-controls-compact-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -372,8 +372,11 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain('statuses.push("待确认")');
     expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
     expect(application.text).toContain('/race-hierarchy.js?v=20260729-race-tree-all-v1');
-    expect(application.text).toContain('state.races = await api(`/api/works/${state.work.id}/races`);');
-    expect(application.text).toContain('const raceItems = layout === "rows" ? state.races : buildRaceForest(state.races);');
+    expect(application.text).toContain('const roots = await api(`/api/works/${workId}/races?scope=roots`);');
+    expect(application.text).toContain('renderRaceCollection(roots.total, loadedRaceHierarchyWorkId !== workId);');
+    expect(application.text).toContain('api(`/api/works/${workId}/races?scope=descendants`)');
+    expect(application.text).toContain('state.races = [...roots.items, ...descendants];');
+    expect(application.text).toContain('aria-busy="${descendantsLoading}"');
     expect(application.text).not.toContain("paginateRaceForest");
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
