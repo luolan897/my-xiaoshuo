@@ -490,7 +490,7 @@ describe("作品、导入和章节版本 API", () => {
       .expect(409);
     expect(blocked.body.error).toMatchObject({
       code: "VOLUME_HAS_DELETED_CHAPTERS",
-      message: "分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷"
+      message: "分卷回收站中仍有章节，请先彻底删除或恢复并移动这些章节"
     });
 
     const restored = await request(runtime.app)
@@ -502,6 +502,51 @@ describe("作品、导入和章节版本 API", () => {
       content: "这段正文不能被分卷删除级联清理。",
       volumeId: volume.body.data.id
     });
+  });
+
+  it("彻底删除回收站章节及关联资料后允许删除分卷", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "回收站清理" }).expect(201);
+    const workId = work.body.data.id;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "待删除卷" }).expect(201);
+    const volumeId = volume.body.data.id;
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId,
+      title: "待彻底删除章节",
+      content: "第一行正文。\n第二行正文。"
+    }).expect(201);
+    const chapterId = chapter.body.data.id;
+    const annotation = await request(runtime.app).post(`/api/chapters/${chapterId}/annotations`).send({
+      kind: "note",
+      startLine: 1,
+      endLine: 1,
+      note: "待清理批注"
+    }).expect(201);
+    await request(runtime.app).put(`/api/chapters/${chapterId}/outline`).send({ goal: "待清理大纲" }).expect(200);
+
+    const activePurge = await request(runtime.app)
+      .delete(`/api/chapters/${chapterId}/permanent`)
+      .send({ expectedVersionNo: 1 })
+      .expect(409);
+    expect(activePurge.body.error).toMatchObject({
+      code: "CHAPTER_NOT_IN_RECYCLE_BIN",
+      message: "仅回收站中的章节可以彻底删除"
+    });
+
+    await request(runtime.app).delete(`/api/chapters/${chapterId}`).send({ expectedVersionNo: 1 }).expect(204);
+    await request(runtime.app).delete(`/api/chapters/${chapterId}/permanent`).send({ expectedVersionNo: 1 }).expect(409);
+    await request(runtime.app).delete(`/api/chapters/${chapterId}/permanent`).send({ expectedVersionNo: 2 }).expect(204);
+
+    expect(runtime.database.get("SELECT id FROM chapters WHERE id = ?", chapterId)).toBeUndefined();
+    expect(runtime.database.all("SELECT id FROM chapter_versions WHERE chapter_id = ?", chapterId)).toEqual([]);
+    expect(runtime.database.all("SELECT id FROM chapter_annotations WHERE chapter_id = ?", chapterId)).toEqual([]);
+    expect(runtime.database.all("SELECT id FROM chapter_annotation_versions WHERE annotation_id = ?", annotation.body.data.id)).toEqual([]);
+    expect(runtime.database.get("SELECT chapter_id FROM chapter_outlines WHERE chapter_id = ?", chapterId)).toBeUndefined();
+    expect(runtime.database.all("SELECT id FROM entity_versions WHERE entity_type = 'chapter-outline' AND entity_id = ?", chapterId)).toEqual([]);
+    expect(runtime.database.get("SELECT action FROM audit_logs WHERE entity_id = ? AND action = 'chapter.purged'", chapterId)).toMatchObject({ action: "chapter.purged" });
+    expect((await request(runtime.app).get(`/api/works/${workId}/deleted-chapters`).expect(200)).body.data).toEqual([]);
+
+    await request(runtime.app).delete(`/api/volumes/${volumeId}`).send({ expectedVersionNo: 1 }).expect(204);
+    expect(runtime.database.get("SELECT id FROM volumes WHERE id = ?", volumeId)).toBeUndefined();
   });
 
   it("创建和编辑带简介及关键词的分卷", async () => {

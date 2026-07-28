@@ -2768,6 +2768,7 @@ const workAuditActionLabels = {
   "chapter.saved": "保存章节",
   "chapter.moved": "移动章节",
   "chapter.deleted": "删除章节",
+  "chapter.purged": "彻底删除章节",
   "chapter.restored": "恢复章节",
   "work.imported": "导入正文"
 };
@@ -6354,7 +6355,7 @@ function openWorkSettingsDialog(work) {
     <button id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>
   </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
-    <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>查看并恢复已软删除的章节，正文、版本和关联资料不会在删除时清理。</small></div>
+    <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>恢复已软删除的章节，或彻底删除正文、版本和关联资料。</small></div>
     <button id="chapter-recycle-bin-button" class="ghost-button" type="button" aria-controls="chapter-recycle-bin-dialog" aria-haspopup="dialog" ${canEditProse() ? "" : "disabled"}>打开回收站</button>
   </section>` : "";
   const whitespaceField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="whitespace-settings-title">
@@ -6417,7 +6418,7 @@ function openVolumeDialog(item) {
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
   const management = item ? `<section class="entity-dialog-management" aria-label="分卷操作">
-    <div><strong>分卷操作</strong><small>仅空分卷可以删除；卷内章节及回收站章节需先移动到其他分卷。</small></div>
+    <div><strong>分卷操作</strong><small>仅空分卷可以删除；回收站章节需先彻底删除，或恢复后移动到其他分卷。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-volume-delete>删除分卷</button></div>
   </section>` : "";
   openDialog(item ? "编辑分卷" : "新建分卷",
@@ -8458,7 +8459,10 @@ function renderChapterRecycleBin(chapters) {
     <time>${esc(formatDateTime(chapter.deletedAt))} · ${esc(chapter.actor)}</time>
     <p>${esc(chapter.contentPreview || "空白章节")}</p>
     <small>${Number(chapter.wordCount).toLocaleString("zh-CN")} 字 · 删除版本 v${Number(chapter.versionNo)}</small>
-    <button type="button" data-restore-deleted-chapter="${esc(chapter.id)}">恢复章节</button>
+    <footer class="entity-version-actions">
+      <button type="button" data-restore-deleted-chapter="${esc(chapter.id)}">恢复章节</button>
+      <button class="danger-button" type="button" data-purge-deleted-chapter="${esc(chapter.id)}">彻底删除</button>
+    </footer>
   </article>`).join("");
   host.querySelectorAll("[data-restore-deleted-chapter]").forEach((button) => button.addEventListener("click", async () => {
     const chapter = chapters.find((item) => item.id === button.dataset.restoreDeletedChapter);
@@ -8484,6 +8488,36 @@ function renderChapterRecycleBin(chapters) {
       await loadChapterRecycleBin();
       dialog.showModal();
       toast(`已恢复章节“${chapter.title}”`);
+    } catch (error) {
+      button.disabled = false;
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  }));
+  host.querySelectorAll("[data-purge-deleted-chapter]").forEach((button) => button.addEventListener("click", async () => {
+    const chapter = chapters.find((item) => item.id === button.dataset.purgeDeletedChapter);
+    if (!chapter || !state.work) return;
+    const dialog = $("#chapter-recycle-bin-dialog");
+    dialog.close();
+    const confirmed = await confirmToast(`彻底删除章节“${chapter.title}”吗？正文、版本和关联资料将无法恢复。`, {
+      title: "彻底删除章节",
+      confirmLabel: "确认彻底删除"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api(`/api/chapters/${encodeURIComponent(chapter.id)}/permanent`, {
+        method: "DELETE",
+        body: { expectedVersionNo: chapter.versionNo }
+      });
+      state.work = await api(`/api/works/${encodeURIComponent(state.work.id)}`);
+      renderTree();
+      await loadChapterRecycleBin();
+      dialog.showModal();
+      toast(`已彻底删除章节“${chapter.title}”`);
     } catch (error) {
       button.disabled = false;
       dialog.showModal();

@@ -1107,6 +1107,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.deleteChapter(request.params.chapterId, input.expectedVersionNo);
     noContent(response);
   });
+  app.delete("/api/chapters/:chapterId/permanent", (request, response) => {
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.permanentlyDeleteChapter(request.params.chapterId, input.expectedVersionNo);
+    noContent(response);
+  });
   app.get("/api/chapters/:chapterId/versions", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listChapterVersionsPage(request.params.chapterId, pagination) : store.listChapterVersions(request.params.chapterId));
