@@ -1630,7 +1630,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         });
       }
     }
-    data(response, ai.startAutoRunBatch(request.params.workId));
+    data(response, ai.resumeAutoRun(request.params.workId));
   });
   app.get("/api/tasks/:taskId/detail", (request, response) => data(
     response,
@@ -1757,10 +1757,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.patch("/api/works/:workId/ai-settings", (request, response) => {
     const workId = request.params.workId;
-    const before = store.getWorkAiSettings(workId);
     const updated = store.updateWorkAiSettings(workId, parse(workAiSettingsSchema, request.body));
     if (updated.autoRunEnabled) {
-      if (!before.autoRunEnabled) ai.resetAutoRunBatch(workId);
       ai.scheduleAutoRun(workId);
     }
     data(response, updated);

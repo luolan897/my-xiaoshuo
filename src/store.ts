@@ -5960,6 +5960,26 @@ export class Store {
     return numberValue(row ?? {}, "value");
   }
 
+  listAutoRunWorkIds(): string[] {
+    return this.db.all(
+      "SELECT work_id FROM work_ai_settings WHERE auto_run_enabled = 1 ORDER BY work_id"
+    ).map((row) => requiredString(row, "work_id"));
+  }
+
+  claimPendingTask(taskId: string, runningLimit?: number): Record<string, unknown> | null {
+    return this.db.transaction(() => {
+      const current = this.getTask(taskId);
+      if (current.status !== "pending") return null;
+      if (runningLimit !== undefined && this.countRunningTasks(String(current.workId)) >= runningLimit) return null;
+      const claimed = this.db.run(
+        "UPDATE analysis_tasks SET status = 'running', progress = 5, updated_at = ? WHERE id = ? AND status = 'pending'",
+        now(),
+        taskId
+      );
+      return claimed.changes === 1 ? this.getTask(taskId) : null;
+    });
+  }
+
   listOldestPendingTaskIds(workId: string, limit: number): string[] {
     if (limit <= 0) return [];
     return this.db.all(

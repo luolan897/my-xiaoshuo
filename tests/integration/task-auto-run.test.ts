@@ -1,6 +1,8 @@
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AiManager } from "../../src/ai.js";
 import type { Runtime } from "../../src/app.js";
+import { CredentialVault } from "../../src/credential-vault.js";
 import { createTestRuntime } from "../helpers.js";
 
 function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
@@ -26,6 +28,7 @@ async function setupWork(fetchMock: typeof fetch): Promise<{
   workId: string;
   chapterIds: string[];
   releaseGates: Array<() => void>;
+  gatedFetch: typeof fetch;
 }> {
   const releaseGates: Array<() => void> = [];
   const gatedFetch: typeof fetch = async (input, init) => {
@@ -73,7 +76,7 @@ async function setupWork(fetchMock: typeof fetch): Promise<{
       scope: { type: "chapter", chapterId }
     }).expect(201);
   }
-  return { runtime, workId, chapterIds, releaseGates };
+  return { runtime, workId, chapterIds, releaseGates, gatedFetch };
 }
 
 describe("分析任务自动运行", () => {
@@ -194,7 +197,67 @@ describe("分析任务自动运行", () => {
     expect(secondPage.body.data.items).toHaveLength(25);
   });
 
-  it("开启自动运行后遵守并发与单次上限", async () => {
+  it("以事务原子认领待执行任务并遵守运行上限", () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "原子认领测试" });
+    const firstTask = runtime.store.createTask(String(work.id), {
+      taskType: "chapter-analysis",
+      scope: { type: "book" }
+    });
+    const secondTask = runtime.store.createTask(String(work.id), {
+      taskType: "chapter-analysis",
+      scope: { type: "book" }
+    });
+
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)?.status).toBe("running");
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toBeNull();
+    expect(runtime.store.claimPendingTask(String(secondTask.id), 1)).toBeNull();
+    expect(runtime.store.getTask(String(secondTask.id)).status).toBe("pending");
+  });
+
+  it("服务启动后恢复已开启作品的待执行队列", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            summary: "恢复执行摘要",
+            events: [],
+            characters: [],
+            settings: [],
+            evidence: [{ conclusion: "有据", quote: "原文" }],
+            uncertainties: []
+          })
+        }
+      }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const { runtime, workId, releaseGates, gatedFetch } = await setupWork(fetchMock);
+    runtimes.push(runtime);
+    runtime.ai.dispose();
+    runtime.store.updateWorkAiSettings(workId, {
+      autoRunEnabled: true,
+      autoRunConcurrency: 2
+    });
+
+    const resumedAi = new AiManager(
+      runtime.store,
+      new CredentialVault("test-master-secret-with-at-least-32-characters"),
+      gatedFetch
+    );
+    try {
+      await waitFor(() => releaseGates.length >= 2);
+      releaseGates.splice(0).forEach((release) => release());
+      while (runtime.store.countPendingTasks(workId) > 0 || runtime.store.countRunningTasks(workId) > 0) {
+        await waitFor(() => releaseGates.length > 0 || (runtime.store.countPendingTasks(workId) === 0 && runtime.store.countRunningTasks(workId) === 0));
+        releaseGates.splice(0).forEach((release) => release());
+      }
+      expect(runtime.store.countPendingTasks(workId)).toBe(0);
+    } finally {
+      resumedAi.dispose();
+    }
+  });
+
+  it("开启自动运行后遵守并发上限并持续清空队列", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{
         message: {
@@ -217,30 +280,20 @@ describe("分析任务自动运行", () => {
       autoRunConcurrency: 2,
       autoRunBatchLimit: 3
     }).expect(200);
-    // 开启自动运行时已 reset 并 schedule，勿再调 startAutoRunBatch，否则会清掉本轮 claimed
 
     await waitFor(() => releaseGates.length >= 2);
     expect(releaseGates.length).toBe(2);
     expect(runtime.store.countRunningTasks(workId)).toBe(2);
 
     releaseGates.splice(0).forEach((release) => release());
-    await waitFor(() => releaseGates.length >= 1);
-    expect(releaseGates.length).toBe(1);
-    expect(runtime.store.countRunningTasks(workId)).toBe(1);
-    releaseGates.splice(0).forEach((release) => release());
-    await waitFor(() => runtime.store.countRunningTasks(workId) === 0);
+    while (runtime.store.countPendingTasks(workId) > 0 || runtime.store.countRunningTasks(workId) > 0) {
+      await waitFor(() => releaseGates.length > 0 || (runtime.store.countPendingTasks(workId) === 0 && runtime.store.countRunningTasks(workId) === 0));
+      releaseGates.splice(0).forEach((release) => release());
+    }
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
     const statuses = (tasks.body.data.items as Array<{ status: string }>).map((item) => item.status);
-    expect(statuses.filter((status) => status === "review")).toHaveLength(3);
-    expect(statuses.filter((status) => status === "pending").length).toBeGreaterThanOrEqual(2);
-
-    await request(runtime.app).post(`/api/works/${workId}/tasks/auto-run`).send({}).expect(200);
-    await waitFor(() => releaseGates.length >= 1);
-    const started = releaseGates.splice(0);
-    started.forEach((release) => release());
-    await waitFor(() => runtime.store.countRunningTasks(workId) === 0);
-    for (const release of releaseGates.splice(0)) release();
-    await waitFor(() => runtime.store.countRunningTasks(workId) === 0);
+    expect(statuses.filter((status) => status === "review")).toHaveLength(5);
+    expect(statuses.filter((status) => status === "pending")).toHaveLength(0);
   });
 });
