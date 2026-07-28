@@ -6,6 +6,8 @@ import {
   findApproximateNameMatchesChunked,
   isRelationshipPhoneticReference,
   relationshipCharacterTokens,
+  relationshipPinyinJoinedTokens,
+  relationshipPinyinSearchTokens,
   relationshipPinyinSyllables,
   relationshipPinyinTokens
 } from "../../src/relationship-search.js";
@@ -15,6 +17,9 @@ describe("人物关系来源搜索", () => {
     expect(relationshipCharacterTokens("魔斯拉")).toEqual(["u9b54", "u65af", "u62c9"]);
     expect(relationshipPinyinSyllables("魔斯拉")).toEqual(["mo", "si", "la"]);
     expect(relationshipPinyinTokens("女娲")).toEqual(["pnv", "pwa"]);
+    expect(relationshipPinyinSearchTokens("北港")).toEqual(["pbei", "pgang"]);
+    expect(relationshipPinyinSearchTokens("bei gang")).toEqual(["pbeigang"]);
+    expect(relationshipPinyinJoinedTokens("抵达北港议会")).toContain("pbeigang");
   });
 
   it("仅允许中文姓名和中文别名参与拼音疑似匹配", () => {
