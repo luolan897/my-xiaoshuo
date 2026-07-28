@@ -1369,7 +1369,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   align-self: center;
   margin: 0;
 }
+.task-auto-run-help { grid-column: 1; margin: -4px 0 0; color: var(--muted); font-size: 9px; line-height: 1.45; }
 .task-auto-run-meta { grid-column: 1; margin: 0; color: var(--muted); font-size: 10px; }
+.task-auto-run-alert { display: grid; grid-column: 1; gap: 3px; margin: 0; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 4px; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); font-size: 10px; line-height: 1.45; }
+.task-auto-run-alert strong { color: var(--ink); }
+.task-auto-run-alert span, .task-auto-run-alert small { color: var(--muted); }
 .task-auto-run-progress {
   display: grid;
   grid-column: 2;
@@ -1385,6 +1389,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-auto-run-progress-ring-value { stroke: var(--accent); stroke-linecap: round; transition: stroke-dasharray .25s ease; }
 .task-auto-run-progress-ring.is-running svg { animation: task-auto-run-active 1.8s ease-in-out infinite; }
 .task-auto-run-progress-ring.is-running .task-auto-run-progress-ring-value { stroke: var(--task-running); }
+.task-auto-run-progress-ring.is-paused .task-auto-run-progress-ring-value { stroke: var(--accent); }
 .task-auto-run-progress-ring-label { position: absolute; inset: 22px; display: grid; align-content: center; justify-items: center; gap: 3px; text-align: center; }
 .task-auto-run-progress-ring-label strong { color: var(--ink); font-family: var(--font-latin), monospace; font-size: 22px; font-weight: 600; line-height: 1; }
 .task-auto-run-progress-ring-label span { color: var(--muted); font-size: 9px; line-height: 1.35; }
@@ -1398,6 +1403,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-auto-run-progress-bar.is-running { animation: task-auto-run-active 1.8s ease-in-out infinite; }
 .task-auto-run-progress-bar.is-running::-webkit-progress-value { background: var(--task-running); }
 .task-auto-run-progress-bar.is-running::-moz-progress-bar { background: var(--task-running); }
+.task-auto-run-progress-bar.is-paused::-webkit-progress-value { background: var(--accent); }
+.task-auto-run-progress-bar.is-paused::-moz-progress-bar { background: var(--accent); }
 .task-status-cell { width: 116px; white-space: nowrap; }
 .task-status-badge {
   --task-status-color: var(--muted);
@@ -2718,7 +2725,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .top-actions .ghost-button:not(.settings-button) { display: none; }
   .book-shelf { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
   .task-auto-run-panel { grid-template-columns: minmax(0, 1fr); column-gap: 0; }
-  .task-auto-run-copy, .task-auto-run-controls, .task-auto-run-meta { grid-column: 1; }
+  .task-auto-run-copy, .task-auto-run-controls, .task-auto-run-help, .task-auto-run-meta, .task-auto-run-alert { grid-column: 1; }
   .task-auto-run-progress { grid-column: 1; grid-row: auto; justify-self: stretch; width: 100%; }
   .task-auto-run-progress-ring { display: none; }
   .task-auto-run-progress-bar-layout { display: grid; gap: 6px; width: 100%; }

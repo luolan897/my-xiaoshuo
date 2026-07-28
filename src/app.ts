@@ -1760,9 +1760,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/works/:workId/ai-settings", (request, response) => {
     const workId = request.params.workId;
     const input = parse(workAiSettingsSchema, request.body);
+    const before = store.getWorkAiSettings(workId);
     let updated = store.updateWorkAiSettings(workId, input);
     if (updated.autoRunEnabled) {
-      if (input.autoRunEnabled === true) updated = ai.resumeAutoRun(workId);
+      if (input.autoRunEnabled === true && !before.autoRunEnabled) updated = ai.resumeAutoRun(workId);
       else ai.scheduleAutoRun(workId);
     }
     data(response, updated);
