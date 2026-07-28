@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { cliResourceDefinitions, cliResourceTypes, cliWorkDefinition, type CliResourceType } from "./cli-contract.js";
+import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import type { LocalServerOptions } from "./server-runtime.js";
 
 type OutputStream = { write(chunk: string): unknown };
@@ -488,7 +489,7 @@ function helpText(): string {
   scriverse work history <workId>
   scriverse work restore <workId> --version <number>
   scriverse manuscript get <workId> [--format json|markdown|txt] [--output <path>]
-  scriverse search <workId> --query <text>
+  scriverse search <workId> --query <text> [--type <type>] [--limit <number>]
   scriverse audit <workId>
   scriverse writing progress <workId>
   scriverse annotation list <chapterId>
@@ -776,12 +777,24 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
   }
 
   if (group === "search") {
-    assertAllowedOptions(parsed, ["query"]);
+    assertAllowedOptions(parsed, ["query", "type", "limit"]);
     const workId = requiredPosition(parsed.positionals, 1, "workId");
     assertPositionCount(parsed.positionals, 2);
     const query = option(parsed, "query")?.trim();
     if (!query) throw new CliError("CLI_QUERY_REQUIRED", "请使用 --query 提供搜索词");
-    emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/search?q=${encodeURIComponent(query)}`), compact);
+    const type = option(parsed, "type")?.trim();
+    if (type && !HYBRID_SEARCH_TYPES.includes(type as typeof HYBRID_SEARCH_TYPES[number])) {
+      throw new CliError("CLI_SEARCH_TYPE_INVALID", `type 必须是 ${HYBRID_SEARCH_TYPES.join("、")} 之一`);
+    }
+    const rawLimit = option(parsed, "limit");
+    const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+      throw new CliError("CLI_SEARCH_LIMIT_INVALID", "limit 必须是 1 到 100 之间的整数");
+    }
+    const parameters = new URLSearchParams({ q: query });
+    if (type) parameters.set("type", type);
+    if (limit !== undefined) parameters.set("limit", String(limit));
+    emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/search?${parameters}`), compact);
     return;
   }
 

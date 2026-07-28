@@ -367,6 +367,47 @@ describe("Scriverse CLI 核心", () => {
     ]);
   });
 
+  it("为混合检索传递类型和数量筛选并校验边界", async () => {
+    const root = temporaryRoot();
+    const configPath = join(root, "cli.json");
+    writeFileSync(configPath, JSON.stringify({
+      version: 2,
+      defaultServer: "http://127.0.0.1:13210",
+      servers: {
+        "http://127.0.0.1:13210": {
+          apiKey: "scrv_test_key",
+          apiKeyPrefix: "scrv_test",
+          user: { userId: "user-1", username: "writer", displayName: "Writer", role: "user" }
+        }
+      }
+    }));
+    const fetchImpl = (async (input: string | URL | Request) => {
+      expect(String(input)).toBe("http://127.0.0.1:13210/api/works/work-1/search?q=%E5%8C%97%E6%B8%AF&type=timeline-event&limit=12");
+      return new Response(JSON.stringify({ data: [{ type: "timeline-event", id: "event-1" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as typeof fetch;
+    const stdout = outputCapture();
+    const stderr = outputCapture();
+    expect(await runCli([
+      "search", "work-1", "--query", "北港", "--type", "timeline-event", "--limit", "12", "--config", configPath
+    ], { fetchImpl, stdout: stdout.stream, stderr: stderr.stream })).toBe(0);
+    expect(JSON.parse(stdout.text())).toEqual([{ type: "timeline-event", id: "event-1" }]);
+
+    const invalidType = outputCapture();
+    expect(await runCli([
+      "search", "work-1", "--query", "北港", "--type", "unknown", "--config", configPath
+    ], { stdout: outputCapture().stream, stderr: invalidType.stream })).toBe(1);
+    expect(JSON.parse(invalidType.text())).toMatchObject({ error: { code: "CLI_SEARCH_TYPE_INVALID" } });
+
+    const invalidLimit = outputCapture();
+    expect(await runCli([
+      "search", "work-1", "--query", "北港", "--limit", "101", "--config", configPath
+    ], { stdout: outputCapture().stream, stderr: invalidLimit.stream })).toBe(1);
+    expect(JSON.parse(invalidLimit.text())).toMatchObject({ error: { code: "CLI_SEARCH_LIMIT_INVALID" } });
+  });
+
   it("未登录的数据命令和未开放命令返回结构化错误", async () => {
     const root = temporaryRoot();
     const stdout = outputCapture();

@@ -1,6 +1,6 @@
 import { pinyin } from "pinyin-pro";
 
-export const RELATIONSHIP_SEARCH_POLICY_VERSION = 2;
+export const RELATIONSHIP_SEARCH_POLICY_VERSION = 3;
 
 export function normalizeRelationshipSearchText(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN");
@@ -36,12 +36,32 @@ export function relationshipPinyinTokens(value: string): string[] {
   return relationshipPinyinSyllables(value).map(safePinyinToken);
 }
 
+export function relationshipPinyinSearchTokens(value: string): string[] {
+  const normalized = normalizeRelationshipSearchText(value).trim();
+  if (/\p{Script=Han}/u.test(normalized)) return relationshipPinyinTokens(normalized);
+  const compact = normalized.replace(/[\p{White_Space}·・\-—']/gu, "");
+  return compact ? [safePinyinToken(compact)] : [];
+}
+
+export function relationshipPinyinJoinedTokens(value: string, maximumSyllables = 6): string[] {
+  const tokens = new Set<string>();
+  for (const match of value.matchAll(/[\p{Script=Han}]{2,}/gu)) {
+    const syllables = relationshipPinyinSyllables(match[0]);
+    for (let start = 0; start < syllables.length; start += 1) {
+      for (let length = 2; length <= maximumSyllables && start + length <= syllables.length; length += 1) {
+        tokens.add(safePinyinToken(syllables.slice(start, start + length).join("")));
+      }
+    }
+  }
+  return [...tokens];
+}
+
 export function relationshipCharacterTokenText(value: string): string {
   return relationshipCharacterTokens(value).join(" ");
 }
 
 export function relationshipPinyinTokenText(value: string): string {
-  return relationshipPinyinTokens(value).join(" ");
+  return [...relationshipPinyinTokens(value), ...relationshipPinyinJoinedTokens(value)].join(" ");
 }
 
 export function ftsPhrase(tokens: string[]): string {

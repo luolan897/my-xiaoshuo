@@ -14,6 +14,15 @@ import {
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import {
+  HYBRID_SEARCH_TYPES,
+  buildHybridSearchSnippet,
+  documentParagraphLineRange,
+  fuseHybridSearchChannels,
+  type HybridSearchCandidate,
+  type HybridSearchMatchKind,
+  type HybridSearchType
+} from "./hybrid-search.js";
 import { logger, sanitizeError } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -28,6 +37,7 @@ import {
   normalizeRelationshipSearchText,
   relationshipCharacterTokenText,
   relationshipCharacterTokens,
+  relationshipPinyinSearchTokens,
   relationshipPinyinTokenText,
   relationshipPinyinTokens
 } from "./relationship-search.js";
@@ -483,7 +493,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "search_story_entities",
-      description: "按短关键词在结构化作品实体中做字面/子串匹配：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义检索或知识库问答；请传入实体名、别名、标题或其子串，不要传入自然语言整句。返回简要匹配项；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
+      description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 } }, required: ["query"], additionalProperties: false }
     }
   },
@@ -1275,6 +1285,199 @@ export class AiManager {
   getWorkTokenUsage(workId: string, timezoneOffset: number): Record<string, unknown> {
     this.store.getWork(workId);
     return this.getTokenUsage(workId, timezoneOffset, false);
+  }
+
+  async searchWork(
+    workId: string,
+    query: string,
+    options: { type?: HybridSearchType; limit?: number } = {}
+  ): Promise<Record<string, unknown>[]> {
+    this.store.getWork(workId);
+    const normalizedQuery = normalizeRelationshipSearchText(query).trim();
+    if (!normalizedQuery) return [];
+    await this.ensureRelationshipSearchIndex(workId);
+    const requestedTypes = options.type ? new Set<HybridSearchType>([options.type]) : new Set(HYBRID_SEARCH_TYPES);
+    const resultLimit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 50)));
+    const channelLimit = Math.min(200, Math.max(50, resultLimit * 4));
+    const accepts = (type: string): type is HybridSearchType => requestedTypes.has(type as HybridSearchType);
+    const metadataDetails = new Map<string, Record<string, unknown>>();
+
+    const metadataCandidates = this.store.search(workId, normalizedQuery).flatMap((item): HybridSearchCandidate[] => {
+      const type = String(item.type);
+      const itemId = String(item.id ?? "");
+      if (!itemId || !accepts(type)) return [];
+      const key = `${type}:${itemId}`;
+      const { type: _type, id: _id, title: _title, snippet: _snippet, ...details } = item;
+      metadataDetails.set(key, { ...(metadataDetails.get(key) ?? {}), ...details });
+      return [{
+        key,
+        type,
+        id: itemId,
+        title: String(item.title ?? "未命名资料"),
+        subtitle: typeof item.category === "string" ? item.category : undefined,
+        snippet: buildHybridSearchSnippet(String(item.snippet ?? ""), normalizedQuery),
+        sectionId: typeof item.sectionId === "string" ? item.sectionId : undefined,
+        matchKind: "metadata"
+      }];
+    }).slice(0, channelLimit);
+
+    const exactCandidates = [
+      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit) : []),
+      ...this.hybridIndexedSourceMatches(workId, normalizedQuery, "exact", requestedTypes, channelLimit)
+    ];
+    const phoneticCandidates = [
+      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit) : []),
+      ...this.hybridIndexedSourceMatches(workId, normalizedQuery, "phonetic", requestedTypes, channelLimit)
+    ];
+    return fuseHybridSearchChannels([
+      { weight: 1.4, candidates: metadataCandidates },
+      { weight: 1, candidates: exactCandidates },
+      { weight: 0.55, candidates: phoneticCandidates }
+    ], resultLimit).map((item) => ({
+      ...(metadataDetails.get(`${item.type}:${item.id}`) ?? {}),
+      ...item
+    }));
+  }
+
+  private hybridChapterMatches(
+    workId: string,
+    query: string,
+    matchKind: Extract<HybridSearchMatchKind, "exact" | "phonetic">,
+    limit: number
+  ): HybridSearchCandidate[] {
+    let rows: Row[];
+    if (matchKind === "phonetic") {
+      const tokens = relationshipPinyinSearchTokens(query);
+      if (tokens.length === 0) return [];
+      rows = this.store.db.all(
+        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
+                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+         FROM chapter_paragraph_pinyin_fts pinyin
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = pinyin.rowid
+         JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
+           AND chapter_paragraph_pinyin_fts MATCH ?
+         ORDER BY bm25(chapter_paragraph_pinyin_fts), volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+         LIMIT ?`,
+        workId,
+        ftsPhrase(tokens),
+        limit
+      );
+    } else if ([...query].length < 3) {
+      rows = this.store.db.all(
+        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
+                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+         FROM chapter_paragraph_short_terms term
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = term.paragraph_id
+         JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND term.term = ?
+         ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+         LIMIT ?`,
+        workId,
+        query,
+        limit
+      );
+    } else {
+      rows = this.store.db.all(
+        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
+                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+         FROM chapter_paragraph_search_fts fts
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = fts.rowid
+         JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
+           AND chapter_paragraph_search_fts MATCH ?
+         ORDER BY bm25(chapter_paragraph_search_fts), volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+         LIMIT ?`,
+        workId,
+        `"${query.replaceAll('"', '""')}"`,
+        limit
+      );
+    }
+    const seen = new Set<string>();
+    return rows.flatMap((row): HybridSearchCandidate[] => {
+      const chapterId = String(row.chapter_id ?? "");
+      const key = `chapter:${chapterId}`;
+      if (!chapterId || seen.has(key)) return [];
+      seen.add(key);
+      const range = documentParagraphLineRange(String(row.chapter_content ?? ""), Number(row.paragraph_order));
+      return [{
+        key,
+        type: "chapter",
+        id: chapterId,
+        title: String(row.chapter_title ?? "未命名章节"),
+        subtitle: String(row.volume_title ?? ""),
+        snippet: buildHybridSearchSnippet(String(row.paragraph_content ?? ""), query),
+        matchKind,
+        ...(range ?? {})
+      }];
+    });
+  }
+
+  private hybridIndexedSourceMatches(
+    workId: string,
+    query: string,
+    matchKind: Extract<HybridSearchMatchKind, "exact" | "phonetic">,
+    requestedTypes: ReadonlySet<HybridSearchType>,
+    limit: number
+  ): HybridSearchCandidate[] {
+    const tokens = matchKind === "exact" ? relationshipCharacterTokens(query) : relationshipPinyinSearchTokens(query);
+    if (tokens.length === 0) return [];
+    const table = matchKind === "exact" ? "relationship_source_exact_fts" : "relationship_source_pinyin_fts";
+    const rows = this.store.db.all(
+      `SELECT source.source_type, source.source_id FROM ${table} search_index
+       JOIN relationship_source_search source ON source.id = search_index.rowid
+       WHERE source.work_id = ? AND ${table} MATCH ?
+       ORDER BY bm25(${table}), source.source_type, source.source_id
+       LIMIT ?`,
+      workId,
+      ftsPhrase(tokens),
+      limit
+    );
+    return rows.flatMap((row): HybridSearchCandidate[] => {
+      const sourceType = String(row.source_type ?? "") as HybridSearchType;
+      const sourceId = String(row.source_id ?? "");
+      if (!sourceId || !requestedTypes.has(sourceType)) return [];
+      const source = this.relationshipIndexedSource(workId, sourceType, sourceId);
+      if (!source) return [];
+      return [{
+        key: `${sourceType}:${sourceId}`,
+        type: sourceType,
+        id: sourceId,
+        title: this.hybridSourceTitle(sourceType, source.title),
+        snippet: buildHybridSearchSnippet(source.content, query),
+        matchKind
+      }];
+    });
+  }
+
+  private hybridSourceTitle(sourceType: HybridSearchType, title: string): string {
+    const prefixes: Partial<Record<HybridSearchType, string>> = {
+      character: "人物档案：",
+      race: "种族设定：",
+      organization: "组织设定：",
+      "timeline-track": "时间轴：",
+      "timeline-event": "时间线事件：",
+      relationship: "人物关系：",
+      "chapter-outline": "章节大纲：",
+      foreshadow: "伏笔：",
+      review: "审核项："
+    };
+    const prefix = prefixes[sourceType] ?? "";
+    return prefix && title.startsWith(prefix) ? title.slice(prefix.length) : title;
+  }
+
+  private hybridAiSearchDetails(workId: string, sourceType: string, sourceId: string): Record<string, unknown> {
+    const source = this.relationshipIndexedSource(workId, sourceType, sourceId);
+    if (!source) return {};
+    try {
+      const parsed = JSON.parse(source.content) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
   }
 
   private getTokenUsage(workId: string | null, timezoneOffset: number, includeWorks: boolean): Record<string, unknown> {
@@ -2618,7 +2821,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（传入短实体名或关键词子串，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -2688,7 +2891,7 @@ export class AiManager {
     return this.enabledAgentToolIds(workId, taskType, requestedToolIds).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
-  private executeAgentTool(workId: string, toolCall: CompletionToolCall): AgentToolCallResult {
+  private async executeAgentTool(workId: string, toolCall: CompletionToolCall): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
     let rawArguments: unknown = toolCall.function.arguments;
@@ -2807,14 +3010,19 @@ export class AiManager {
       const { query, categories: categoryList } = args as z.infer<typeof searchStoryEntitiesArguments>;
       const categories = new Set<string>(categoryList);
       const allowed = new Set(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"]);
-      const matches = this.store.search(workId, query).filter((item) => !categories.size || categories.has(String(item.type))).slice(0, 20);
-      const extra = [
-        ...this.store.listTimelineEvents(workId).map((item) => ({ type: "timeline", id: item.id, title: item.name, snippet: `${item.description} ${item.timeLabel}` })),
-        ...this.store.listRelationships(workId).map((item) => ({ type: "relationship", id: item.id, title: `${item.fromCharacterId} / ${item.toCharacterId}`, snippet: `${item.category} ${item.subtype} ${(item.keywords as string[]).join(" ")}` })),
-        ...this.store.listChapterOutlines(workId).map((item) => ({ type: "outline", id: item.chapterId, title: item.chapterTitle, snippet: `${item.goal} ${item.conflict} ${item.turningPoint} ${item.notes}` })),
-        ...this.store.listForeshadows(workId).map((item) => ({ type: "foreshadow", id: item.id, title: item.title, snippet: `${item.description} ${item.resolutionNote}` }))
-      ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
-      const combined = [...matches, ...extra].slice(0, 30);
+      const combined = (await this.searchWork(workId, query, { limit: 100 })).flatMap((item) => {
+        const sourceType = String(item.type);
+        const type = sourceType === "timeline-track" || sourceType === "timeline-event"
+          ? "timeline"
+          : sourceType === "chapter-outline" ? "outline" : sourceType;
+        if (!allowed.has(type) || (categories.size > 0 && !categories.has(type))) return [];
+        return [{
+          ...item,
+          ...this.hybridAiSearchDetails(workId, sourceType, String(item.id)),
+          type,
+          sourceType
+        }];
+      }).slice(0, 30);
       return {
         id: toolCall.id,
         name,
@@ -2825,10 +3033,10 @@ export class AiManager {
           ok: true,
           data: {
             query,
-            matchMode: "literal_substring",
+            matchMode: "hybrid_exact_phonetic",
             matches: combined,
             ...(combined.length === 0
-              ? { hint: "无字面匹配。请改用更短的实体名、别名或标题子串；也可改用 story_index 浏览目录，或用 grep 搜索正文关键字。" }
+              ? { hint: "没有找到精确或拼音相关结果。请改用更短的实体名、别名或标题，也可使用 story_index 浏览目录，或用 grep 搜索正文关键字。" }
               : {})
           }
         }
@@ -3146,7 +3354,7 @@ export class AiManager {
           ...(choice.message.anthropic_content?.length ? { anthropic_content: choice.message.anthropic_content } : {})
         });
         for (const toolCall of toolCalls) {
-          const execution = this.executeAgentTool(input.workId, toolCall);
+          const execution = await this.executeAgentTool(input.workId, toolCall);
           logger.info("ai.tool_call.completed", { callId, toolName: execution.name, status: execution.status, round });
           executedToolCalls.push(execution);
           traceRounds.at(-1)?.toolExecutions.push(execution);
@@ -5326,14 +5534,24 @@ export class AiManager {
         return source(`人物档案：${String(item.name)}`, {
           name: item.name, aliases: item.aliases, code: item.code, species: item.species, race: item.race,
           organizations: item.organizations, attributes: item.attributes, profile: item.profile,
-          currentState: item.currentState, lockedFields: item.lockedFields
+          currentState: item.currentState, lockedFields: item.lockedFields,
+          profileSections: this.store.listCharacterProfileSections(sourceId).map((section) => ({
+            title: section.title,
+            sectionType: section.sectionType,
+            summary: section.summary,
+            contentMarkdown: section.contentMarkdown
+          }))
         }, item.versionNo);
       }
       if (sourceType === "race") {
         const item = this.store.getRace(sourceId);
         if (String(item.workId) !== workId) return null;
         return source(`种族设定：${String(item.name)}`, {
-          name: item.name, description: item.description, lineage: item.lineage, settings: item.settings,
+          name: item.name,
+          description: item.description,
+          racePath: (item.lineage as Array<{ name: string }>).map((entry) => entry.name).join(" / "),
+          lineage: item.lineage,
+          settings: item.settings,
           effectiveSettings: item.effectiveSettings, members: item.members
         }, item.versionNo);
       }

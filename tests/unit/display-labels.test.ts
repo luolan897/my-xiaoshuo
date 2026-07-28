@@ -11,6 +11,7 @@ import {
   relationshipConfirmationLabel,
   reviewItemTypeLabel,
   reviewStatusLabel,
+  searchResultTypeLabel,
   settingStatusLabel,
   taskScopeLabel,
   timelineStatusLabel,
@@ -37,6 +38,9 @@ describe("前端枚举中文标签", () => {
     expect(providerConnectionLabel("success")).toBe("连接正常");
     expect(providerProtocolLabel("anthropic-messages")).toBe("Anthropic Messages");
     expect(chapterVersionSourceLabel("ai-suggestion")).toBe("AI 建议");
+    expect(searchResultTypeLabel("timeline-event")).toBe("时间线事件");
+    expect(searchResultTypeLabel("chapter-outline")).toBe("章节大纲");
+    expect(searchResultTypeLabel("review")).toBe("审核项");
   });
 
   it("将角色当前状态常用英文字段显示为中文", () => {
