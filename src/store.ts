@@ -1544,7 +1544,7 @@ export class Store {
         throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
       }
       if (numberValue(counts ?? {}, "deleted_count") > 0) {
-        throw new AppError(409, "VOLUME_HAS_DELETED_CHAPTERS", "分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷");
+        throw new AppError(409, "VOLUME_HAS_DELETED_CHAPTERS", "分卷回收站中仍有章节，请先彻底删除或恢复并移动这些章节");
       }
       this.recordEntityVersion("volume", volumeId, "delete", null, "删除分卷");
       this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
@@ -2333,6 +2333,32 @@ export class Store {
       );
       this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, String(chapter.workId));
       this.audit(String(chapter.workId), "chapter.deleted", "chapter", chapterId, { versionNo });
+    });
+  }
+
+  permanentlyDeleteChapter(chapterId: string, expectedVersionNo?: number): void {
+    const chapter = this.db.get("SELECT * FROM chapters WHERE id = ?", chapterId);
+    if (!chapter) throw notFound("章节");
+    if (!chapter.deleted_at) throw new AppError(409, "CHAPTER_NOT_IN_RECYCLE_BIN", "仅回收站中的章节可以彻底删除");
+    this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", numberValue(chapter, "version_no"));
+    const workId = requiredString(chapter, "work_id");
+    const timestamp = now();
+    this.db.transaction(() => {
+      const locked = this.db.get("SELECT * FROM chapters WHERE id = ?", chapterId);
+      if (!locked) throw notFound("章节");
+      if (!locked.deleted_at) throw new AppError(409, "CHAPTER_NOT_IN_RECYCLE_BIN", "仅回收站中的章节可以彻底删除");
+      this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", numberValue(locked, "version_no"));
+      this.db.run("DELETE FROM chapter_versions WHERE chapter_id = ?", chapterId);
+      this.db.run("DELETE FROM entity_versions WHERE entity_type = 'chapter-outline' AND entity_id = ?", chapterId);
+      this.db.run("DELETE FROM attachment_references WHERE entity_type = 'chapter' AND entity_id = ?", chapterId);
+      this.db.run("DELETE FROM chapters WHERE id = ?", chapterId);
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      this.audit(workId, "chapter.purged", "chapter", chapterId, {
+        title: requiredString(locked, "title"),
+        volumeId: requiredString(locked, "volume_id"),
+        versionNo: numberValue(locked, "version_no"),
+        recoverable: false
+      });
     });
   }
 
