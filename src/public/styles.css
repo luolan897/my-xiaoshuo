@@ -987,7 +987,7 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .book-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: clamp(22px, 3vw, 38px); width: 100%; min-width: 0; max-width: 1400px; margin: 0 auto; }
 .book-card { position: relative; min-width: 0; border: 0; background: transparent; text-align: left; }
 .book-open { width: 100%; padding: 0; border: 0; background: transparent; text-align: left; }
-.book-cover { position: relative; display: grid; place-items: center; aspect-ratio: 3 / 4.25; overflow: hidden; border-radius: 8px 13px 13px 8px; background: linear-gradient(145deg, #a96350, #612d27); color: rgba(255,255,255,.9); box-shadow: 0 20px 34px rgba(62,39,29,.18), inset 9px 0 0 rgba(0,0,0,.08); transition: transform .2s ease, box-shadow .2s ease; }
+.book-cover { position: relative; display: grid; place-items: center; width: 90%; margin-inline: auto; aspect-ratio: 3 / 4.25; overflow: hidden; border-radius: 8px 13px 13px 8px; background: linear-gradient(145deg, #a96350, #612d27); color: rgba(255,255,255,.9); box-shadow: 0 20px 34px rgba(62,39,29,.18), inset 9px 0 0 rgba(0,0,0,.08); transition: transform .2s ease, box-shadow .2s ease; }
 .book-cover::after { content: ""; position: absolute; inset: 0 auto 0 9px; width: 1px; background: rgba(255,255,255,.2); }
 .book-open:hover .book-cover, .book-open:focus-visible .book-cover { transform: translateY(-6px) rotateY(-2deg); box-shadow: 0 28px 44px rgba(62,39,29,.24), inset 9px 0 0 rgba(0,0,0,.08); }
 .book-cover-fallback { font-size: clamp(46px, 6vw, 74px); font-weight: 700; opacity: .75; }
@@ -2668,6 +2668,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .entity-version-card > button:not(:disabled):hover { border-color: var(--accent); color: var(--accent-dark); }
 .entity-version-card > button.is-confirming { border-color: var(--accent); background: var(--accent); color: #fff; }
 .entity-version-card > button:disabled { cursor: default; opacity: .68; }
+.entity-version-actions { display: flex; justify-self: end; gap: 7px; }
+.entity-version-actions button { min-height: 30px; padding: 6px 9px; font-size: 9px; }
 .entity-history-empty { margin: 0; padding: 28px 12px; color: var(--muted); font-size: 11px; text-align: center; }
 .relationship-table .relationship-actions { white-space: nowrap; vertical-align: middle; }
 .relationship-table .relationship-actions button { display: inline-block; min-height: 30px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font: inherit; font-size: 10px; line-height: 1.2; vertical-align: middle; appearance: none; transition: border-color .14s ease, background .14s ease, color .14s ease; }
