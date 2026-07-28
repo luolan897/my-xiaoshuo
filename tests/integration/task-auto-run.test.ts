@@ -98,6 +98,12 @@ describe("分析任务自动运行", () => {
       autoRunEnabled: false,
       autoRunConcurrency: 2,
       autoRunBatchLimit: 20,
+      autoRunDailyTaskLimit: 0,
+      autoRunFailureThreshold: 3,
+      autoRunPaused: false,
+      autoRunPauseReason: "",
+      autoRunResumeAt: null,
+      autoRunConsecutiveFailures: 0,
       bookSummaryContextPercent: 50,
       contextCompactThreshold: 85,
       agentTools: ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections"]
@@ -108,6 +114,12 @@ describe("分析任务自动运行", () => {
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       autoRunBatchLimit: 201
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunDailyTaskLimit: 10_001
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunFailureThreshold: 0
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       bookSummaryContextPercent: 91
@@ -210,10 +222,44 @@ describe("分析任务自动运行", () => {
       scope: { type: "book" }
     });
 
-    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)?.status).toBe("running");
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toMatchObject({ status: "running", attemptCount: 1 });
     expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toBeNull();
+    const nextAttemptAt = new Date(Date.now() + 60_000).toISOString();
+    expect(runtime.store.rescheduleTask(String(firstTask.id), { message: "临时失败" }, nextAttemptAt)).toMatchObject({
+      status: "pending",
+      attemptCount: 1,
+      nextAttemptAt
+    });
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toBeNull();
+    runtime.database.run("UPDATE analysis_tasks SET next_attempt_at = ? WHERE id = ?", new Date(Date.now() - 1_000).toISOString(), String(firstTask.id));
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toMatchObject({ status: "running", attemptCount: 2 });
     expect(runtime.store.claimPendingTask(String(secondTask.id), 1)).toBeNull();
     expect(runtime.store.getTask(String(secondTask.id)).status).toBe("pending");
+  });
+
+  it("连续失败达到阈值后持久化暂停状态", () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "失败熔断测试" });
+    const workId = String(work.id);
+    runtime.store.updateWorkAiSettings(workId, {
+      autoRunEnabled: true,
+      autoRunFailureThreshold: 2
+    });
+
+    expect(runtime.store.recordAutoRunFailure(workId, "第一次失败")).toMatchObject({
+      autoRunPaused: false,
+      autoRunConsecutiveFailures: 1
+    });
+    expect(runtime.store.recordAutoRunFailure(workId, "第二次失败")).toMatchObject({
+      autoRunPaused: true,
+      autoRunConsecutiveFailures: 2,
+      autoRunPauseReason: expect.stringContaining("第二次失败")
+    });
+    expect(runtime.store.clearAutoRunPause(workId)).toMatchObject({
+      autoRunPaused: false,
+      autoRunConsecutiveFailures: 0
+    });
   });
 
   it("服务启动后恢复已开启作品的待执行队列", async () => {
@@ -295,5 +341,31 @@ describe("分析任务自动运行", () => {
     const statuses = (tasks.body.data.items as Array<{ status: string }>).map((item) => item.status);
     expect(statuses.filter((status) => status === "review")).toHaveLength(5);
     expect(statuses.filter((status) => status === "pending")).toHaveLength(0);
+  });
+
+  it("自动任务连续失败后暂停剩余队列", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("invalid request", { status: 400 }));
+    const { runtime, workId, releaseGates } = await setupWork(fetchMock);
+    runtimes.push(runtime);
+
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunEnabled: true,
+      autoRunConcurrency: 2,
+      autoRunFailureThreshold: 2
+    }).expect(200);
+    await waitFor(() => releaseGates.length >= 2);
+    releaseGates.splice(0).forEach((release) => release());
+    await waitFor(() => Boolean(runtime.store.getWorkAiSettings(workId).autoRunPaused));
+    while (runtime.store.countRunningTasks(workId) > 0) {
+      releaseGates.splice(0).forEach((release) => release());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(runtime.store.getWorkAiSettings(workId)).toMatchObject({
+      autoRunEnabled: true,
+      autoRunPaused: true,
+      autoRunPauseReason: expect.stringContaining("AI 调用失败")
+    });
+    expect(runtime.store.countPendingTasks(workId)).toBeGreaterThan(0);
   });
 });

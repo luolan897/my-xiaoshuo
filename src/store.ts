@@ -1049,6 +1049,12 @@ export class Store {
       autoRunEnabled: Number(row?.auto_run_enabled ?? 0) === 1,
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
+      autoRunDailyTaskLimit: Math.min(10_000, Math.max(0, Number(row?.auto_run_daily_task_limit ?? 0) || 0)),
+      autoRunFailureThreshold: Math.min(10, Math.max(1, Number(row?.auto_run_failure_threshold ?? 3) || 3)),
+      autoRunPaused: Number(row?.auto_run_paused ?? 0) === 1,
+      autoRunPauseReason: String(row?.auto_run_pause_reason ?? ""),
+      autoRunResumeAt: row?.auto_run_resume_at === null || row?.auto_run_resume_at === undefined ? null : String(row.auto_run_resume_at),
+      autoRunConsecutiveFailures: Math.max(0, Number(row?.auto_run_consecutive_failures ?? 0) || 0),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
       agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections"])
@@ -1063,6 +1069,8 @@ export class Store {
     autoRunEnabled?: boolean;
     autoRunConcurrency?: number;
     autoRunBatchLimit?: number;
+    autoRunDailyTaskLimit?: number;
+    autoRunFailureThreshold?: number;
     bookSummaryContextPercent?: number;
     contextCompactThreshold?: number;
     agentTools?: string[];
@@ -1074,18 +1082,29 @@ export class Store {
     const nextEnabled = input.autoRunEnabled ?? Boolean(current.autoRunEnabled);
     const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
+    const nextDailyTaskLimit = input.autoRunDailyTaskLimit ?? Number(current.autoRunDailyTaskLimit);
+    const nextFailureThreshold = input.autoRunFailureThreshold ?? Number(current.autoRunFailureThreshold);
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
     const nextAgentTools = input.agentTools ?? current.agentTools as string[];
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit, book_summary_context_percent, context_compact_threshold, agent_tools_json, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+         auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+         auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
+         context_compact_threshold, agent_tools_json, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          auto_run_enabled = excluded.auto_run_enabled,
          auto_run_concurrency = excluded.auto_run_concurrency,
          auto_run_batch_limit = excluded.auto_run_batch_limit,
+         auto_run_daily_task_limit = excluded.auto_run_daily_task_limit,
+         auto_run_failure_threshold = excluded.auto_run_failure_threshold,
+         auto_run_paused = excluded.auto_run_paused,
+         auto_run_pause_reason = excluded.auto_run_pause_reason,
+         auto_run_resume_at = excluded.auto_run_resume_at,
+         auto_run_consecutive_failures = excluded.auto_run_consecutive_failures,
          book_summary_context_percent = excluded.book_summary_context_percent,
          context_compact_threshold = excluded.context_compact_threshold,
          agent_tools_json = excluded.agent_tools_json,
@@ -1095,6 +1114,12 @@ export class Store {
       nextEnabled ? 1 : 0,
       Math.min(8, Math.max(1, nextConcurrency)),
       Math.min(200, Math.max(1, nextBatchLimit)),
+      Math.min(10_000, Math.max(0, nextDailyTaskLimit)),
+      Math.min(10, Math.max(1, nextFailureThreshold)),
+      current.autoRunPaused ? 1 : 0,
+      String(current.autoRunPauseReason ?? ""),
+      current.autoRunResumeAt === null ? null : String(current.autoRunResumeAt),
+      Math.max(0, Number(current.autoRunConsecutiveFailures) || 0),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
       JSON.stringify(nextAgentTools),
@@ -1105,11 +1130,87 @@ export class Store {
       autoRunEnabled: nextEnabled,
       autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
+      autoRunDailyTaskLimit: Math.min(10_000, Math.max(0, nextDailyTaskLimit)),
+      autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
       agentTools: nextAgentTools
     });
     return this.getWorkAiSettings(workId);
+  }
+
+  clearAutoRunPause(workId: string): Record<string, unknown> {
+    this.getWork(workId);
+    const current = this.getWorkAiSettings(workId);
+    this.db.run(
+      `UPDATE work_ai_settings
+       SET auto_run_paused = 0, auto_run_pause_reason = '', auto_run_resume_at = NULL,
+           auto_run_consecutive_failures = 0, updated_at = ?
+       WHERE work_id = ?`,
+      now(),
+      workId
+    );
+    if (current.autoRunPaused) {
+      this.audit(workId, "task.auto-run.resumed", "work-ai-settings", workId, {
+        previousReason: current.autoRunPauseReason
+      });
+    }
+    return this.getWorkAiSettings(workId);
+  }
+
+  pauseAutoRun(workId: string, reason: string, resumeAt: string | null = null): Record<string, unknown> {
+    this.getWork(workId);
+    this.db.run(
+      `UPDATE work_ai_settings
+       SET auto_run_paused = 1, auto_run_pause_reason = ?, auto_run_resume_at = ?, updated_at = ?
+       WHERE work_id = ?`,
+      reason.slice(0, 500),
+      resumeAt,
+      now(),
+      workId
+    );
+    this.audit(workId, "task.auto-run.paused", "work-ai-settings", workId, { reason, resumeAt });
+    return this.getWorkAiSettings(workId);
+  }
+
+  recordAutoRunSuccess(workId: string): Record<string, unknown> {
+    this.getWork(workId);
+    this.db.run(
+      "UPDATE work_ai_settings SET auto_run_consecutive_failures = 0, updated_at = ? WHERE work_id = ?",
+      now(),
+      workId
+    );
+    return this.getWorkAiSettings(workId);
+  }
+
+  recordAutoRunFailure(workId: string, message: string, pauseImmediately = false): Record<string, unknown> {
+    return this.db.transaction(() => {
+      const current = this.getWorkAiSettings(workId);
+      const consecutiveFailures = Number(current.autoRunConsecutiveFailures) + 1;
+      const shouldPause = pauseImmediately || consecutiveFailures >= Number(current.autoRunFailureThreshold);
+      this.db.run(
+        `UPDATE work_ai_settings
+         SET auto_run_consecutive_failures = ?, auto_run_paused = ?,
+             auto_run_pause_reason = CASE WHEN ? = 1 THEN ? ELSE auto_run_pause_reason END,
+             auto_run_resume_at = CASE WHEN ? = 1 THEN NULL ELSE auto_run_resume_at END,
+             updated_at = ? WHERE work_id = ?`,
+        consecutiveFailures,
+        shouldPause ? 1 : 0,
+        shouldPause ? 1 : 0,
+        `连续任务失败，自动执行已暂停：${message}`.slice(0, 500),
+        shouldPause ? 1 : 0,
+        now(),
+        workId
+      );
+      if (shouldPause) {
+        this.audit(workId, "task.auto-run.paused", "work-ai-settings", workId, {
+          reason: "consecutive-failures",
+          consecutiveFailures,
+          message
+        });
+      }
+      return this.getWorkAiSettings(workId);
+    });
   }
 
   updateWork(workId: string, input: Partial<WorkInput>, expectedVersionNo?: number, source = "manual", sourceRef: string | null = null, changeNote = ""): Record<string, unknown> {
@@ -5907,7 +6008,8 @@ export class Store {
     const total = numberValue(statsRow, "total");
     const page = paginationSql(pagination);
     const rows = this.db.all(
-      `SELECT task.id, task.model_id, task.task_type, task.scope_json, task.status, task.progress, task.created_at, task.updated_at,
+      `SELECT task.id, task.model_id, task.task_type, task.scope_json, task.status, task.progress,
+        task.attempt_count, task.next_attempt_at, task.last_attempt_at, task.created_at, task.updated_at,
         model.display_name AS model_display_name, model.model_id AS model_api_id
        FROM analysis_tasks task
        LEFT JOIN models model ON model.id = task.model_id
@@ -5970,11 +6072,18 @@ export class Store {
     return this.db.transaction(() => {
       const current = this.getTask(taskId);
       if (current.status !== "pending") return null;
+      if (current.nextAttemptAt && String(current.nextAttemptAt) > now()) return null;
       if (runningLimit !== undefined && this.countRunningTasks(String(current.workId)) >= runningLimit) return null;
+      const timestamp = now();
       const claimed = this.db.run(
-        "UPDATE analysis_tasks SET status = 'running', progress = 5, updated_at = ? WHERE id = ? AND status = 'pending'",
-        now(),
-        taskId
+        `UPDATE analysis_tasks
+         SET status = 'running', progress = 5, attempt_count = attempt_count + 1,
+             next_attempt_at = NULL, last_attempt_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`,
+        timestamp,
+        timestamp,
+        taskId,
+        timestamp
       );
       return claimed.changes === 1 ? this.getTask(taskId) : null;
     });
@@ -5984,10 +6093,50 @@ export class Store {
     if (limit <= 0) return [];
     return this.db.all(
       `SELECT id FROM analysis_tasks WHERE work_id = ? AND status = 'pending'
+         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
        ORDER BY created_at ASC, id ASC LIMIT ?`,
       workId,
+      now(),
       limit
     ).map((row) => requiredString(row, "id"));
+  }
+
+  nextPendingTaskAttemptAt(workId: string): string | null {
+    const row = this.db.get(
+      `SELECT MIN(next_attempt_at) AS value FROM analysis_tasks
+       WHERE work_id = ? AND status = 'pending' AND next_attempt_at IS NOT NULL`,
+      workId
+    );
+    return row?.value === null || row?.value === undefined ? null : String(row.value);
+  }
+
+  countAutoRunAttemptsToday(workId: string): number {
+    const row = this.db.get(
+      `SELECT COUNT(*) AS value FROM analysis_tasks
+       WHERE work_id = ? AND last_attempt_at >= strftime('%Y-%m-%dT00:00:00.000Z', 'now')`,
+      workId
+    );
+    return numberValue(row ?? {}, "value");
+  }
+
+  rescheduleTask(taskId: string, failure: Record<string, unknown>, nextAttemptAt: string): Record<string, unknown> {
+    const current = this.getTask(taskId);
+    if (current.status !== "running") return current;
+    const failures = Array.isArray(current.failures) ? [...current.failures, failure].slice(-10) : [failure];
+    this.db.run(
+      `UPDATE analysis_tasks
+       SET status = 'pending', progress = 0, failure_json = ?, next_attempt_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'running'`,
+      JSON.stringify(failures),
+      nextAttemptAt,
+      now(),
+      taskId
+    );
+    this.audit(String(current.workId), "task.retry-scheduled", "analysis-task", taskId, {
+      attemptCount: current.attemptCount,
+      nextAttemptAt
+    });
+    return this.getTask(taskId);
   }
 
   countPendingTasks(workId: string): number {
@@ -6869,6 +7018,9 @@ export class Store {
       result: taskResult,
       failures: json(requiredString(row, "failure_json"), []),
       sourceVersions: json(requiredString(row, "source_versions_json"), {}),
+      attemptCount: numberValue(row, "attempt_count"),
+      nextAttemptAt: row.next_attempt_at === null || row.next_attempt_at === undefined ? null : String(row.next_attempt_at),
+      lastAttemptAt: row.last_attempt_at === null || row.last_attempt_at === undefined ? null : String(row.last_attempt_at),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -6889,6 +7041,9 @@ export class Store {
       scopeSummaryWithoutCharacterNames: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, new Map(), false),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
+      attemptCount: numberValue(row, "attempt_count"),
+      nextAttemptAt: row.next_attempt_at === null || row.next_attempt_at === undefined ? null : String(row.next_attempt_at),
+      lastAttemptAt: row.last_attempt_at === null || row.last_attempt_at === undefined ? null : String(row.last_attempt_at),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };

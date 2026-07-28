@@ -403,6 +403,8 @@ const workAiSettingsSchema = z.object({
   autoRunEnabled: z.boolean().optional(),
   autoRunConcurrency: z.number().int().min(1).max(8).optional(),
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
+  autoRunDailyTaskLimit: z.number().int().min(0).max(10_000).optional(),
+  autoRunFailureThreshold: z.number().int().min(1).max(10).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"])).max(5).optional()
@@ -1757,9 +1759,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.patch("/api/works/:workId/ai-settings", (request, response) => {
     const workId = request.params.workId;
-    const updated = store.updateWorkAiSettings(workId, parse(workAiSettingsSchema, request.body));
+    const input = parse(workAiSettingsSchema, request.body);
+    let updated = store.updateWorkAiSettings(workId, input);
     if (updated.autoRunEnabled) {
-      ai.scheduleAutoRun(workId);
+      if (input.autoRunEnabled === true) updated = ai.resumeAutoRun(workId);
+      else ai.scheduleAutoRun(workId);
     }
     data(response, updated);
   });
