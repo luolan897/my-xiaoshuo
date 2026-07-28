@@ -318,7 +318,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260728-hybrid-search-v1');
-    expect(page.text).toContain('/styles.css?v=20260728-hybrid-search-v1');
+    expect(page.text).toContain('/styles.css?v=20260729-hybrid-search-api-key-copy-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -393,7 +393,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".avatar-crop-selection");
     expect(styles.text).toContain(".avatar-crop-preview");
     expect(page.text).toContain('id="api-key-reset-button"');
+    expect(page.text).toContain('id="api-key-copy-button" class="ghost-button" type="button"><svg class="message-action-icon"');
     expect(page.text).toContain("新 Key 仅显示一次");
+    expect(styles.text).toContain(".api-key-result button { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; }");
     expect(application.text).toContain('api("/api/auth/api-key/reset"');
     expect(application.text).toContain('/analysis-types.js?v=20260721-analysis-descriptions');
     expect(analysisTypes.text).toContain('label: "世界观分析"');
