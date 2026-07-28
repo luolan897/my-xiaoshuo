@@ -1300,13 +1300,17 @@ export class AiManager {
     const resultLimit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 50)));
     const channelLimit = Math.min(200, Math.max(50, resultLimit * 4));
     const accepts = (type: string): type is HybridSearchType => requestedTypes.has(type as HybridSearchType);
+    const metadataDetails = new Map<string, Record<string, unknown>>();
 
     const metadataCandidates = this.store.search(workId, normalizedQuery).flatMap((item): HybridSearchCandidate[] => {
       const type = String(item.type);
       const itemId = String(item.id ?? "");
       if (!itemId || !accepts(type)) return [];
+      const key = `${type}:${itemId}`;
+      const { type: _type, id: _id, title: _title, snippet: _snippet, ...details } = item;
+      metadataDetails.set(key, { ...(metadataDetails.get(key) ?? {}), ...details });
       return [{
-        key: `${type}:${itemId}`,
+        key,
         type,
         id: itemId,
         title: String(item.title ?? "未命名资料"),
@@ -1329,7 +1333,10 @@ export class AiManager {
       { weight: 1.4, candidates: metadataCandidates },
       { weight: 1, candidates: exactCandidates },
       { weight: 0.55, candidates: phoneticCandidates }
-    ], resultLimit);
+    ], resultLimit).map((item) => ({
+      ...(metadataDetails.get(`${item.type}:${item.id}`) ?? {}),
+      ...item
+    }));
   }
 
   private hybridChapterMatches(
