@@ -1,6 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { cliResourceDefinitions, cliResourceTypes, cliWorkDefinition, type CliResourceType } from "./cli-contract.js";
 import type { LocalServerOptions } from "./server-runtime.js";
 
@@ -299,6 +301,21 @@ function requestConfig(parsed: ParsedArguments, path: string): CliRequestConfig 
 }
 
 async function apiRequest(fetchImpl: typeof fetch, config: CliRequestConfig, path: string, options: RequestOptions = {}): Promise<unknown> {
+  const response = await apiResponse(fetchImpl, config, path, options);
+  const text = await response.text();
+  if (options.text) return text;
+  if (!text) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new CliError("CLI_RESPONSE_INVALID", "服务端返回了无效 JSON");
+  }
+  if (payload && typeof payload === "object" && "data" in payload) return (payload as { data: unknown }).data;
+  return payload;
+}
+
+async function apiResponse(fetchImpl: typeof fetch, config: CliRequestConfig, path: string, options: RequestOptions = {}): Promise<Response> {
   const response = await fetchImpl(`${config.server}${path}`, {
     method: options.method ?? "GET",
     headers: {
@@ -310,8 +327,8 @@ async function apiRequest(fetchImpl: typeof fetch, config: CliRequestConfig, pat
   }).catch((error: unknown) => {
     throw new CliError("CLI_NETWORK_ERROR", error instanceof Error ? error.message : "无法连接服务端");
   });
-  const text = await response.text();
   if (!response.ok) {
+    const text = await response.text();
     let payload: unknown;
     try {
       payload = JSON.parse(text);
@@ -327,16 +344,27 @@ async function apiRequest(fetchImpl: typeof fetch, config: CliRequestConfig, pat
       remote?.details
     );
   }
-  if (options.text) return text;
-  if (!text) return null;
-  let payload: unknown;
+  return response;
+}
+
+async function downloadToFile(fetchImpl: typeof fetch, config: CliRequestConfig, path: string, outputPath: string, cwd: string): Promise<{ outputPath: string; bytes: number; contentType: string | null }> {
+  const resolvedPath = isAbsolute(outputPath) ? outputPath : resolve(cwd, outputPath);
+  if (existsSync(resolvedPath)) throw new CliError("CLI_OUTPUT_EXISTS", `输出文件已存在：${resolvedPath}`);
+  const response = await apiResponse(fetchImpl, config, path);
+  if (!response.body) throw new CliError("CLI_RESPONSE_INVALID", "服务端没有返回导出文件内容");
+  let bytes = 0;
+  const counter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytes += chunk.byteLength;
+      callback(null, chunk);
+    }
+  });
   try {
-    payload = JSON.parse(text);
-  } catch {
-    throw new CliError("CLI_RESPONSE_INVALID", "服务端返回了无效 JSON");
+    await pipeline(Readable.from(response.body as unknown as AsyncIterable<Uint8Array>), counter, createWriteStream(resolvedPath, { flags: "wx" }));
+  } catch (error) {
+    throw new CliError("CLI_DOWNLOAD_FAILED", `导出文件写入失败：${error instanceof Error ? error.message : "未知错误"}`, { outputPath: resolvedPath });
   }
-  if (payload && typeof payload === "object" && "data" in payload) return (payload as { data: unknown }).data;
-  return payload;
+  return { outputPath: resolvedPath, bytes, contentType: response.headers.get("content-type") };
 }
 
 function resourceType(value: string): CliResourceType {
@@ -459,7 +487,7 @@ function helpText(): string {
   scriverse work get <workId>
   scriverse work history <workId>
   scriverse work restore <workId> --version <number>
-  scriverse manuscript get <workId> [--format json|markdown|txt]
+  scriverse manuscript get <workId> [--format json|markdown|txt] [--output <path>]
   scriverse search <workId> --query <text>
   scriverse audit <workId>
 
@@ -708,13 +736,25 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
   }
 
   if (group === "manuscript" && action === "get") {
-    assertAllowedOptions(parsed, ["format"]);
+    assertAllowedOptions(parsed, ["format", "output"]);
     const workId = requiredPosition(parsed.positionals, 2, "workId");
     assertPositionCount(parsed.positionals, 3);
     const format = option(parsed, "format") ?? "json";
     if (!["json", "markdown", "txt"].includes(format)) throw new CliError("CLI_FORMAT_INVALID", "format 必须是 json、markdown 或 txt");
     if (format === "json") {
+      if (option(parsed, "output")) throw new CliError("CLI_OUTPUT_UNSUPPORTED", "JSON 格式直接输出到标准输出，不支持 --output");
       emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}`), compact);
+    } else if (format === "markdown") {
+      const outputPath = option(parsed, "output") ?? `novel-${workId}.zip`;
+      emitJson(dependencies.stdout, {
+        format,
+        ...(await downloadToFile(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/export?format=${format}`, outputPath, dependencies.cwd))
+      }, compact);
+    } else if (option(parsed, "output")) {
+      emitJson(dependencies.stdout, {
+        format,
+        ...(await downloadToFile(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/export?format=${format}`, option(parsed, "output")!, dependencies.cwd))
+      }, compact);
     } else {
       emitText(dependencies.stdout, String(await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/export?format=${format}`, { text: true })));
     }

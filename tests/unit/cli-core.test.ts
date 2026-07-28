@@ -250,6 +250,43 @@ describe("Scriverse CLI 核心", () => {
     expect(JSON.parse(stdout.text())).toEqual({ id: "chapter-1", versionNo: 2 });
   });
 
+  it("把服务端 Markdown ZIP 导出流写入文件且拒绝覆盖", async () => {
+    const root = temporaryRoot();
+    const configPath = join(root, "cli.json");
+    const outputPath = join(root, "novel.zip");
+    writeFileSync(configPath, JSON.stringify({
+      version: 2,
+      defaultServer: "http://127.0.0.1:13210",
+      servers: {
+        "http://127.0.0.1:13210": {
+          apiKey: "scrv_test_key",
+          apiKeyPrefix: "scrv_test",
+          user: { userId: "user-1", username: "writer", displayName: "Writer", role: "user" }
+        }
+      }
+    }));
+    const archive = Buffer.from("server-generated-zip");
+    const fetchImpl = (async (input: string | URL | Request) => {
+      expect(String(input)).toBe("http://127.0.0.1:13210/api/works/work-1/export?format=markdown");
+      return new Response(archive, { status: 200, headers: { "Content-Type": "application/zip" } });
+    }) as typeof fetch;
+    const stdout = outputCapture();
+    const stderr = outputCapture();
+
+    expect(await runCli([
+      "manuscript", "get", "work-1", "--format", "markdown", "--output", outputPath, "--config", configPath
+    ], { fetchImpl, stdout: stdout.stream, stderr: stderr.stream })).toBe(0);
+    expect(stderr.text()).toBe("");
+    expect(JSON.parse(stdout.text())).toMatchObject({ format: "markdown", outputPath, bytes: archive.byteLength, contentType: "application/zip" });
+    expect(readFileSync(outputPath)).toEqual(archive);
+
+    const overwriteError = outputCapture();
+    expect(await runCli([
+      "manuscript", "get", "work-1", "--format", "markdown", "--output", outputPath, "--config", configPath
+    ], { fetchImpl, stdout: outputCapture().stream, stderr: overwriteError.stream })).toBe(1);
+    expect(JSON.parse(overwriteError.text())).toMatchObject({ error: { code: "CLI_OUTPUT_EXISTS" } });
+  });
+
   it("未登录的数据命令和未开放命令返回结构化错误", async () => {
     const root = temporaryRoot();
     const stdout = outputCapture();
