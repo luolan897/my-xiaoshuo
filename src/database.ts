@@ -2222,6 +2222,35 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(53)) {
+      this.transaction(() => {
+        const timestamp = new Date().toISOString();
+        this.run(
+          `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+           SELECT work_id, source_type, source_id, ? FROM relationship_source_search WHERE true
+           ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+          timestamp
+        );
+        this.run(
+          `INSERT INTO relationship_source_index_queue(work_id, source_type, source_id, queued_at)
+           SELECT work_id, 'chapter', id, ? FROM chapters WHERE deleted_at IS NULL
+           ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+          timestamp
+        );
+        this.run(
+          `UPDATE relationship_source_index_state SET status = 'queued', error = '', updated_at = ?
+           WHERE work_id IN (SELECT DISTINCT work_id FROM relationship_source_index_queue)`,
+          timestamp
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (53, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {

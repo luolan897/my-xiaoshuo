@@ -16,6 +16,7 @@ import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
+import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { Store, versionedEntityTypes } from "./store.js";
 import { parsePagination } from "./pagination.js";
@@ -1564,6 +1565,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.listReviewItemsPage(request.params.workId, pagination, status) : store.listReviewItems(request.params.workId, status));
   });
   app.post("/api/works/:workId/reviews", (request, response) => data(response, store.createReviewItem(request.params.workId, parse(reviewSchema, request.body)), 201));
+  app.get("/api/reviews/:reviewId", (request, response) => data(response, store.getReviewItem(request.params.reviewId)));
   app.patch("/api/reviews/:reviewId", (request, response) => data(response, store.updateReviewItem(request.params.reviewId, parse(reviewSchema.partial(), request.body))));
   app.post("/api/reviews/:reviewId/character-resolution", (request, response) => {
     const input = parse(z.discriminatedUnion("action", [
@@ -1993,9 +1995,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? ai.listCallsPage(request.params.workId, pagination) : ai.listCalls(request.params.workId));
   });
 
-  app.get("/api/works/:workId/search", (request, response) => {
-    const query = parse(z.string().trim().min(1).max(500), request.query.q);
-    data(response, store.search(request.params.workId, query));
+  app.get("/api/works/:workId/search", async (request, response) => {
+    const query = parse(z.object({
+      q: z.string().trim().min(1).max(500),
+      type: z.enum(HYBRID_SEARCH_TYPES).optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional()
+    }).strict(), request.query);
+    data(response, await ai.searchWork(request.params.workId, query.q, { type: query.type, limit: query.limit }));
   });
   app.get("/api/works/:workId/export", async (request, response) => {
     const format = parse(z.enum(["json", "txt", "markdown"]), request.query.format ?? "json");

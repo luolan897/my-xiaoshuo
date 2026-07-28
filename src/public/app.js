@@ -33,7 +33,7 @@ import {
   taskScopeLabel,
   timelineStatusLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260726-anthropic-messages-v2";
+} from "/display-labels.js?v=20260728-hybrid-search-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -42,7 +42,7 @@ import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
-import { resolveGlobalSearchTarget } from "/global-search.js?v=20260726-search-result-details";
+import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
@@ -1364,7 +1364,7 @@ const AI_TOOL_DESCRIPTIONS = {
   story_index: "分页读取当前作品的卷章目录和章节概要。",
   read_chapters: "读取指定章节的概要、正文或两者。",
   grep: "查询正文关键字所在的完整段落及章节信息。",
-  search_story_entities: "按实体名或关键词子串匹配设定、人物、组织等结构化记录；非语义检索。",
+  search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。"
 };
 
@@ -3010,24 +3010,40 @@ async function openSearchDialog() {
   }
   $("#search-dialog .eyebrow").textContent = `当前作品 · 《${state.work.title}》`;
   $("#search-query").value = "";
+  $("#search-type").value = "";
   $("#search-results").innerHTML = '<p class="search-results-empty">输入关键词后开始检索。</p>';
   $("#search-dialog").showModal();
   queueMicrotask(() => $("#search-query").focus());
 }
 
-function renderSearchResults(results) {
+function highlightedSearchText(value, query) {
+  return splitGlobalSearchHighlight(value, query)
+    .map((segment) => segment.match ? `<mark>${esc(segment.text)}</mark>` : esc(segment.text))
+    .join("");
+}
+
+function renderSearchResults(results, query) {
   if (!results.length) {
     $("#search-results").innerHTML = '<p class="search-results-status">未找到相关内容。</p>';
     return;
   }
-  $("#search-results").innerHTML = results.map((item) => `
-    <button type="button" class="search-result" data-search-type="${esc(item.type)}" data-search-id="${esc(item.id)}">
-      <div class="search-result-meta"><span>${esc(searchResultTypeLabel(item.type))}</span><strong>${esc(item.title)}</strong></div>
-      <p>${esc(item.snippet || "无摘要")}</p>
-    </button>`).join("");
-  $("#search-results").querySelectorAll(".search-result").forEach((button) => {
+  const matchKindLabel = { metadata: "资料命中", exact: "精确命中", phonetic: "拼音命中" };
+  $("#search-results").innerHTML = `<p class="search-results-summary">找到 ${results.length} 条结果，按综合相关度排序。</p>${results.map((item) => {
+    const matchKinds = Array.isArray(item.matchKinds) ? item.matchKinds : [];
+    const lineRange = Number.isInteger(item.startLine)
+      ? `<span class="search-result-chip">${item.startLine === item.endLine ? `第 ${item.startLine} 行` : `第 ${item.startLine}-${item.endLine} 行`}</span>`
+      : "";
+    const subtitle = item.subtitle ? `<small>${esc(item.subtitle)}</small>` : "";
+    return `
+    <button type="button" class="search-result">
+      <div class="search-result-meta"><span>${esc(searchResultTypeLabel(item.type))}</span><strong>${highlightedSearchText(item.title, query)}</strong></div>
+      <p>${highlightedSearchText(item.snippet || "无摘要", query)}</p>
+      <div class="search-result-details">${subtitle}${lineRange}${matchKinds.map((kind) => `<span class="search-result-chip search-result-chip-${esc(kind)}">${esc(matchKindLabel[kind] ?? kind)}</span>`).join("")}</div>
+    </button>`;
+  }).join("")}`;
+  $("#search-results").querySelectorAll(".search-result").forEach((button, index) => {
     button.addEventListener("click", () => {
-      openSearchResult({ type: button.dataset.searchType, id: button.dataset.searchId })
+      openSearchResult(results[index])
         .catch((error) => toast(error.message, "error"));
     });
   });
@@ -3041,8 +3057,50 @@ async function runWorkSearch() {
     return;
   }
   $("#search-results").innerHTML = '<p class="search-results-status">正在检索……</p>';
-  const results = await api(`/api/works/${encodeURIComponent(state.work.id)}/search?q=${encodeURIComponent(query)}`);
-  renderSearchResults(results);
+  const parameters = new URLSearchParams({ q: query });
+  const type = $("#search-type").value;
+  if (type) parameters.set("type", type);
+  const results = await api(`/api/works/${encodeURIComponent(state.work.id)}/search?${parameters}`);
+  renderSearchResults(results, query);
+}
+
+function revealChapterSearchLines(startLine, endLine) {
+  const start = Math.max(0, Number(startLine) - 1);
+  const end = Math.max(start, Number(endLine ?? startLine) - 1);
+  const input = $("#chapter-content");
+  const selection = selectedChapterLinePayload(start, end);
+  chapterLineSelection = { start: selection.safeStart, end: selection.safeEnd };
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(selection.startOffset, selection.startOffset + selection.text.length);
+  scheduleChapterLineNumbers();
+  requestAnimationFrame(() => {
+    paintChapterLineSelection(selection.safeStart, selection.safeEnd);
+    const row = $("#chapter-line-numbers-inner").querySelector(`[data-line-index="${selection.safeStart}"]`);
+    if (row) input.scrollTop = Math.max(0, row.offsetTop - input.clientHeight / 3);
+    syncChapterLineNumberScroll();
+  });
+}
+
+function openSearchEntityPreview(result, item) {
+  const rowsByType = {
+    "timeline-track": [["时间轴名称", item.name], ["简介", item.description], ["排序", item.sortOrder]],
+    "timeline-event": [["事件名称", item.name], ["时间", item.timeLabel], ["类型", item.eventType], ["地点", item.location], ["说明", item.description], ["状态", item.status]],
+    relationship: [["关系", result.title], ["大类", relationshipCategoryLabel(item.category)], ["子类", item.subtype], ["关键词", Array.isArray(item.keywords) ? item.keywords.join("、") : ""], ["当前状态", item.currentStatus], ["置信度", typeof item.confidence === "number" ? `${Math.round(item.confidence * 100)}%` : ""]],
+    "chapter-outline": [["章节", item.chapterTitle], ["本章目标", item.goal], ["核心冲突", item.conflict], ["关键转折", item.turningPoint], ["补充说明", item.notes], ["规划状态", outlineStatusLabel(item.status)]],
+    foreshadow: [["伏笔名称", item.title], ["内容与作用", item.description], ["重要程度", levelLabel(item.importance)], ["状态", foreshadowStatusLabel(item.status)], ["回收结论", item.resolutionNote]]
+  };
+  const rows = rowsByType[result.type] ?? [];
+  const content = rows
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+    .map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`)
+    .join("");
+  openDialog(
+    result.title || searchResultTypeLabel(result.type),
+    `<dl class="search-result-preview">${content || "<div><dt>详情</dt><dd>暂无补充信息</dd></div>"}</dl>`,
+    async () => undefined,
+    searchResultTypeLabel(result.type),
+    { submitLabel: "关闭", hideCancel: true, wide: true }
+  );
 }
 
 async function openSearchResult(result) {
@@ -3055,6 +3113,10 @@ async function openSearchResult(result) {
   if (inSettings) await returnFromSettings();
   if (target.kind === "chapter") {
     await selectChapter(target.id);
+    if (state.chapter?.id === target.id && target.startLine) {
+      revealChapterSearchLines(target.startLine, target.endLine);
+      toast(target.startLine === target.endLine ? `已定位到第 ${target.startLine} 行` : `已定位到第 ${target.startLine}-${target.endLine} 行`);
+    }
     return;
   }
   await showModule(target.module);
@@ -3064,6 +3126,10 @@ async function openSearchResult(result) {
   if (target.entity === "character") await openCharacterEditor(item, { readOnly: true });
   if (target.entity === "race") await openRaceDialog(item, { readOnly: true });
   if (target.entity === "organization") await openOrganizationDialog(item, { readOnly: true });
+  if (target.entity === "review") openReviewDetailDialog(item);
+  if (["timeline-track", "timeline-event", "relationship", "chapter-outline", "foreshadow"].includes(target.entity)) {
+    openSearchEntityPreview(result, item);
+  }
 }
 
 async function showSettingsHub() {
@@ -5703,7 +5769,7 @@ async function renderBookAiSettings() {
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
