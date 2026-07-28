@@ -403,6 +403,26 @@ function softDeleteChapter(work, chapter, batch = false) {
   syncWorkChapters(work);
 }
 
+function permanentlyDeleteChapter(work, chapter) {
+  const detail = {
+    title: chapter.title,
+    volumeId: chapter.volumeId,
+    versionNo: chapter.versionNo,
+    recoverable: false
+  };
+  work.chapters = work.chapters.filter((item) => item.id !== chapter.id);
+  work.chapterAnnotations = work.chapterAnnotations.filter((annotation) => annotation.chapterId !== chapter.id);
+  work.outlines = work.outlines.filter((outline) => outline.chapterId !== chapter.id);
+  for (const item of [...work.timeline, ...work.relationships]) {
+    if (Array.isArray(item.evidence)) item.evidence = item.evidence.filter((evidence) => evidence.chapterId !== chapter.id);
+  }
+  for (const foreshadow of work.foreshadows) {
+    if (Array.isArray(foreshadow.occurrences)) foreshadow.occurrences = foreshadow.occurrences.filter((occurrence) => occurrence.chapterId !== chapter.id);
+  }
+  recordAudit(work, "chapter.purged", "chapter", chapter.id, detail);
+  syncWorkChapters(work);
+}
+
 function writingProgress(work) {
   const currentWords = work.wordCount;
   const today = new Date();
@@ -776,6 +796,16 @@ async function mockApi(input, init = {}) {
     recordChapterVersion(found.chapter, "restore", `恢复至 v${Number(body.versionNo)}`);
     recordAudit(found.work, "chapter.restored", "chapter", found.chapter.id, { versionNo: found.chapter.versionNo, fromVersion: Number(body.versionNo) });
     return success(found.chapter);
+  }
+  match = path.match(/^\/api\/chapters\/([^/]+)\/permanent$/u);
+  if (match && method === "DELETE") {
+    const found = findChapterRecord(decodeURIComponent(match[1]), true);
+    if (!found) return failure("未找到章节");
+    if (!found.chapter.deletedAt) return failure("仅回收站中的章节可以彻底删除", 409);
+    const body = await bodyOf(init);
+    if (body.expectedVersionNo !== undefined && found.chapter.versionNo !== Number(body.expectedVersionNo)) return failure("章节版本已变化，请刷新后重试", 409);
+    permanentlyDeleteChapter(found.work, found.chapter);
+    return success(null, 204);
   }
   match = path.match(/^\/api\/chapters\/([^/]+)\/versions$/u);
   if (match) {
