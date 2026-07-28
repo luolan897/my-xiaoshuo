@@ -21,6 +21,12 @@ function outputCapture(): { stream: { write: (chunk: string) => void }; text: ()
   };
 }
 
+function jsonFile(root: string, name: string, value: Record<string, unknown>): string {
+  const path = join(root, name);
+  writeFileSync(path, `${JSON.stringify(value)}\n`);
+  return path;
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -285,6 +291,80 @@ describe("Scriverse CLI 核心", () => {
       "manuscript", "get", "work-1", "--format", "markdown", "--output", outputPath, "--config", configPath
     ], { fetchImpl, stdout: outputCapture().stream, stderr: overwriteError.stream })).toBe(1);
     expect(JSON.parse(overwriteError.text())).toMatchObject({ error: { code: "CLI_OUTPUT_EXISTS" } });
+  });
+
+  it("支持写作目标、章节移动与批量管理命令", async () => {
+    const root = temporaryRoot();
+    const configPath = join(root, "cli.json");
+    writeFileSync(configPath, JSON.stringify({
+      version: 2,
+      defaultServer: "http://127.0.0.1:13210",
+      servers: {
+        "http://127.0.0.1:13210": {
+          apiKey: "scrv_test_key",
+          apiKeyPrefix: "scrv_test",
+          user: { userId: "user-1", username: "writer", displayName: "Writer", role: "user" }
+        }
+      }
+    }));
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+      return new Response(JSON.stringify({ data: { ok: true } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const run = (args: string[]) => runCli([...args, "--config", configPath], { fetchImpl, stdout: outputCapture().stream, stderr: outputCapture().stream });
+    const goalPath = jsonFile(root, "goal.json", { dailyGoal: 2000, targetTotal: 120000, deadline: "2026-12-31" });
+    const movePath = jsonFile(root, "move.json", { volumeId: "volume-2", sortOrder: 0, expectedVersionNo: 2 });
+    const batchBody = { chapters: [{ id: "chapter-1", expectedVersionNo: 3 }], action: { type: "setAnalysisExclusion", excludedFromAnalysis: true } };
+    const batchPath = jsonFile(root, "batch.json", batchBody);
+
+    expect(await run(["writing", "progress", "work-1"])).toBe(0);
+    expect(await run(["writing", "goal", "work-1", "--input", goalPath])).toBe(0);
+    expect(await run(["chapter", "move", "chapter-1", "--input", movePath])).toBe(0);
+    expect(await run(["chapter", "batch", "work-1", "--input", batchPath])).toBe(0);
+    expect(calls).toEqual([
+      { url: "http://127.0.0.1:13210/api/works/work-1/writing-progress", method: "GET", body: null },
+      { url: "http://127.0.0.1:13210/api/works/work-1/writing-goal", method: "PUT", body: { dailyGoal: 2000, targetTotal: 120000, deadline: "2026-12-31" } },
+      { url: "http://127.0.0.1:13210/api/chapters/chapter-1/move", method: "POST", body: { volumeId: "volume-2", sortOrder: 0, expectedVersionNo: 2 } },
+      { url: "http://127.0.0.1:13210/api/works/work-1/chapters/batch", method: "POST", body: batchBody }
+    ]);
+  });
+
+  it("支持正文批注的完整管理命令", async () => {
+    const root = temporaryRoot();
+    const configPath = join(root, "cli.json");
+    writeFileSync(configPath, JSON.stringify({
+      version: 2,
+      defaultServer: "http://127.0.0.1:13210",
+      servers: {
+        "http://127.0.0.1:13210": {
+          apiKey: "scrv_test_key",
+          apiKeyPrefix: "scrv_test",
+          user: { userId: "user-1", username: "writer", displayName: "Writer", role: "user" }
+        }
+      }
+    }));
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ data: { id: "annotation-1" } }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const run = (args: string[]) => runCli([...args, "--config", configPath], { fetchImpl, stdout: outputCapture().stream, stderr: outputCapture().stream });
+    const createBody = { kind: "todo", startLine: 2, endLine: 3, note: "补充过渡" };
+    const createPath = jsonFile(root, "annotation-create.json", createBody);
+    const updatePath = jsonFile(root, "annotation-update.json", { status: "resolved", expectedVersionNo: 1 });
+
+    expect(await run(["annotation", "list", "chapter-1"])).toBe(0);
+    expect(await run(["annotation", "create", "chapter-1", "--input", createPath])).toBe(0);
+    expect(await run(["annotation", "update", "annotation-1", "--input", updatePath])).toBe(0);
+    expect(await run(["annotation", "delete", "annotation-1", "--expected-version", "2"])).toBe(0);
+    expect(calls).toEqual([
+      { url: "http://127.0.0.1:13210/api/chapters/chapter-1/annotations", method: "GET", body: null },
+      { url: "http://127.0.0.1:13210/api/chapters/chapter-1/annotations", method: "POST", body: createBody },
+      { url: "http://127.0.0.1:13210/api/chapter-annotations/annotation-1", method: "PATCH", body: { status: "resolved", expectedVersionNo: 1 } },
+      { url: "http://127.0.0.1:13210/api/chapter-annotations/annotation-1", method: "DELETE", body: { expectedVersionNo: 2 } }
+    ]);
   });
 
   it("未登录的数据命令和未开放命令返回结构化错误", async () => {

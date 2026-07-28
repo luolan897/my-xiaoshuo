@@ -49,7 +49,7 @@ type CliRequestConfig = CliServerCredentials & {
 };
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "PUT" | "PATCH";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: Record<string, unknown>;
   text?: boolean;
 };
@@ -490,6 +490,8 @@ function helpText(): string {
   scriverse manuscript get <workId> [--format json|markdown|txt] [--output <path>]
   scriverse search <workId> --query <text>
   scriverse audit <workId>
+  scriverse writing progress <workId>
+  scriverse annotation list <chapterId>
 
 编辑：
   scriverse work create --input <json-file|->
@@ -500,6 +502,12 @@ function helpText(): string {
   scriverse resource update <type> <id> --input <json-file|-> [--change-note <text>]
   scriverse resource history <type> <id>
   scriverse resource restore <type> <id> --version <number>
+  scriverse writing goal <workId> --input <json-file|->
+  scriverse chapter move <chapterId> --input <json-file|->
+  scriverse chapter batch <workId> --input <json-file|->
+  scriverse annotation create <chapterId> --input <json-file|->
+  scriverse annotation update <annotationId> --input <json-file|->
+  scriverse annotation delete <annotationId> [--expected-version <number>]
 
 AI 编辑辅助：
   scriverse schema list
@@ -521,7 +529,13 @@ function schemaList(): Record<string, unknown> {
       longText: "使用可重复的 --field-file field=path 注入长文本字段",
       history: "版本化资源更新时使用 --change-note 说明修改原因"
     },
-    prohibited: ["用户管理", "作品成员管理", "系统管理", "AI 供应商与模型管理", "删除操作", "任意 HTTP 请求"],
+    commands: {
+      writing: ["progress", "goal"],
+      chapter: ["move", "batch"],
+      annotation: ["list", "create", "update", "delete"],
+      manuscript: ["get"]
+    },
+    prohibited: ["用户管理", "作品成员管理", "系统管理", "AI 供应商与模型管理", "永久删除及作品、分卷、知识实体删除", "任意 HTTP 请求"],
     resources: cliResourceTypes.map((type) => ({
       type,
       description: cliResourceDefinitions[type].description,
@@ -675,7 +689,7 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知 schema 命令");
   }
 
-  if (!["work", "manuscript", "search", "audit", "resource"].includes(group)) {
+  if (!["work", "manuscript", "search", "audit", "resource", "writing", "chapter", "annotation"].includes(group)) {
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知命令；使用 --help 查看可用命令");
   }
   const config = requestConfig(parsed, path);
@@ -777,6 +791,77 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
     assertPositionCount(parsed.positionals, 2);
     emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/audit-logs`), compact);
     return;
+  }
+
+  if (group === "writing") {
+    const workId = requiredPosition(parsed.positionals, 2, "workId");
+    assertPositionCount(parsed.positionals, 3);
+    if (action === "progress") {
+      assertAllowedOptions(parsed, []);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/writing-progress`), compact);
+      return;
+    }
+    if (action === "goal") {
+      assertAllowedOptions(parsed, ["input", "field-file"]);
+      const body = await editInput(parsed, dependencies, false);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/writing-goal`, { method: "PUT", body }), compact);
+      return;
+    }
+    throw new CliError("CLI_COMMAND_UNKNOWN", "未知 writing 命令");
+  }
+
+  if (group === "chapter") {
+    const id = requiredPosition(parsed.positionals, 2, action === "batch" ? "workId" : "chapterId");
+    assertPositionCount(parsed.positionals, 3);
+    if (action === "move") {
+      assertAllowedOptions(parsed, ["input", "field-file"]);
+      const body = await editInput(parsed, dependencies, false);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/chapters/${encoded(id)}/move`, { method: "POST", body }), compact);
+      return;
+    }
+    if (action === "batch") {
+      assertAllowedOptions(parsed, ["input", "field-file"]);
+      const body = await editInput(parsed, dependencies, false);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(id)}/chapters/batch`, { method: "POST", body }), compact);
+      return;
+    }
+    throw new CliError("CLI_COMMAND_UNKNOWN", "未知 chapter 命令");
+  }
+
+  if (group === "annotation") {
+    const id = requiredPosition(parsed.positionals, 2, action === "list" || action === "create" ? "chapterId" : "annotationId");
+    assertPositionCount(parsed.positionals, 3);
+    if (action === "list") {
+      assertAllowedOptions(parsed, []);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/chapters/${encoded(id)}/annotations`), compact);
+      return;
+    }
+    if (action === "create") {
+      assertAllowedOptions(parsed, ["input", "field-file"]);
+      const body = await editInput(parsed, dependencies, false);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/chapters/${encoded(id)}/annotations`, { method: "POST", body }), compact);
+      return;
+    }
+    if (action === "update") {
+      assertAllowedOptions(parsed, ["input", "field-file"]);
+      const body = await editInput(parsed, dependencies, false);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/chapter-annotations/${encoded(id)}`, { method: "PATCH", body }), compact);
+      return;
+    }
+    if (action === "delete") {
+      assertAllowedOptions(parsed, ["expected-version"]);
+      const expectedVersion = option(parsed, "expected-version");
+      const expectedVersionNo = expectedVersion === undefined ? undefined : Number(expectedVersion);
+      if (expectedVersionNo !== undefined && (!Number.isInteger(expectedVersionNo) || expectedVersionNo <= 0)) {
+        throw new CliError("CLI_VERSION_INVALID", "请使用 --expected-version 提供正整数版本号");
+      }
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/chapter-annotations/${encoded(id)}`, {
+        method: "DELETE",
+        body: expectedVersionNo === undefined ? {} : { expectedVersionNo }
+      }), compact);
+      return;
+    }
+    throw new CliError("CLI_COMMAND_UNKNOWN", "未知 annotation 命令");
   }
 
   if (group === "resource") {

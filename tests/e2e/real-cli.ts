@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
+import JSZip from "jszip";
 import type { CliResourceType } from "../../src/cli-contract.js";
 
 type SessionCredentials = {
@@ -309,6 +310,49 @@ async function run(): Promise<void> {
   assert.equal(updatedChapter.content, "林舟抵达北港。\n\n潮声盖过了远处的警报。");
   assert.equal(historyResource("chapter", chapterId)[0]?.changeNote, "重写开场并补充警报");
 
+  const writingGoal = cliJson(["writing", "goal", workId, "--input", jsonFile("writing-goal", {
+    dailyGoal: 2000,
+    targetTotal: 120000,
+    deadline: "2026-12-31"
+  })]) as Record<string, unknown>;
+  assert.equal((writingGoal.goal as Record<string, unknown>).dailyGoal, 2000);
+  assert.equal((writingGoal.goal as Record<string, unknown>).targetTotal, 120000);
+  assert.equal((writingGoal.goal as Record<string, unknown>).deadline, "2026-12-31");
+  const writingProgress = cliJson(["writing", "progress", workId]) as Record<string, unknown>;
+  assert.ok(Number(writingProgress.currentWords) > 0);
+
+  const annotation = cliJson(["annotation", "create", chapterId, "--input", jsonFile("annotation-create", {
+    kind: "todo",
+    startLine: 1,
+    endLine: 2,
+    note: "补充抵达与警报之间的动作"
+  })]) as Record<string, unknown>;
+  const annotationId = String(annotation.id);
+  assert.ok((cliJson(["annotation", "list", chapterId]) as Array<Record<string, unknown>>).some((item) => item.id === annotationId));
+  const resolvedAnnotation = cliJson(["annotation", "update", annotationId, "--input", jsonFile("annotation-update", {
+    status: "resolved",
+    expectedVersionNo: 1
+  })]) as Record<string, unknown>;
+  assert.equal(resolvedAnnotation.status, "resolved");
+  assert.equal(cliJson(["annotation", "delete", annotationId, "--expected-version", "2"]), null);
+  assert.deepEqual(cliJson(["annotation", "list", chapterId]), []);
+
+  const secondVolume = createResource("volume", workId, { title: "第二卷", kind: "main" });
+  const movedChapter = cliJson(["chapter", "move", chapterId, "--input", jsonFile("chapter-move", {
+    volumeId: secondVolume.id,
+    sortOrder: 0,
+    expectedVersionNo: 2
+  })]) as Record<string, unknown>;
+  assert.equal(movedChapter.volumeId, secondVolume.id);
+  assert.equal(movedChapter.versionNo, 3);
+  const batchResult = cliJson(["chapter", "batch", workId, "--input", jsonFile("chapter-batch", {
+    chapters: [{ id: chapterId, expectedVersionNo: 3 }],
+    action: { type: "setAnalysisExclusion", excludedFromAnalysis: true }
+  })]) as Record<string, unknown>;
+  assert.deepEqual(batchResult, { processed: 1, action: "setAnalysisExclusion" });
+  assert.equal(getResource("chapter", chapterId)?.excludedFromAnalysis, true);
+  checked("recent-authoring-commands", "writing goals, annotations, chapter move and batch management passed through the compiled CLI");
+
   const setting = createResource("setting", workId, {
     title: "北港",
     category: "地点",
@@ -431,7 +475,11 @@ async function run(): Promise<void> {
 
   const manuscriptJson = cliJson(["manuscript", "get", workId, "--format", "json"]) as Record<string, unknown>;
   assert.equal(manuscriptJson.id, workId);
-  const manuscriptMarkdown = cli(["manuscript", "get", workId, "--format", "markdown"]).stdout;
+  const manuscriptArchivePath = join(root, "manuscript.zip");
+  const manuscriptExport = cliJson(["manuscript", "get", workId, "--format", "markdown", "--output", manuscriptArchivePath]) as Record<string, unknown>;
+  assert.equal(manuscriptExport.contentType, "application/zip");
+  const manuscriptArchive = await JSZip.loadAsync(readFileSync(manuscriptArchivePath));
+  const manuscriptMarkdown = await manuscriptArchive.file(`novel-${workId}.md`)?.async("string") ?? "";
   assert.match(manuscriptMarkdown, /# 第一卷/u);
   assert.match(manuscriptMarkdown, /## 第一章 潮声/u);
   const manuscriptText = cli(["manuscript", "get", workId, "--format", "txt"]).stdout;
@@ -440,7 +488,7 @@ async function run(): Promise<void> {
   assert.ok(search.some((item) => item.type === "chapter" && item.id === chapterId));
   const audit = cliJson(["audit", workId]) as Array<Record<string, unknown>>;
   assert.ok(audit.some((item) => item.action === "chapter.saved" && item.actor === "cli_admin"));
-  checked("read-commands", "manuscript json/markdown/txt, search and audit commands returned expected data");
+  checked("read-commands", "manuscript json/markdown ZIP/txt, search and audit commands returned expected data");
 
   for (const [type, id] of [
     ["chapter", chapterId],
@@ -474,7 +522,7 @@ async function run(): Promise<void> {
     headers: { Authorization: `Bearer ${adminKey}` }
   });
   assert.equal(deleteResponse.status, 403);
-  checked("server-scope", "raw API key calls could not access another user work, platform management or deletion");
+  checked("server-scope", "raw API key calls could not access another user work, platform management or direct chapter deletion");
 
   assert.deepEqual(cliJson(["auth", "logout"]), { authenticated: false, server: baseUrl, defaultServer: baseUrl, configPath });
   cliError(["work", "list"], "CLI_LOGIN_REQUIRED");
@@ -507,7 +555,7 @@ async function run(): Promise<void> {
     entityVersions: Number((database.prepare("SELECT COUNT(*) AS count FROM entity_versions").get() as { count?: unknown } | undefined)?.count ?? 0)
   };
   database.close();
-  assert.deepEqual(finalCounts, { works: 2, chapters: 1, chapterVersions: 3, entityVersions: 24 });
+  assert.deepEqual(finalCounts, { works: 2, chapters: 1, chapterVersions: 4, entityVersions: 31 });
   checked("complete", `all CLI commands passed against isolated server; counts=${JSON.stringify(finalCounts)}`);
 }
 
