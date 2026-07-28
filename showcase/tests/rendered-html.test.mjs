@@ -22,6 +22,10 @@ test("服务端渲染叙界介绍页", async () => {
   assert.match(html, /人物关系/);
   assert.match(html, /银河图/);
   assert.match(html, /AI 创作助手/);
+  assert.match(html, /批量筛选与移动/);
+  assert.match(html, /每日写作进度/);
+  assert.match(html, /章节回收站/);
+  assert.match(html, /Markdown ZIP/);
   assert.match(html, /href="https:\/\/showcase\.scriverse\.top\/"[^>]*>在线体验/);
   assert.match(html, /href="https:\/\/github\.com\/musnows\/Scriverse"/);
   assert.match(html, /aria-label="在 GitHub 查看源代码"/);
