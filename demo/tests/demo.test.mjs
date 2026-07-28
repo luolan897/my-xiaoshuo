@@ -76,12 +76,16 @@ test("Demo 适配主干最新正文管理能力且不重写正式前端", async 
     "chapter-annotations",
     "annotations",
     "move",
-    "restore"
+    "restore",
+    "permanent"
   ]) assert.match(adapter, new RegExp(capability), `Demo 缺少 ${capability} 适配`);
   assert.match(adapter, /chapters\\\/batch/);
   assert.match(adapter, /softDeleteChapter/);
+  assert.match(adapter, /permanentlyDeleteChapter/);
   assert.match(adapter, /recordChapterVersion/);
   assert.match(adapter, /chapter\.deletedAt/);
+  assert.match(adapter, /chapter\.purged/);
+  assert.match(adapter, /chapterAnnotations = work\.chapterAnnotations\.filter/);
   assert.match(adapter, /targetCount \+ index/);
 });
 
