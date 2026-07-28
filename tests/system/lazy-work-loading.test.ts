@@ -45,7 +45,8 @@ describe("作品工作台按需加载", () => {
       application.indexOf("async function openRaceDialog(item, options)")
     );
 
-    expect(renderRacesSource).toContain('state.races = await apiAllPages(`/api/works/${state.work.id}/races`)');
+    expect(renderRacesSource).toContain('state.races = await api(`/api/works/${state.work.id}/races`)');
+    expect(renderRacesSource).not.toContain("apiAllPages");
     expect(renderRacesSource).not.toContain('/characters');
     expect(openKnowledgeEditorSource).toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
   });

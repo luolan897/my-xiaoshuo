@@ -317,7 +317,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260728-hybrid-search-v1');
+    expect(page.text).toContain('/app.js?v=20260729-race-tree-all-v1');
     expect(page.text).toContain('/styles.css?v=20260729-galaxy-controls-compact-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -371,7 +371,10 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
     expect(graph.text).toContain('statuses.push("待确认")');
     expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
-    expect(application.text).toContain('/race-hierarchy.js?v=20260727-race-tree-pagination-v1');
+    expect(application.text).toContain('/race-hierarchy.js?v=20260729-race-tree-all-v1');
+    expect(application.text).toContain('state.races = await api(`/api/works/${state.work.id}/races`);');
+    expect(application.text).toContain('const raceItems = layout === "rows" ? state.races : buildRaceForest(state.races);');
+    expect(application.text).not.toContain("paginateRaceForest");
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
@@ -419,7 +422,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ui-settings-dialog"');
     expect(page.text).toContain('id="page-size-settings"');
     expect(page.text).toContain('id="page-size-characters"');
-    expect(page.text).toContain('id="page-size-races"');
+    expect(page.text).not.toContain('id="page-size-races"');
     expect(page.text).toContain('id="page-size-organizations"');
     expect(page.text).toContain('id="page-size-timeline"');
     expect(page.text).toContain('id="page-size-outlines"');
@@ -427,14 +430,14 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="page-size-reviews"');
     expect(page.text).toContain('id="page-size-analysis-tasks"');
     expect(page.text).toContain('id="page-size-file-versions"');
-    expect(page.text).toContain('默认均为 30 条');
+    expect(page.text).toContain('种族层级始终完整展示');
     expect(page.text).toContain('data-position="bottom-right"');
     expect(application.text).toContain('api("/api/ui-settings")');
     expect(application.text).toContain('api("/api/platform/ui-settings"');
     expect(application.text).toContain('pageSizes: {');
     expect(application.text).toContain('function paginateModuleItems(items, page, sizeKey)');
     expect(application.text).toContain('renderModulePagination(pageResult, "settings", "设定库")');
-    expect(application.text).toContain('renderModulePagination(pageResult, "races", "种族列表")');
+    expect(application.text).not.toContain('renderModulePagination(pageResult, "races", "种族列表")');
     expect(application.text).toContain('renderModulePagination(pageResult, "organizations", "组织列表")');
     expect(application.text).toContain('renderModulePagination(pageResult, "timeline", "时间线事件")');
     expect(application.text).toContain('renderModulePagination(pageResult, "relationships", "人物关系列表")');

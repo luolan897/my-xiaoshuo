@@ -37,7 +37,7 @@ import {
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
-import { eligibleRaceParents, orderRaceFilterOptions, paginateRaceForest, racePathLabel } from "/race-hierarchy.js?v=20260727-race-tree-pagination-v1";
+import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
@@ -862,7 +862,6 @@ let characterListPage = 1;
 let taskListPage = 1;
 const moduleListPages = {
   settings: 1,
-  races: 1,
   organizations: 1,
   timeline: 1,
   outlinePlans: 1,
@@ -2887,7 +2886,6 @@ async function openPlatformUiSettingsDialog() {
     const pageSizes = normalizePageSizes(settings.pageSizes);
     $("#page-size-settings").value = String(pageSizes.settings);
     $("#page-size-characters").value = String(pageSizes.characters);
-    $("#page-size-races").value = String(pageSizes.races);
     $("#page-size-organizations").value = String(pageSizes.organizations);
     $("#page-size-timeline").value = String(pageSizes.timeline);
     $("#page-size-outlines").value = String(pageSizes.outlines);
@@ -4191,7 +4189,7 @@ async function renderCharacters(page = characterListPage) {
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
     hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page, pageSize),
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
@@ -4294,14 +4292,11 @@ async function renderCharacters(page = characterListPage) {
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(pageCharacters.find((item) => item.id === button.dataset.editCharacter))));
 }
 
-async function renderRaces(page = moduleListPages.races) {
-  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
+async function renderRaces() {
+  state.races = await api(`/api/works/${state.work.id}/races`);
   mountModuleCount(state.races.length);
   const layout = readModuleLayout();
-  const pageResult = layout === "rows"
-    ? paginateModuleItems(state.races, page, "races")
-    : paginateRaceForest(state.races, page, pageSizeFor("races"));
-  moduleListPages.races = pageResult.page;
+  const raceItems = layout === "rows" ? state.races : buildRaceForest(state.races);
   const canEditRaces = canEditModule("races");
   const raceActions = (item) => canEditRaces
     ? recordCardEditButton("edit-race", item.id, `种族“${item.name}”`)
@@ -4322,7 +4317,7 @@ async function renderRaces(page = moduleListPages.races) {
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
-  const raceRows = () => `<div class="module-row-list">${pageResult.items.map((item) => {
+  const raceRows = () => `<div class="module-row-list">${raceItems.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写种族简介");
     const meta = `${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
     return `
@@ -4336,15 +4331,14 @@ async function renderRaces(page = moduleListPages.races) {
   if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
   if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle();
   $("#module-content").innerHTML = state.races.length
-    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${pageResult.items.map(renderRaceNode).join("")}</section>`}${renderModulePagination(pageResult, "races", "种族列表")}`
+    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${raceItems.map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
-  bindModuleLayoutToggle(() => renderRaces(pageResult.page));
-  bindModulePagination("races", renderRaces);
+  bindModuleLayoutToggle(renderRaces);
   bindRaceTreeExpandToggle();
   bindRaceTreeNodeToggles();
   const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
-  bindEntityHistoryButtons(async () => { await renderRaces(pageResult.page); await loadAiReferences(); });
+  bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
 async function renderOrganizations(page = moduleListPages.organizations) {
@@ -7373,7 +7367,7 @@ async function showCharacterHistory() {
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   [state.races, state.organizations, state.characters] = await Promise.all([
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
@@ -9275,7 +9269,6 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
         pageSizes: {
           settings: Number($("#page-size-settings").value),
           characters: Number($("#page-size-characters").value),
-          races: Number($("#page-size-races").value),
           organizations: Number($("#page-size-organizations").value),
           timeline: Number($("#page-size-timeline").value),
           outlines: Number($("#page-size-outlines").value),
