@@ -41,7 +41,7 @@ describe("作品混合检索", () => {
     });
     runtime.store.upsertChapterOutline(chapterId, { goal: "找到潮汐棱镜", conflict: "议会阻拦" });
     runtime.store.createForeshadow(workId, { title: "棱镜裂痕", description: "潮汐棱镜存在暗纹。" });
-    runtime.store.createReviewItem(workId, {
+    const review = runtime.store.createReviewItem(workId, {
       itemType: "setting-conflict",
       title: "棱镜颜色冲突",
       description: "潮汐棱镜的颜色前后不一致。"
@@ -70,6 +70,9 @@ describe("作品混合检索", () => {
       startLine: 3,
       endLine: 4,
       matchKinds: expect.arrayContaining(["exact"])
+    });
+    await request(runtime.app).get(`/api/reviews/${review.id}`).expect(200).expect((reviewResponse) => {
+      expect(reviewResponse.body.data).toMatchObject({ id: review.id, workId, title: "棱镜颜色冲突" });
     });
   });
 

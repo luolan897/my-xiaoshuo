@@ -72,7 +72,27 @@ export function fuseHybridSearchChannels(channels: HybridSearchChannel[], limit 
 }
 
 export function buildHybridSearchSnippet(value: string, query: string, maximumLength = 180): string {
-  const compact = value
+  let searchableValue = value;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    const values: string[] = [];
+    const visit = (item: unknown): void => {
+      if (typeof item === "string") {
+        if (item.trim()) values.push(item.trim());
+        return;
+      }
+      if (Array.isArray(item)) {
+        item.forEach(visit);
+        return;
+      }
+      if (item && typeof item === "object") Object.values(item).forEach(visit);
+    };
+    visit(parsed);
+    if (values.length > 0) searchableValue = [...new Set(values)].join(" · ");
+  } catch {
+    // 普通正文无需按 JSON 结构展开。
+  }
+  const compact = searchableValue
     .replace(/[{}\[\]"]/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();

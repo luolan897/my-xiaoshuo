@@ -1565,6 +1565,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.listReviewItemsPage(request.params.workId, pagination, status) : store.listReviewItems(request.params.workId, status));
   });
   app.post("/api/works/:workId/reviews", (request, response) => data(response, store.createReviewItem(request.params.workId, parse(reviewSchema, request.body)), 201));
+  app.get("/api/reviews/:reviewId", (request, response) => data(response, store.getReviewItem(request.params.reviewId)));
   app.patch("/api/reviews/:reviewId", (request, response) => data(response, store.updateReviewItem(request.params.reviewId, parse(reviewSchema.partial(), request.body))));
   app.post("/api/reviews/:reviewId/character-resolution", (request, response) => {
     const input = parse(z.discriminatedUnion("action", [

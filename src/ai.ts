@@ -493,7 +493,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "search_story_entities",
-      description: "按短关键词在结构化作品实体中做字面/子串匹配：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义检索或知识库问答；请传入实体名、别名、标题或其子串，不要传入自然语言整句。返回简要匹配项；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
+      description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 } }, required: ["query"], additionalProperties: false }
     }
   },
@@ -2814,7 +2814,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（传入短实体名或关键词子串，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";

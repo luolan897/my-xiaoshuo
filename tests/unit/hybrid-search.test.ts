@@ -42,6 +42,7 @@ describe("混合检索摘要", () => {
     const snippet = buildHybridSearchSnippet(`{"content":"${"前文".repeat(40)}北港议会通过了新章程${"后文".repeat(40)}"}`, "北港", 60);
     expect(snippet).toContain("北港议会");
     expect(snippet).not.toContain("{");
+    expect(snippet).not.toContain("content");
     expect(snippet.startsWith("…")).toBe(true);
   });
 });

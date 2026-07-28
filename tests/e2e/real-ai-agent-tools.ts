@@ -114,11 +114,11 @@ const mockAi = createServer(async (incoming, outgoing) => {
       assert.equal(object(errorChapters[1]?.error).message, "The requested chapter was not found.");
       assert.equal(object(errorChapters[2]?.error).message, "The requested chapter belongs to a different work.");
       assert.deepEqual(object(results.get("knowledge-default")).ok, true);
-      assert.equal(object(object(results.get("knowledge-default")).data).matchMode, "literal_substring");
+      assert.equal(object(object(results.get("knowledge-default")).data).matchMode, "hybrid_exact_phonetic");
       const defaultMatches = array(object(object(results.get("knowledge-default")).data).matches).map(object);
       assert.equal(defaultMatches.some((item) => String(item.type) === "setting" && String(item.title).includes("跃迁")), true);
       assert.equal(array(object(object(results.get("knowledge-all")).data).matches).length >= 1, true);
-      assert.equal(object(object(results.get("knowledge-all")).data).matchMode, "literal_substring");
+      assert.equal(object(object(results.get("knowledge-all")).data).matchMode, "hybrid_exact_phonetic");
       const characterSection = object(array(object(object(results.get("character-section")).data).sections)[0]);
       assert.equal(characterSection.characterName, "哥斯拉");
       assert.match(String(characterSection.contentMarkdown), /守护地球生态/u);
