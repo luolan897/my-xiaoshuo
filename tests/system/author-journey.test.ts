@@ -318,7 +318,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260728-hybrid-search-v1');
-    expect(page.text).toContain('/styles.css?v=20260729-hybrid-search-api-key-copy-v1');
+    expect(page.text).toContain('/styles.css?v=20260729-galaxy-controls-compact-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -805,6 +805,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("initialNodePositions");
     expect(styles.text).toContain(".book-shelf");
     expect(styles.text).toContain(".galaxy-dialog");
+    expect(styles.text).toMatch(/\.galaxy-controls \{[^}]*width: 104px;/u);
     expect(styles.text).toContain(".galaxy-shell.is-rotating-camera");
     expect(styles.text).toContain("grid-template-rows: var(--node-size) auto");
     expect(styles.text).toContain("--node-color");
