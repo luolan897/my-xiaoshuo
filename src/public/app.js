@@ -2293,6 +2293,22 @@ function toast(message, type = "info") {
   }, 3600);
 }
 
+function persistentToast(message, type = "info") {
+  const region = $("#toast-region");
+  const element = document.createElement("div");
+  element.className = `toast ${type}`;
+  element.setAttribute("role", "status");
+  element.textContent = message;
+  region.append(element);
+  raiseToastRegion();
+  return () => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  };
+}
+
 function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
   const region = $("#toast-region");
   const element = document.createElement("section");
@@ -4382,6 +4398,7 @@ async function renderRaces() {
   renderRaceCollection(roots.total, loadedRaceHierarchyWorkId !== workId);
   if (loadedRaceHierarchyWorkId === workId) return;
 
+  const dismissLoadingToast = persistentToast("正在加载子种族……");
   const loadPromise = api(`/api/works/${workId}/races?scope=descendants`).then((descendants) => {
     if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
     state.races = [...roots.items, ...descendants];
@@ -4400,6 +4417,7 @@ async function renderRaces() {
       raceHierarchyLoadPromise = null;
       raceHierarchyLoadWorkId = null;
     }
+    dismissLoadingToast();
   });
 }
 

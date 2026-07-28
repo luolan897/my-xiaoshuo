@@ -317,7 +317,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-race-tree-staged-v1');
+    expect(page.text).toContain('/app.js?v=20260729-race-tree-loading-toast-v1');
     expect(page.text).toContain('/styles.css?v=20260729-galaxy-controls-compact-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -374,6 +374,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('/race-hierarchy.js?v=20260729-race-tree-all-v1');
     expect(application.text).toContain('const roots = await api(`/api/works/${workId}/races?scope=roots`);');
     expect(application.text).toContain('renderRaceCollection(roots.total, loadedRaceHierarchyWorkId !== workId);');
+    expect(application.text).toContain('const dismissLoadingToast = persistentToast("正在加载子种族……");');
     expect(application.text).toContain('api(`/api/works/${workId}/races?scope=descendants`)');
     expect(application.text).toContain('state.races = [...roots.items, ...descendants];');
     expect(application.text).toContain('aria-busy="${descendantsLoading}"');
