@@ -3174,6 +3174,24 @@ export class Store {
     return this.db.all("SELECT * FROM races WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapRace(row, includeMarkdown));
   }
 
+  listRacesByHierarchyScope(workId: string, scope: "roots" | "descendants", includeMarkdown = true): Record<string, unknown>[] {
+    this.getWork(workId);
+    const hierarchyCondition = scope === "roots" ? "IS NULL" : "IS NOT NULL";
+    return this.db.all(
+      `SELECT race.*,
+              (SELECT COUNT(*) FROM races child WHERE child.parent_race_id = race.id) AS child_count
+       FROM races race
+       WHERE race.work_id = ? AND race.parent_race_id ${hierarchyCondition}
+       ORDER BY race.name`,
+      workId
+    ).map((row) => this.mapRace(row, includeMarkdown));
+  }
+
+  countRaces(workId: string): number {
+    this.getWork(workId);
+    return numberValue(this.db.get("SELECT COUNT(*) AS count FROM races WHERE work_id = ?", workId) ?? {}, "count");
+  }
+
   listRacesPage(workId: string, pagination: Pagination, includeMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
@@ -3336,6 +3354,7 @@ export class Store {
       parentRaceId: optionalString(row, "parent_race_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
+      ...(row.child_count === undefined ? {} : { childCount: numberValue(row, "child_count") }),
       ...(includeMarkdown
         ? { settings, settingsMarkdown: settingsMarkdownFromList(settings), settingsSections }
         : { settings: [], settingsCount: settingsSections.length }),

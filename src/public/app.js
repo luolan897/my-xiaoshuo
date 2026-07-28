@@ -37,7 +37,7 @@ import {
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
-import { eligibleRaceParents, orderRaceFilterOptions, paginateRaceForest, racePathLabel } from "/race-hierarchy.js?v=20260727-race-tree-pagination-v1";
+import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
@@ -362,6 +362,10 @@ let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
 let workScopedUiGeneration = 0;
+let raceHierarchyLoadPromise = null;
+let raceHierarchyLoadWorkId = null;
+let loadedRaceHierarchyWorkId = null;
+let raceListRequestId = 0;
 let importHistoryRecords = [];
 let importHistoryNextPage = null;
 let importHistoryRequestId = 0;
@@ -862,7 +866,6 @@ let characterListPage = 1;
 let taskListPage = 1;
 const moduleListPages = {
   settings: 1,
-  races: 1,
   organizations: 1,
   timeline: 1,
   outlinePlans: 1,
@@ -2290,6 +2293,22 @@ function toast(message, type = "info") {
   }, 3600);
 }
 
+function persistentToast(message, type = "info") {
+  const region = $("#toast-region");
+  const element = document.createElement("div");
+  element.className = `toast ${type}`;
+  element.setAttribute("role", "status");
+  element.textContent = message;
+  region.append(element);
+  raiseToastRegion();
+  return () => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  };
+}
+
 function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
   const region = $("#toast-region");
   const element = document.createElement("section");
@@ -2887,7 +2906,6 @@ async function openPlatformUiSettingsDialog() {
     const pageSizes = normalizePageSizes(settings.pageSizes);
     $("#page-size-settings").value = String(pageSizes.settings);
     $("#page-size-characters").value = String(pageSizes.characters);
-    $("#page-size-races").value = String(pageSizes.races);
     $("#page-size-organizations").value = String(pageSizes.organizations);
     $("#page-size-timeline").value = String(pageSizes.timeline);
     $("#page-size-outlines").value = String(pageSizes.outlines);
@@ -3258,9 +3276,14 @@ function resetWorkScopedUiCaches() {
   aiReferencesLoadWorkId = null;
   aiConversationsLoadPromise = null;
   aiConversationsLoadWorkId = null;
+  raceHierarchyLoadPromise = null;
+  raceHierarchyLoadWorkId = null;
+  loadedRaceHierarchyWorkId = null;
+  raceListRequestId += 1;
   state.models = [];
   state.characters = [];
   state.settings = [];
+  state.races = [];
   characterListPage = 1;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
@@ -4191,7 +4214,7 @@ async function renderCharacters(page = characterListPage) {
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
     hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page, pageSize),
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
@@ -4294,15 +4317,16 @@ async function renderCharacters(page = characterListPage) {
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(pageCharacters.find((item) => item.id === button.dataset.editCharacter))));
 }
 
-async function renderRaces(page = moduleListPages.races) {
-  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
-  mountModuleCount(state.races.length);
+function renderRaceCollection(total, descendantsLoading = false) {
+  mountModuleCount(total);
   const layout = readModuleLayout();
-  const pageResult = layout === "rows"
-    ? paginateModuleItems(state.races, page, "races")
-    : paginateRaceForest(state.races, page, pageSizeFor("races"));
-  moduleListPages.races = pageResult.page;
+  const raceItems = layout === "rows"
+    ? [...state.races].sort((left, right) => String(left.name).localeCompare(String(right.name), "zh-CN"))
+    : buildRaceForest(state.races);
   const canEditRaces = canEditModule("races");
+  const directChildCount = (item) => Number.isInteger(Number(item.childCount))
+    ? Number(item.childCount)
+    : Array.isArray(item.children) ? item.children.length : 0;
   const raceActions = (item) => canEditRaces
     ? recordCardEditButton("edit-race", item.id, `种族“${item.name}”`)
     : recordHistoryButton("race", item.id, item.name);
@@ -4310,7 +4334,7 @@ async function renderRaces(page = moduleListPages.races) {
     ? raceActions(item)
     : `<div class="card-actions">${raceActions(item)}</div>`;
   const renderRaceNode = (item) => `<details class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"} data-race-node="${esc(item.id)}">
-    <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
+    <summary><span>${esc(item.name)}</span><small>${directChildCount(item)} 个直接子种族</small></summary>
     <div class="race-tree-branch">
     <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settingsCount ?? item.settings?.length ?? 0} 条自身设定</small>
         <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
@@ -4322,9 +4346,9 @@ async function renderRaces(page = moduleListPages.races) {
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
-  const raceRows = () => `<div class="module-row-list">${pageResult.items.map((item) => {
+  const raceRows = () => `<div class="module-row-list">${raceItems.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写种族简介");
-    const meta = `${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
+    const meta = `${directChildCount(item)} 个直接子种族 · ${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
     return `
     <article class="record-card module-row race-card preview-record-card" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}">
       <small>${esc(meta)}</small>
@@ -4336,15 +4360,65 @@ async function renderRaces(page = moduleListPages.races) {
   if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
   if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle();
   $("#module-content").innerHTML = state.races.length
-    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${pageResult.items.map(renderRaceNode).join("")}</section>`}${renderModulePagination(pageResult, "races", "种族列表")}`
+    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级" aria-busy="${descendantsLoading}">${raceItems.map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
-  bindModuleLayoutToggle(() => renderRaces(pageResult.page));
-  bindModulePagination("races", renderRaces);
+  bindModuleLayoutToggle(() => renderRaceCollection(total, descendantsLoading));
   bindRaceTreeExpandToggle();
   bindRaceTreeNodeToggles();
   const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
-  bindEntityHistoryButtons(async () => { await renderRaces(pageResult.page); await loadAiReferences(); });
+  bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
+}
+
+async function ensureCompleteRaceList() {
+  const workId = state.work?.id;
+  if (!workId) return false;
+  const generation = workScopedUiGeneration;
+  if (loadedRaceHierarchyWorkId === workId) return true;
+  if (raceHierarchyLoadPromise && raceHierarchyLoadWorkId === workId) {
+    await raceHierarchyLoadPromise.catch(() => {});
+  }
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return false;
+  if (loadedRaceHierarchyWorkId === workId) return true;
+  const races = await api(`/api/works/${workId}/races`);
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return false;
+  state.races = races;
+  loadedRaceHierarchyWorkId = workId;
+  return true;
+}
+
+async function renderRaces() {
+  const workId = state.work.id;
+  const generation = workScopedUiGeneration;
+  const requestId = ++raceListRequestId;
+  const roots = await api(`/api/works/${workId}/races?scope=roots`);
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
+  state.races = roots.items;
+  loadedRaceHierarchyWorkId = roots.items.length === roots.total ? workId : null;
+  renderRaceCollection(roots.total, loadedRaceHierarchyWorkId !== workId);
+  if (loadedRaceHierarchyWorkId === workId) return;
+
+  const dismissLoadingToast = persistentToast("正在加载子种族……");
+  const loadPromise = api(`/api/works/${workId}/races?scope=descendants`).then((descendants) => {
+    if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
+    state.races = [...roots.items, ...descendants];
+    loadedRaceHierarchyWorkId = workId;
+    if (state.module === "races") renderRaceCollection(roots.total);
+  });
+  raceHierarchyLoadPromise = loadPromise;
+  raceHierarchyLoadWorkId = workId;
+  void loadPromise.catch((error) => {
+    if (state.work?.id === workId && generation === workScopedUiGeneration && requestId === raceListRequestId) {
+      renderRaceCollection(roots.total);
+      toast(`父种族已显示，但子种族载入失败：${error.message}`, "error");
+    }
+  }).finally(() => {
+    if (raceHierarchyLoadPromise === loadPromise) {
+      raceHierarchyLoadPromise = null;
+      raceHierarchyLoadWorkId = null;
+    }
+    dismissLoadingToast();
+  });
 }
 
 async function renderOrganizations(page = moduleListPages.organizations) {
@@ -7373,7 +7447,7 @@ async function showCharacterHistory() {
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   [state.races, state.organizations, state.characters] = await Promise.all([
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
@@ -7506,6 +7580,7 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
 async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   await discardPendingMarkdownAttachments();
+  if (kind === "race" && !(await ensureCompleteRaceList())) return;
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const isRace = kind === "race";
@@ -9275,7 +9350,6 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
         pageSizes: {
           settings: Number($("#page-size-settings").value),
           characters: Number($("#page-size-characters").value),
-          races: Number($("#page-size-races").value),
           organizations: Number($("#page-size-organizations").value),
           timeline: Number($("#page-size-timeline").value),
           outlines: Number($("#page-size-outlines").value),

@@ -275,6 +275,8 @@ const raceSchema = z.object({
   memberIds: z.array(identifier).max(1000).optional()
 }).strict();
 
+const raceHierarchyScopeSchema = z.enum(["roots", "descendants"]).optional();
+
 const chapterOutlineSchema = z.object({
   goal: z.string().max(100_000).optional(),
   conflict: z.string().max(100_000).optional(),
@@ -1382,9 +1384,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/races", (request, response) => {
+    const hierarchyScope = parse(raceHierarchyScopeSchema, request.query.scope);
     const pagination = parsePagination(request.query);
+    if (hierarchyScope && pagination) {
+      throw new AppError(400, "RACE_HIERARCHY_PAGINATION_CONFLICT", "分层种族请求不能同时使用分页参数");
+    }
     const includeMarkdown = request.query.includeContent === "true";
-    const races = pagination ? store.listRacesPage(request.params.workId, pagination, includeMarkdown) : store.listRaces(request.params.workId, includeMarkdown);
+    const races = hierarchyScope
+      ? hierarchyScope === "roots"
+        ? { items: store.listRacesByHierarchyScope(request.params.workId, hierarchyScope, includeMarkdown), total: store.countRaces(request.params.workId) }
+        : store.listRacesByHierarchyScope(request.params.workId, hierarchyScope, includeMarkdown)
+      : pagination
+        ? store.listRacesPage(request.params.workId, pagination, includeMarkdown)
+        : store.listRaces(request.params.workId, includeMarkdown);
     const permissions = requestPermissions(request, request.params.workId);
     data(response, mapRecords(races, (race) => redactRaceMembers(race, permissions)));
   });

@@ -337,6 +337,19 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
       ]
     });
 
+    const roots = await request(runtime.app).get(`/api/works/${workId}/races?scope=roots`).expect(200);
+    expect(roots.body.data).toMatchObject({
+      total: 3,
+      items: [expect.objectContaining({ id: titan.body.data.id, parentRaceId: null, childCount: 1 })]
+    });
+    const descendants = await request(runtime.app).get(`/api/works/${workId}/races?scope=descendants`).expect(200);
+    expect(descendants.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: original.body.data.id, parentRaceId: titan.body.data.id, childCount: 1 }),
+      expect.objectContaining({ id: alpha.body.data.id, parentRaceId: original.body.data.id, childCount: 0 })
+    ]));
+    await request(runtime.app).get(`/api/works/${workId}/races?scope=roots&page=1`).expect(400);
+    await request(runtime.app).get(`/api/works/${workId}/races?scope=invalid`).expect(400);
+
     const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "哥斯拉",
       raceId: original.body.data.id
