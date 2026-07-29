@@ -874,6 +874,7 @@ let chapterEditorReadOnly = true;
 let characterListPage = 1;
 let taskListPage = 1;
 let draftTypeFilter = "all";
+let draftFiltersPanelOpen = false;
 const moduleListPages = {
   drafts: 1,
   settings: 1,
@@ -3345,6 +3346,7 @@ function resetWorkScopedUiCaches() {
   state.races = [];
   characterListPage = 1;
   draftTypeFilter = "all";
+  draftFiltersPanelOpen = false;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
@@ -4152,6 +4154,15 @@ function mountRelationshipFilterToggle() {
   });
 }
 
+function mountDraftFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="draft-filter-toggle" aria-label="筛选草稿" aria-controls="draft-filter-panel" aria-expanded="${draftFiltersPanelOpen}" title="筛选草稿"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.addEventListener("click", async () => {
+    draftFiltersPanelOpen = !draftFiltersPanelOpen;
+    await renderDrafts(moduleListPages.drafts);
+  });
+}
+
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
     const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization ?? card.dataset.openReview;
@@ -4309,7 +4320,8 @@ async function renderDrafts(page = moduleListPages.drafts) {
   const layout = readModuleLayout();
   if (drafts.length) mountModuleLayoutToggle(layout, "草稿列表样式");
   else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
-  const filterToolbar = `<section class="draft-filter-toolbar" aria-label="草稿筛选">
+  mountDraftFilterToggle();
+  const filterToolbar = `<section id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="草稿筛选">
     <label for="draft-type-filter">草稿类型</label>
     <select id="draft-type-filter" aria-label="按草稿类型筛选">
       <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部草稿</option>
@@ -4344,6 +4356,7 @@ async function renderDrafts(page = moduleListPages.drafts) {
     : emptyDrafts);
   $("#draft-type-filter").addEventListener("change", async (event) => {
     draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    draftFiltersPanelOpen = true;
     moduleListPages.drafts = 1;
     await renderDrafts(1);
   });
