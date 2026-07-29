@@ -8715,18 +8715,22 @@ async function showChapterInsight() {
   if (requestId !== chapterInsightRequestId || state.chapter?.id !== chapterId || $("#editor-view").classList.contains("hidden")) return;
   const insight = insights.find((item) => item.chapterVersion === state.chapter.versionNo) ?? insights[0];
   const region = $("#toast-region");
+  const chapterTitle = state.chapter.title;
   const element = document.createElement("section");
   element.id = "chapter-insight-toast";
   element.className = "toast chapter-insight-toast";
   element.setAttribute("role", "region");
-  element.setAttribute("aria-label", "章节概览");
+  element.setAttribute("aria-label", `章节概览：${chapterTitle}`);
   const header = document.createElement("header");
   header.className = "chapter-insight-toast-header";
   const heading = document.createElement("div");
   heading.className = "chapter-insight-toast-heading";
   const title = document.createElement("strong");
   title.textContent = "章节概览";
-  heading.append(title);
+  const chapterName = document.createElement("span");
+  chapterName.className = "chapter-insight-toast-chapter-title";
+  chapterName.textContent = chapterTitle;
+  heading.append(title, chapterName);
   if (insight && insight.chapterVersion !== state.chapter.versionNo) {
     const stale = document.createElement("span");
     stale.textContent = `基于旧版本 v${insight.chapterVersion}`;

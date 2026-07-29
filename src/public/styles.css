@@ -2184,6 +2184,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-insight-toast-heading { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .chapter-insight-toast-heading strong { font-size: 12px; }
 .chapter-insight-toast-heading span { overflow: hidden; color: var(--accent-dark); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-insight-toast-heading .chapter-insight-toast-chapter-title { min-width: 0; color: var(--ink); font-size: 11px; }
 .chapter-insight-toast-close { flex: 0 0 auto; min-height: 28px; padding: 5px 9px; font-size: 10px; }
 .chapter-insight-toast-body { display: grid; gap: 10px; min-height: 0; padding: 12px 14px 14px; overflow-y: auto; color: var(--muted); font-size: 11px; line-height: 1.6; overscroll-behavior: contain; }
 .chapter-insight-toast-body p { margin: 0; white-space: pre-wrap; }

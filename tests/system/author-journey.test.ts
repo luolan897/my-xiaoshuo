@@ -98,8 +98,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
     expect(application.text).toContain('element.className = "toast chapter-insight-toast"');
     expect(application.text).toContain('element.id = "chapter-insight-toast"');
+    expect(application.text).toContain('chapterName.className = "chapter-insight-toast-chapter-title"');
+    expect(application.text).toContain('chapterName.textContent = chapterTitle');
     expect(application.text).toContain("function dismissChapterInsightToast()");
     expect(styles.text).toContain(".chapter-insight-toast {");
+    expect(styles.text).toContain(".chapter-insight-toast-heading .chapter-insight-toast-chapter-title");
     expect(application.text).toContain('data-toggle-whitespace');
     expect(application.text).toContain('document.querySelectorAll("[data-toggle-whitespace]")');
     expect(page.text).toContain('id="toggle-whitespace-appearance"');
@@ -317,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-continuous-analysis-queue-merge-v1');
-    expect(page.text).toContain('/styles.css?v=20260729-continuous-analysis-queue-merge-v1');
+    expect(page.text).toContain('/app.js?v=20260729-chapter-insight-title-v1');
+    expect(page.text).toContain('/styles.css?v=20260729-chapter-insight-title-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
