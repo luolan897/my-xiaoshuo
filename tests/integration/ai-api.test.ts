@@ -367,7 +367,7 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }>; messages: Array<{ role: string; content?: string }> };
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "tool-call-1", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -386,6 +386,53 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.content).toBe("已根据章节目录回答。");
     expect(response.body.data.toolCalls).toEqual([
       expect.objectContaining({ id: "tool-call-1", name: "story_index", calledAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u), status: "completed", arguments: { offset: 0, limit: 1 } })
+    ]);
+    expect(completionCount).toBe(2);
+  });
+
+  it("Agent 搜索草稿时明确返回未确认语义且不把草稿当作正式事实", async () => {
+    await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
+      draftType: "setting",
+      title: "跃迁失忆备选",
+      content: "也许每次跃迁都会失去一段记忆，但这个方向可能永远不会采用。"
+    }).expect(201);
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        tools?: Array<{ function?: { name?: string; description?: string } }>;
+        messages: Array<{ role: string; content?: string }>;
+      };
+      const draftTool = body.tools?.find((tool) => tool.function?.name === "search_drafts");
+      expect(draftTool?.function?.description).toContain("可能永远不会写入正文或正式设定");
+      expect(body.messages[0]?.content).toContain("不得把它当作故事事实");
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "draft-search",
+          type: "function",
+          function: { name: "search_drafts", arguments: { query: "跃迁", draftType: "setting", limit: 5 } }
+        }] } }] }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      expect(toolMessage?.content).toContain("这些内容是作者记录的未确认临时想法");
+      expect(toolMessage?.content).toContain("跃迁失忆备选");
+      expect(toolMessage?.content).toContain("这个方向可能永远不会采用");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "草稿里有一个未确认的跃迁失忆方向，不能视为正式设定。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "草稿里有没有跃迁相关的备选想法？",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toContain("未确认");
+    expect(response.body.data.toolCalls).toEqual([
+      expect.objectContaining({ name: "search_drafts", status: "completed", arguments: { query: "跃迁", draftType: "setting", limit: 5 } })
     ]);
     expect(completionCount).toBe(2);
   });

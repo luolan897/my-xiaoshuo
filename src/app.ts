@@ -81,6 +81,7 @@ const memberRoleValueSchema = z.enum(["editor", "settings-editor", "viewer"]);
 const moduleAccessSchema = z.enum(["none", "read", "write"]);
 const modulePermissionsSchema = z.object({
   prose: moduleAccessSchema,
+  drafts: moduleAccessSchema.optional(),
   settings: moduleAccessSchema,
   characters: moduleAccessSchema,
   races: moduleAccessSchema,
@@ -92,7 +93,14 @@ const modulePermissionsSchema = z.object({
   "ai-chat": moduleAccessSchema,
   "ai-analysis": moduleAccessSchema,
   "ai-settings": moduleAccessSchema
-}).strict();
+}).strict().transform((permissions) => ({
+  ...permissions,
+  drafts: permissions.drafts ?? (
+    permissions.prose === "write" && permissions.settings === "write"
+      ? "write"
+      : permissions.prose === "none" || permissions.settings === "none" ? "none" : "read"
+  )
+}));
 const memberSchema = z.union([
   z.object({ userId: identifier, permissions: modulePermissionsSchema }).strict(),
   z.object({ userId: identifier, role: memberRoleValueSchema }).strict()
@@ -113,7 +121,7 @@ const presenceHeartbeatSchema = z.object({
   page: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal(presencePageKinds[0]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[1]), resourceId: identifier }).strict(),
-    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["settings", "characters", "races", "organizations", "timeline", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["drafts", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[3]), module: z.enum(["setting", "character", "race", "organization", "relationship"]), resourceId: identifier.optional() }).strict(),
     z.object({ kind: z.literal(presencePageKinds[4]) }).strict()
   ])
@@ -154,6 +162,12 @@ const settingSchema = z.object({
   scope: jsonObject.optional(),
   authorNote: z.string().max(20_000).optional()
 });
+
+const draftSchema = z.object({
+  draftType: z.enum(["prose", "setting"]),
+  title: nonEmpty.max(200),
+  content: z.string().max(200_000)
+}).strict();
 
 const characterSchema = z.object({
   name: nonEmpty.max(200),
@@ -349,6 +363,7 @@ const aiUsageQuerySchema = z.object({
 }).strict();
 
 const platformPageSizesSchema = z.object({
+  drafts: z.number().int().min(10).max(100).optional(),
   settings: z.number().int().min(10).max(100).optional(),
   characters: z.number().int().min(10).max(100).optional(),
   races: z.number().int().min(10).max(100).optional(),
@@ -410,7 +425,7 @@ const workAiSettingsSchema = z.object({
   autoRunFailureThreshold: z.number().int().min(1).max(10).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"])).max(5).optional()
+  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"])).max(6).optional()
 }).strict();
 
 const contextSchema = z.object({
@@ -1222,6 +1237,34 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.delete("/api/foreshadow-occurrences/:occurrenceId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     store.deleteForeshadowOccurrence(request.params.occurrenceId, input.expectedVersionNo);
+    noContent(response);
+  });
+
+  app.get("/api/works/:workId/drafts", (request, response) => {
+    const query = parse(z.object({
+      draftType: z.enum(["prose", "setting"]).optional(),
+      includeContent: z.enum(["true", "false"]).default("false")
+    }), request.query);
+    const pagination = parsePagination(request.query);
+    const includeContent = query.includeContent === "true";
+    data(response, pagination
+      ? store.listDraftsPage(request.params.workId, pagination, query.draftType, includeContent)
+      : store.listDrafts(request.params.workId, query.draftType, includeContent));
+  });
+  app.post("/api/works/:workId/drafts", (request, response) => {
+    data(response, store.createDraft(request.params.workId, parse(draftSchema, request.body)), 201);
+  });
+  app.get("/api/drafts/:draftId", (request, response) => data(response, store.getDraft(request.params.draftId)));
+  app.patch("/api/drafts/:draftId", (request, response) => {
+    const { changeNote, expectedVersionNo, ...input } = parse(draftSchema.partial().extend({
+      changeNote: changeNoteSchema,
+      expectedVersionNo: expectedVersionNoSchema
+    }).strict(), request.body);
+    data(response, store.updateDraft(request.params.draftId, input, "manual", null, changeNote, expectedVersionNo));
+  });
+  app.delete("/api/drafts/:draftId", (request, response) => {
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteDraft(request.params.draftId, input.expectedVersionNo);
     noContent(response);
   });
 

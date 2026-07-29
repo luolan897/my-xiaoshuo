@@ -36,6 +36,7 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
 
 type PlatformPageSizes = {
+  drafts: number;
   settings: number;
   characters: number;
   races: number;
@@ -49,6 +50,7 @@ type PlatformPageSizes = {
 };
 
 const defaultPlatformPageSizes: PlatformPageSizes = {
+  drafts: 30,
   settings: 30,
   characters: 30,
   races: 30,
@@ -72,6 +74,7 @@ function platformPageSizes(value: unknown): PlatformPageSizes {
       : defaultPlatformPageSizes[key];
   };
   return {
+    drafts: pageSize("drafts"),
     settings: pageSize("settings"),
     characters: pageSize("characters"),
     races: pageSize("races"),
@@ -95,6 +98,12 @@ type SettingInput = {
   evidence?: unknown[];
   scope?: Record<string, unknown>;
   authorNote?: string;
+};
+
+type DraftInput = {
+  draftType: "prose" | "setting";
+  title: string;
+  content: string;
 };
 
 type CharacterInput = {
@@ -323,6 +332,7 @@ type ForeshadowInput = {
 export const versionedEntityTypes = [
   "work",
   "volume",
+  "draft",
   "setting",
   "race",
   "organization",
@@ -522,6 +532,7 @@ export class Store {
   private versionedEntity(type: VersionedEntityType, entityId: string): Record<string, unknown> {
     if (type === "work") return this.getWork(entityId);
     if (type === "volume") return this.getVolume(entityId);
+    if (type === "draft") return this.getDraft(entityId);
     if (type === "setting") return this.getSetting(entityId);
     if (type === "race") return this.getRace(entityId);
     if (type === "organization") return this.getOrganization(entityId);
@@ -562,6 +573,11 @@ export class Store {
       description: entity.description,
       keywords: entity.keywords,
       sortOrder: entity.sortOrder
+    };
+    if (type === "draft") return {
+      draftType: entity.draftType,
+      title: entity.title,
+      content: entity.content
     };
     if (type === "setting") return {
       title: entity.title,
@@ -688,6 +704,7 @@ export class Store {
     const entities: Array<[VersionedEntityType, string, string]> = [
       ...this.db.all("SELECT id, updated_at FROM works").map((row) => ["work", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
       ...this.db.all("SELECT id, updated_at FROM volumes").map((row) => ["volume", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT id, updated_at FROM drafts").map((row) => ["draft", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
       ...this.db.all("SELECT id, updated_at FROM settings").map((row) => ["setting", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
       ...this.db.all("SELECT id, updated_at FROM races").map((row) => ["race", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
       ...this.db.all("SELECT id, updated_at FROM organizations").map((row) => ["organization", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
@@ -780,6 +797,7 @@ export class Store {
       restored = this.recreateEntityFromSnapshot(type, workId, entityId, snapshot, sourceRef, changeNote);
     } else if (type === "work") restored = this.updateWork(entityId, snapshot as Partial<WorkInput>, expectedVersionNo, "restore", sourceRef, changeNote);
     else if (type === "volume") restored = this.updateVolume(entityId, snapshot as Partial<{ title: string; kind?: string; description?: string; keywords?: string[]; sortOrder?: number }>, expectedVersionNo, "restore", sourceRef, changeNote);
+    else if (type === "draft") restored = this.updateDraft(entityId, snapshot as Partial<DraftInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "setting") restored = this.updateSetting(entityId, snapshot as Partial<SettingInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "race") restored = this.updateRace(entityId, snapshot as Partial<RaceInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "organization") restored = this.updateOrganization(entityId, snapshot as Partial<OrganizationInput>, "restore", sourceRef, changeNote, expectedVersionNo);
@@ -840,6 +858,9 @@ export class Store {
     }
     if (type === "volume") {
       return this.db.transaction(() => this.insertVolumeWithId(workId, entityId, snapshot as { title: string; kind?: string; source?: string; description?: string; keywords?: string[]; sortOrder?: number }, "restore", sourceRef, changeNote));
+    }
+    if (type === "draft") {
+      return this.insertDraftWithId(workId, entityId, snapshot as DraftInput, "restore", sourceRef, changeNote);
     }
     if (type === "setting") {
       return this.insertSettingWithId(workId, entityId, snapshot as SettingInput, "restore", sourceRef, changeNote);
@@ -1057,7 +1078,7 @@ export class Store {
       autoRunConsecutiveFailures: Math.max(0, Number(row?.auto_run_consecutive_failures ?? 0) || 0),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections"])
+      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
         .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
         .filter((tool, index, tools) => tools.indexOf(tool) === index),
       updatedAt: String(row?.updated_at ?? "")
@@ -3092,6 +3113,168 @@ export class Store {
       workId
     );
     return row ? numberValue(row, "sequence") : Number.MAX_SAFE_INTEGER;
+  }
+
+  createDraft(workId: string, input: DraftInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
+    this.getWork(workId);
+    return this.insertDraftWithId(workId, id("draft"), input, source, sourceRef);
+  }
+
+  private insertDraftWithId(
+    workId: string,
+    draftId: string,
+    input: DraftInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO drafts (id, work_id, draft_type, title, content, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        draftId,
+        workId,
+        input.draftType,
+        input.title,
+        input.content,
+        timestamp,
+        timestamp
+      );
+      this.syncMarkdownAttachmentReferences(workId, "draft", draftId, input.content);
+      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "建立创作草稿", timestamp);
+      this.audit(workId, source === "restore" ? "draft.restored" : "draft.created", "draft", draftId, {
+        draftType: input.draftType,
+        source,
+        sourceRef
+      });
+    });
+    return this.getDraft(draftId);
+  }
+
+  listDrafts(workId: string, draftType?: "prose" | "setting", includeContent = false): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT * FROM drafts WHERE work_id = ? AND (? IS NULL OR draft_type = ?)
+       ORDER BY updated_at DESC, title`,
+      workId,
+      draftType ?? null,
+      draftType ?? null
+    ).map((row) => this.mapDraft(row, includeContent));
+  }
+
+  listDraftsPage(
+    workId: string,
+    pagination: Pagination,
+    draftType?: "prose" | "setting",
+    includeContent = false
+  ): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT * FROM drafts WHERE work_id = ? AND (? IS NULL OR draft_type = ?)
+       ORDER BY updated_at DESC, title${page.sql}`,
+      workId,
+      draftType ?? null,
+      draftType ?? null,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapDraft(row, includeContent)), pagination);
+  }
+
+  searchDrafts(
+    workId: string,
+    query: string,
+    draftType?: "prose" | "setting",
+    limit = 20
+  ): Record<string, unknown>[] {
+    this.getWork(workId);
+    const safeLimit = Math.min(30, Math.max(1, Math.trunc(limit)));
+    const normalizedQuery = query.normalize("NFKC").trim();
+    const escapedQuery = normalizedQuery.replace(/[\\%_]/gu, "\\$&");
+    const pattern = `%${escapedQuery}%`;
+    const rows = normalizedQuery
+      ? this.db.all(
+          `SELECT * FROM drafts
+           WHERE work_id = ? AND (? IS NULL OR draft_type = ?)
+             AND (title LIKE ? ESCAPE '\\' COLLATE NOCASE OR content LIKE ? ESCAPE '\\' COLLATE NOCASE)
+           ORDER BY CASE WHEN title LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, updated_at DESC
+           LIMIT ?`,
+          workId,
+          draftType ?? null,
+          draftType ?? null,
+          pattern,
+          pattern,
+          pattern,
+          safeLimit
+        )
+      : this.db.all(
+          `SELECT * FROM drafts WHERE work_id = ? AND (? IS NULL OR draft_type = ?)
+           ORDER BY updated_at DESC, title LIMIT ?`,
+          workId,
+          draftType ?? null,
+          draftType ?? null,
+          safeLimit
+        );
+    return rows.map((row) => this.mapDraft(row, true));
+  }
+
+  getDraft(draftId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM drafts WHERE id = ?", draftId);
+    if (!row) throw notFound("草稿");
+    return this.mapDraft(row, true);
+  }
+
+  updateDraft(
+    draftId: string,
+    input: Partial<DraftInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = "",
+    expectedVersionNo?: number
+  ): Record<string, unknown> {
+    const current = this.getDraft(draftId);
+    const content = input.content ?? String(current.content);
+    this.db.transaction(() => {
+      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "草稿");
+      this.db.run(
+        "UPDATE drafts SET draft_type = ?, title = ?, content = ?, updated_at = ? WHERE id = ?",
+        input.draftType ?? String(current.draftType),
+        input.title ?? String(current.title),
+        content,
+        now(),
+        draftId
+      );
+      this.syncMarkdownAttachmentReferences(String(current.workId), "draft", draftId, content);
+      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "更新创作草稿");
+      this.audit(String(current.workId), "draft.updated", "draft", draftId, { fields: Object.keys(input), source, sourceRef });
+    });
+    return this.getDraft(draftId);
+  }
+
+  deleteDraft(draftId: string, expectedVersionNo?: number): void {
+    const current = this.getDraft(draftId);
+    this.db.transaction(() => {
+      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "草稿");
+      this.recordEntityVersion("draft", draftId, "delete", null, "删除创作草稿");
+      this.clearMarkdownAttachmentReferences("draft", draftId);
+      this.db.run("DELETE FROM drafts WHERE id = ?", draftId);
+      this.audit(String(current.workId), "draft.deleted", "draft", draftId);
+    });
+  }
+
+  private mapDraft(row: Row, includeContent: boolean): Record<string, unknown> {
+    const content = requiredString(row, "content");
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      draftType: requiredString(row, "draft_type"),
+      title: requiredString(row, "title"),
+      ...(includeContent ? { content } : { contentPreview: content.replace(/\s+/gu, " ").trim().slice(0, 320) }),
+      versionNo: this.currentEntityVersionNo("draft", requiredString(row, "id")),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
   }
 
   createSetting(workId: string, input: SettingInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
@@ -7351,9 +7534,10 @@ export class Store {
   exportWork(workId: string): Record<string, unknown> {
     const tree = this.getWorkTree(workId);
     return {
-      schemaVersion: 7,
+      schemaVersion: 8,
       exportedAt: now(),
       work: tree,
+      drafts: this.listDrafts(workId, undefined, true),
       settings: this.listSettings(workId),
       characters: this.listCharacters(workId, true, true),
       races: this.listRaces(workId),

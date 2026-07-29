@@ -399,7 +399,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     ]));
     const exported = await request(runtime.app).get(`/api/works/${workId}/export?format=json`).expect(200);
     expect(exported.body.data).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       races: expect.arrayContaining([expect.objectContaining({ id: original.body.data.id, parentRaceId: titan.body.data.id })])
     });
   });
@@ -584,7 +584,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     const outlines = await request(runtime.app).get(`/api/works/${workId}/outlines`).expect(200);
     expect(outlines.body.data[0]).toMatchObject({ goal: "建立旧友关系", volumeTitle: "第一卷" });
     const exported = await request(runtime.app).get(`/api/works/${workId}/export?format=json`).expect(200);
-    expect(exported.body.data).toMatchObject({ schemaVersion: 7, races: [] });
+    expect(exported.body.data).toMatchObject({ schemaVersion: 8, races: [] });
     expect(exported.body.data.foreshadows[0].occurrences).toHaveLength(2);
   });
 });

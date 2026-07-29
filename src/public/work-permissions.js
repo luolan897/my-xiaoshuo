@@ -1,5 +1,6 @@
 export const WORK_PERMISSION_MODULES = Object.freeze([
   { id: "prose", uiModule: "editor", label: "正文" },
+  { id: "drafts", uiModule: "drafts", label: "草稿" },
   { id: "settings", uiModule: "settings", label: "设定库" },
   { id: "characters", uiModule: "characters", label: "角色" },
   { id: "races", uiModule: "races", label: "种族" },
@@ -21,6 +22,13 @@ const validAccess = new Set(["none", "read", "write"]);
 function migrateLegacyModulePermissions(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const migrated = { ...value };
+  if (!validAccess.has(migrated.drafts)) {
+    const prose = validAccess.has(migrated.prose) ? migrated.prose : "none";
+    const settings = validAccess.has(migrated.settings) ? migrated.settings : "none";
+    migrated.drafts = prose === "write" && settings === "write"
+      ? "write"
+      : prose === "none" || settings === "none" ? "none" : "read";
+  }
   const legacyAi = validAccess.has(migrated.ai) ? migrated.ai : null;
   if (!validAccess.has(migrated["ai-chat"]) && legacyAi) migrated["ai-chat"] = legacyAi;
   if (!validAccess.has(migrated["ai-analysis"]) && validAccess.has(migrated.ai)) {
