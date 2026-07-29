@@ -1,6 +1,8 @@
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AiManager } from "../../src/ai.js";
 import type { Runtime } from "../../src/app.js";
+import { CredentialVault } from "../../src/credential-vault.js";
 import { createTestRuntime } from "../helpers.js";
 
 function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
@@ -26,6 +28,7 @@ async function setupWork(fetchMock: typeof fetch): Promise<{
   workId: string;
   chapterIds: string[];
   releaseGates: Array<() => void>;
+  gatedFetch: typeof fetch;
 }> {
   const releaseGates: Array<() => void> = [];
   const gatedFetch: typeof fetch = async (input, init) => {
@@ -73,7 +76,7 @@ async function setupWork(fetchMock: typeof fetch): Promise<{
       scope: { type: "chapter", chapterId }
     }).expect(201);
   }
-  return { runtime, workId, chapterIds, releaseGates };
+  return { runtime, workId, chapterIds, releaseGates, gatedFetch };
 }
 
 describe("分析任务自动运行", () => {
@@ -95,6 +98,12 @@ describe("分析任务自动运行", () => {
       autoRunEnabled: false,
       autoRunConcurrency: 2,
       autoRunBatchLimit: 20,
+      autoRunDailyTaskLimit: 0,
+      autoRunFailureThreshold: 3,
+      autoRunPaused: false,
+      autoRunPauseReason: "",
+      autoRunResumeAt: null,
+      autoRunConsecutiveFailures: 0,
       bookSummaryContextPercent: 50,
       contextCompactThreshold: 85,
       agentTools: ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections"]
@@ -105,6 +114,12 @@ describe("分析任务自动运行", () => {
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       autoRunBatchLimit: 201
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunDailyTaskLimit: 10_001
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunFailureThreshold: 0
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       bookSummaryContextPercent: 91
@@ -194,7 +209,101 @@ describe("分析任务自动运行", () => {
     expect(secondPage.body.data.items).toHaveLength(25);
   });
 
-  it("开启自动运行后遵守并发与单次上限", async () => {
+  it("以事务原子认领待执行任务并遵守运行上限", () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "原子认领测试" });
+    const firstTask = runtime.store.createTask(String(work.id), {
+      taskType: "chapter-analysis",
+      scope: { type: "book" }
+    });
+    const secondTask = runtime.store.createTask(String(work.id), {
+      taskType: "chapter-analysis",
+      scope: { type: "book" }
+    });
+
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toMatchObject({ status: "running", attemptCount: 1 });
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toBeNull();
+    const nextAttemptAt = new Date(Date.now() + 60_000).toISOString();
+    expect(runtime.store.rescheduleTask(String(firstTask.id), { message: "临时失败" }, nextAttemptAt)).toMatchObject({
+      status: "pending",
+      attemptCount: 1,
+      nextAttemptAt
+    });
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toBeNull();
+    runtime.database.run("UPDATE analysis_tasks SET next_attempt_at = ? WHERE id = ?", new Date(Date.now() - 1_000).toISOString(), String(firstTask.id));
+    expect(runtime.store.claimPendingTask(String(firstTask.id), 1)).toMatchObject({ status: "running", attemptCount: 2 });
+    expect(runtime.store.claimPendingTask(String(secondTask.id), 1)).toBeNull();
+    expect(runtime.store.getTask(String(secondTask.id)).status).toBe("pending");
+  });
+
+  it("连续失败达到阈值后持久化暂停状态", () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "失败熔断测试" });
+    const workId = String(work.id);
+    runtime.store.updateWorkAiSettings(workId, {
+      autoRunEnabled: true,
+      autoRunFailureThreshold: 2
+    });
+
+    expect(runtime.store.recordAutoRunFailure(workId, "第一次失败")).toMatchObject({
+      autoRunPaused: false,
+      autoRunConsecutiveFailures: 1
+    });
+    expect(runtime.store.recordAutoRunFailure(workId, "第二次失败")).toMatchObject({
+      autoRunPaused: true,
+      autoRunConsecutiveFailures: 2,
+      autoRunPauseReason: expect.stringContaining("第二次失败")
+    });
+    expect(runtime.store.clearAutoRunPause(workId)).toMatchObject({
+      autoRunPaused: false,
+      autoRunConsecutiveFailures: 0
+    });
+  });
+
+  it("服务启动后恢复已开启作品的待执行队列", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            summary: "恢复执行摘要",
+            events: [],
+            characters: [],
+            settings: [],
+            evidence: [{ conclusion: "有据", quote: "原文" }],
+            uncertainties: []
+          })
+        }
+      }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const { runtime, workId, releaseGates, gatedFetch } = await setupWork(fetchMock);
+    runtimes.push(runtime);
+    runtime.ai.dispose();
+    runtime.store.updateWorkAiSettings(workId, {
+      autoRunEnabled: true,
+      autoRunConcurrency: 2
+    });
+
+    const resumedAi = new AiManager(
+      runtime.store,
+      new CredentialVault("test-master-secret-with-at-least-32-characters"),
+      gatedFetch
+    );
+    try {
+      await waitFor(() => releaseGates.length >= 2);
+      releaseGates.splice(0).forEach((release) => release());
+      while (runtime.store.countPendingTasks(workId) > 0 || runtime.store.countRunningTasks(workId) > 0) {
+        await waitFor(() => releaseGates.length > 0 || (runtime.store.countPendingTasks(workId) === 0 && runtime.store.countRunningTasks(workId) === 0));
+        releaseGates.splice(0).forEach((release) => release());
+      }
+      expect(runtime.store.countPendingTasks(workId)).toBe(0);
+    } finally {
+      resumedAi.dispose();
+    }
+  });
+
+  it("开启自动运行后遵守并发上限并持续清空队列", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{
         message: {
@@ -217,30 +326,46 @@ describe("分析任务自动运行", () => {
       autoRunConcurrency: 2,
       autoRunBatchLimit: 3
     }).expect(200);
-    // 开启自动运行时已 reset 并 schedule，勿再调 startAutoRunBatch，否则会清掉本轮 claimed
 
     await waitFor(() => releaseGates.length >= 2);
     expect(releaseGates.length).toBe(2);
     expect(runtime.store.countRunningTasks(workId)).toBe(2);
 
     releaseGates.splice(0).forEach((release) => release());
-    await waitFor(() => releaseGates.length >= 1);
-    expect(releaseGates.length).toBe(1);
-    expect(runtime.store.countRunningTasks(workId)).toBe(1);
-    releaseGates.splice(0).forEach((release) => release());
-    await waitFor(() => runtime.store.countRunningTasks(workId) === 0);
+    while (runtime.store.countPendingTasks(workId) > 0 || runtime.store.countRunningTasks(workId) > 0) {
+      await waitFor(() => releaseGates.length > 0 || (runtime.store.countPendingTasks(workId) === 0 && runtime.store.countRunningTasks(workId) === 0));
+      releaseGates.splice(0).forEach((release) => release());
+    }
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
     const statuses = (tasks.body.data.items as Array<{ status: string }>).map((item) => item.status);
-    expect(statuses.filter((status) => status === "review")).toHaveLength(3);
-    expect(statuses.filter((status) => status === "pending").length).toBeGreaterThanOrEqual(2);
+    expect(statuses.filter((status) => status === "review")).toHaveLength(5);
+    expect(statuses.filter((status) => status === "pending")).toHaveLength(0);
+  });
 
-    await request(runtime.app).post(`/api/works/${workId}/tasks/auto-run`).send({}).expect(200);
-    await waitFor(() => releaseGates.length >= 1);
-    const started = releaseGates.splice(0);
-    started.forEach((release) => release());
-    await waitFor(() => runtime.store.countRunningTasks(workId) === 0);
-    for (const release of releaseGates.splice(0)) release();
-    await waitFor(() => runtime.store.countRunningTasks(workId) === 0);
+  it("自动任务连续失败后暂停剩余队列", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("invalid request", { status: 400 }));
+    const { runtime, workId, releaseGates } = await setupWork(fetchMock);
+    runtimes.push(runtime);
+
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunEnabled: true,
+      autoRunConcurrency: 2,
+      autoRunFailureThreshold: 2
+    }).expect(200);
+    await waitFor(() => releaseGates.length >= 2);
+    releaseGates.splice(0).forEach((release) => release());
+    await waitFor(() => Boolean(runtime.store.getWorkAiSettings(workId).autoRunPaused));
+    while (runtime.store.countRunningTasks(workId) > 0) {
+      releaseGates.splice(0).forEach((release) => release());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(runtime.store.getWorkAiSettings(workId)).toMatchObject({
+      autoRunEnabled: true,
+      autoRunPaused: true,
+      autoRunPauseReason: expect.stringContaining("AI 调用失败")
+    });
+    expect(runtime.store.countPendingTasks(workId)).toBeGreaterThan(0);
   });
 });

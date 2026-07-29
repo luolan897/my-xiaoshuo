@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 53 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 54 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -157,7 +157,23 @@ describe("数据库版本化迁移", () => {
     expect(first.get(`SELECT paragraph.rowid AS id FROM chapter_paragraph_search_fts paragraph
       WHERE chapter_paragraph_search_fts MATCH '"旧正文"'`)).toEqual({ id: 1 });
     expect(first.all("PRAGMA table_info(work_ai_settings)").map((column) => column.name)).toEqual(
-      expect.arrayContaining(["auto_run_enabled", "auto_run_concurrency", "auto_run_batch_limit", "book_summary_context_percent", "context_compact_threshold", "agent_tools_json"])
+      expect.arrayContaining([
+        "auto_run_enabled",
+        "auto_run_concurrency",
+        "auto_run_batch_limit",
+        "auto_run_daily_task_limit",
+        "auto_run_failure_threshold",
+        "auto_run_paused",
+        "auto_run_pause_reason",
+        "auto_run_resume_at",
+        "auto_run_consecutive_failures",
+        "book_summary_context_percent",
+        "context_compact_threshold",
+        "agent_tools_json"
+      ])
+    );
+    expect(first.all("PRAGMA table_info(analysis_tasks)").map((column) => column.name)).toEqual(
+      expect.arrayContaining(["attempt_count", "next_attempt_at", "last_attempt_at"])
     );
     expect(first.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["compacted_summary", "compacted_message_count", "context_warning_at"])

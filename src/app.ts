@@ -36,6 +36,7 @@ import {
   presencePageKinds
 } from "./collaboration-presence.js";
 import {
+  analysisTaskReadModules,
   clearSessionCookie,
   createCliApiScopeMiddleware,
   createUserSessionMiddleware,
@@ -405,6 +406,8 @@ const workAiSettingsSchema = z.object({
   autoRunEnabled: z.boolean().optional(),
   autoRunConcurrency: z.number().int().min(1).max(8).optional(),
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
+  autoRunDailyTaskLimit: z.number().int().min(0).max(10_000).optional(),
+  autoRunFailureThreshold: z.number().int().min(1).max(10).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"])).max(5).optional()
@@ -728,9 +731,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
-      if (task.taskType !== "relationship-analysis") return;
-      const requiredModules = relationshipAnalysisReadModules(task.scope);
-      if (requiredModules.length === 0) return;
+      const requiredModules = analysisTaskReadModules(task.taskType, task.scope);
       const creator = actor ? null : database.get(
         "SELECT created_by_user_id FROM analysis_tasks WHERE id = ?",
         String(task.id)
@@ -1633,16 +1634,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissions = requestPermissions(request, request.params.workId);
     for (const taskId of store.listOldestPendingTaskIds(request.params.workId, store.countPendingTasks(request.params.workId))) {
       const task = store.getTask(taskId);
-      if (task.taskType !== "relationship-analysis") continue;
-      const deniedModules = relationshipAnalysisReadModules(task.scope).filter((module) => permissions[module] === "none");
+      const deniedModules = analysisTaskReadModules(task.taskType, task.scope).filter((module) => permissions[module] === "none");
       if (deniedModules.length > 0) {
-        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取待运行定向人物关系分析所需资料模块的权限", {
+        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取待运行分析任务所需资料模块的权限", {
           taskId,
           modules: deniedModules
         });
       }
     }
-    data(response, ai.startAutoRunBatch(request.params.workId));
+    data(response, ai.resumeAutoRun(request.params.workId));
   });
   app.get("/api/tasks/:taskId/detail", (request, response) => data(
     response,
@@ -1671,14 +1671,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
     const task = store.getTask(request.params.taskId);
-    if (task.taskType === "relationship-analysis") {
-      const permissions = requestPermissions(request, String(task.workId));
-      const deniedModules = relationshipAnalysisReadModules(task.scope).filter((module) => permissions[module] === "none");
-      if (deniedModules.length > 0) {
-        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取本次定向人物关系分析所需资料模块的权限", {
-          modules: deniedModules
-        });
-      }
+    const permissions = requestPermissions(request, String(task.workId));
+    const deniedModules = analysisTaskReadModules(task.taskType, task.scope).filter((module) => permissions[module] === "none");
+    if (deniedModules.length > 0) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取本次分析所需资料模块的权限", {
+        modules: deniedModules
+      });
     }
     data(response, redactTaskCharacterNames(
       await ai.runTask(request.params.taskId, input.modelId, request.authUser ? {
@@ -1691,14 +1689,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/tasks/:taskId/rerun", (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
     const task = store.getTask(request.params.taskId);
-    if (task.taskType === "relationship-analysis") {
-      const permissions = requestPermissions(request, String(task.workId));
-      const deniedModules = relationshipAnalysisReadModules(task.scope).filter((module) => permissions[module] === "none");
-      if (deniedModules.length > 0) {
-        throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取本次定向人物关系分析所需资料模块的权限", {
-          modules: deniedModules
-        });
-      }
+    const permissions = requestPermissions(request, String(task.workId));
+    const deniedModules = analysisTaskReadModules(task.taskType, task.scope).filter((module) => permissions[module] === "none");
+    if (deniedModules.length > 0) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取本次分析所需资料模块的权限", {
+        modules: deniedModules
+      });
     }
     data(response, redactTaskCharacterNames(
       ai.rerunTask(request.params.taskId),
@@ -1769,11 +1765,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.patch("/api/works/:workId/ai-settings", (request, response) => {
     const workId = request.params.workId;
+    const input = parse(workAiSettingsSchema, request.body);
     const before = store.getWorkAiSettings(workId);
-    const updated = store.updateWorkAiSettings(workId, parse(workAiSettingsSchema, request.body));
+    let updated = store.updateWorkAiSettings(workId, input);
     if (updated.autoRunEnabled) {
-      if (!before.autoRunEnabled) ai.resetAutoRunBatch(workId);
-      ai.scheduleAutoRun(workId);
+      if (input.autoRunEnabled === true && !before.autoRunEnabled) updated = ai.resumeAutoRun(workId);
+      else ai.scheduleAutoRun(workId);
     }
     data(response, updated);
   });

@@ -210,8 +210,12 @@ function renderAnalysisTaskStatus(item) {
   const status = normalizedAnalysisTaskStatus(item.status);
   const statusChanged = taskStatusSnapshots.get(taskId) !== status;
   taskStatusSnapshots.set(taskId, status);
-  const label = analysisTaskStatusLabel(item.status);
-  return `<span class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}" aria-label="任务状态：${esc(label)}">
+  const waitingToRetry = status === "pending" && Boolean(item.nextAttemptAt);
+  const label = waitingToRetry ? "等待重试" : analysisTaskStatusLabel(item.status);
+  const retryTitle = waitingToRetry
+    ? ` title="第 ${esc(String(item.attemptCount ?? 0))} 次尝试失败，将于 ${esc(formatDateTime(item.nextAttemptAt))} 重试"`
+    : "";
+  return `<span class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}" aria-label="任务状态：${esc(label)}"${retryTitle}>
     <span class="task-status-indicator" aria-hidden="true"></span>
     <span>${esc(label)}</span>
   </span>`;
@@ -4759,7 +4763,7 @@ async function renderTasks(page = taskListPage) {
     apiPage(`/api/works/${state.work.id}/tasks`, page, pageSize),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
-      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
+      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunPaused: false })
   ]);
   if (!taskPage.items.length && page > 1) return renderTasks(page - 1);
   taskListPage = taskPage.page;
@@ -4771,6 +4775,12 @@ async function renderTasks(page = taskListPage) {
   const runningCount = Number(taskPage.stats?.runningCount ?? 0);
   const activeTaskCount = pendingCount + runningCount;
   const runningProgress = runningCount ? analysisTaskProgressValue(taskPage.stats?.runningProgress) : 0;
+  const autoRunPaused = Boolean(settings.autoRunEnabled && settings.autoRunPaused);
+  const autoRunActive = Boolean(settings.autoRunEnabled && !autoRunPaused);
+  const queueProgressLabel = runningCount
+    ? "运行中任务平均进度"
+    : autoRunPaused ? "自动执行已暂停" : autoRunActive ? "等待任务开始" : "自动执行已关闭";
+  const queueProgressClass = runningCount ? "is-running" : autoRunPaused ? "is-paused" : "is-waiting";
   const visibleTaskIds = new Set(tasks.map((item) => String(item.id)));
   for (const taskId of taskStatusSnapshots.keys()) {
     if (!visibleTaskIds.has(taskId)) taskStatusSnapshots.delete(taskId);
@@ -4787,27 +4797,30 @@ async function renderTasks(page = taskListPage) {
       <div class="task-auto-run-copy">
         <strong id="task-auto-run-title">自动执行待分析任务</strong>
         <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
-        <small>每轮最多启动「每轮任务上限」个，同时运行数量不超过「同时运行上限」；剩余任务需点击“开始下一轮”。</small>
+        <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
       </div>
       <div class="task-auto-run-controls">
-        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>自动执行待分析任务</span></label>
+        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>持续自动执行</span></label>
         <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
-        <label>每轮任务上限<input id="task-auto-run-batch-limit" type="number" min="1" max="200" value="${esc(String(settings.autoRunBatchLimit ?? 20))}"></label>
+        <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" aria-describedby="task-auto-run-daily-help"></label>
+        <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}"></label>
         <button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button>
-        <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>开始下一轮</button>
+        <button id="task-auto-run-toggle" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>${autoRunPaused ? "恢复自动执行" : "暂停自动执行"}</button>
       </div>
-      <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
+      <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
+      <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个 · ${autoRunPaused ? "已暂停" : autoRunActive ? "持续执行中" : "未开启"}</p>
+      ${autoRunPaused ? `<p class="task-auto-run-alert" role="status"><strong>自动执行已暂停</strong><span>${esc(settings.autoRunPauseReason || "需要人工确认后恢复")}</span>${settings.autoRunResumeAt ? `<small>预计 ${esc(formatDateTime(settings.autoRunResumeAt))} 自动恢复</small>` : ""}</p>` : ""}
       <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
-        <div class="task-auto-run-progress-ring ${runningCount ? "is-running" : "is-waiting"}" role="progressbar" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${runningProgress}">
+        <div class="task-auto-run-progress-ring ${queueProgressClass}" role="progressbar" aria-label="${queueProgressLabel}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${runningProgress}">
           <svg viewBox="0 0 120 120" aria-hidden="true" focusable="false">
             <circle class="task-auto-run-progress-ring-track" cx="60" cy="60" r="52"></circle>
             <circle class="task-auto-run-progress-ring-value" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="${runningProgress} 100"></circle>
           </svg>
-          <div class="task-auto-run-progress-ring-label"><strong>${runningProgress}%</strong><span>${runningCount ? "运行中平均进度" : "等待任务开始"}</span></div>
+          <div class="task-auto-run-progress-ring-label"><strong>${runningProgress}%</strong><span>${queueProgressLabel}</span></div>
         </div>
         <div class="task-auto-run-progress-bar-layout">
-          <div class="task-auto-run-progress-label"><span>${runningCount ? "运行中任务平均进度" : "等待任务开始"}</span><strong>${runningProgress}%</strong></div>
-          <progress class="task-auto-run-progress-bar ${runningCount ? "is-running" : "is-waiting"}" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
+          <div class="task-auto-run-progress-label"><span>${queueProgressLabel}</span><strong>${runningProgress}%</strong></div>
+          <progress class="task-auto-run-progress-bar ${queueProgressClass}" max="100" value="${runningProgress}" aria-label="${queueProgressLabel}">${runningProgress}%</progress>
         </div>
       </div>
     </section>
@@ -4820,7 +4833,7 @@ async function renderTasks(page = taskListPage) {
       <td class="task-progress-cell">${renderAnalysisTaskProgress(item)}</td>
       <td class="task-row-actions">
         <button class="ghost-button" type="button" data-task-detail="${esc(item.id)}">详情</button>
-        ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
+        ${item.status === "pending" && !item.nextAttemptAt ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
     </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
@@ -4840,26 +4853,34 @@ async function renderTasks(page = taskListPage) {
         body: {
           autoRunEnabled: $("#task-auto-run-enabled").checked,
           autoRunConcurrency: Number($("#task-auto-run-concurrency").value),
-          autoRunBatchLimit: Number($("#task-auto-run-batch-limit").value)
+          autoRunDailyTaskLimit: Number($("#task-auto-run-daily-limit").value),
+          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value)
         }
       });
       toast(updated.autoRunEnabled
-        ? `自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个，每轮最多 ${updated.autoRunBatchLimit} 个`
+        ? `持续自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个`
         : "自动执行已关闭");
       await renderTasks();
+      window.setTimeout(() => $("#task-auto-run-save")?.focus(), 0);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
     }
   });
-  $("#task-auto-run-continue")?.addEventListener("click", async () => {
-    const button = $("#task-auto-run-continue");
+  $("#task-auto-run-toggle")?.addEventListener("click", async () => {
+    const button = $("#task-auto-run-toggle");
     button.disabled = true;
     try {
-      const result = await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
-      toast(`已开始下一轮，队列中还有 ${result.pendingCount} 个待执行任务`);
+      if (autoRunPaused) {
+        await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
+        toast("自动执行已恢复");
+      } else {
+        await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { autoRunEnabled: false } });
+        toast("已暂停启动新的分析任务，正在运行的任务会继续完成");
+      }
       await refreshBackgroundTaskCenter({ announce: false });
       await renderTasks();
+      window.setTimeout(() => $(autoRunPaused ? "#task-auto-run-toggle" : "#task-auto-run-enabled")?.focus(), 0);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
@@ -4916,7 +4937,7 @@ async function renderTasks(page = taskListPage) {
       button.disabled = false;
     }
   }));
-  scheduleTaskProgressRefresh(state.work.id, runningCount);
+  scheduleTaskProgressRefresh(state.work.id, runningCount > 0 || (pendingCount > 0 && autoRunActive) ? 1 : 0);
 }
 
 async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {

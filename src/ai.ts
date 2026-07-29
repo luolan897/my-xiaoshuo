@@ -78,6 +78,49 @@ export function aiErrorForLog(error: unknown): Record<string, unknown> {
   return sanitized;
 }
 
+const AUTO_RUN_MAX_ATTEMPTS = 3;
+const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
+const AUTO_RUN_FATAL_CODES = new Set([
+  "CREDENTIAL_DECRYPT_FAILED",
+  "MODEL_REQUIRED",
+  "MODEL_DISABLED",
+  "MODEL_PLATFORM_MISMATCH",
+  "PROVIDER_DISABLED",
+  "PROVIDER_UNAVAILABLE",
+  "WORK_ACCESS_DENIED",
+  "WORK_MODULE_READ_DENIED"
+]);
+
+export type AutoRunFailureDisposition = {
+  retry: boolean;
+  retryDelayMs: number;
+  pauseImmediately: boolean;
+};
+
+export function autoRunFailureDisposition(error: unknown, attemptCount: number): AutoRunFailureDisposition {
+  const appError = error instanceof AppError ? error : null;
+  const details = appError?.details && typeof appError.details === "object" && !Array.isArray(appError.details)
+    ? appError.details as Record<string, unknown>
+    : null;
+  const providerFailure = typeof details?.failure === "string" ? details.failure : "";
+  const httpStatus = Number(providerFailure.match(/HTTP (\d{3})/u)?.[1] ?? 0);
+  const pauseImmediately = Boolean(
+    appError && (AUTO_RUN_FATAL_CODES.has(appError.code) || httpStatus === 401 || httpStatus === 403)
+  );
+  const retryable = !pauseImmediately && (
+    !appError
+    || (appError.code === "AI_CALL_FAILED"
+      ? httpStatus === 0 || httpStatus === 408 || httpStatus === 425 || httpStatus === 429 || httpStatus >= 500
+      : appError.status >= 500)
+  );
+  const retry = retryable && attemptCount < AUTO_RUN_MAX_ATTEMPTS;
+  return {
+    retry,
+    retryDelayMs: retry ? AUTO_RUN_RETRY_DELAYS_MS[Math.max(0, attemptCount - 1)] ?? AUTO_RUN_RETRY_DELAYS_MS.at(-1) ?? 30_000 : 0,
+    pauseImmediately
+  };
+}
+
 type ProviderRow = Row & {
   id: string;
   work_id: string;
@@ -1237,8 +1280,9 @@ export class ContextBuilder {
 export class AiManager {
   readonly contextBuilder: ContextBuilder;
   private readonly taskControllers = new Map<string, AbortController>();
-  private readonly autoRunBatches = new Map<string, { claimed: number; starting: Set<string> }>();
+  private readonly autoRunStarting = new Map<string, Set<string>>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private autoRunStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly relationshipIndexBuilds = new Map<string, Promise<number>>();
   private readonly relationshipSelectionCache = new Map<string, RelationshipLocalSourceSelection>();
   private readonly relationshipSelectionBuilds = new Map<string, Promise<RelationshipLocalSourceSelection>>();
@@ -1270,6 +1314,10 @@ export class AiManager {
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
+    this.autoRunStartupTimer = setTimeout(() => {
+      this.autoRunStartupTimer = null;
+      for (const workId of this.store.listAutoRunWorkIds()) this.scheduleAutoRun(workId);
+    }, 0);
     this.store.setRelationshipIndexQueuedHandler((workId) => this.scheduleRelationshipIndexSync(workId));
     this.relationshipIndexTimer = setTimeout(() => {
       this.relationshipIndexTimer = null;
@@ -1572,13 +1620,18 @@ export class AiManager {
     };
   }
 
-  resetAutoRunBatch(workId: string): void {
-    this.autoRunBatches.set(workId, { claimed: 0, starting: new Set() });
-  }
-
-  scheduleAutoRun(workId: string): void {
+  scheduleAutoRun(workId: string, delayMs = 0): void {
+    let resolvedDelay = Math.max(0, delayMs);
     try {
-      if (!this.store.getWorkAiSettings(workId).autoRunEnabled) return;
+      let settings = this.store.getWorkAiSettings(workId);
+      if (!settings.autoRunEnabled) return;
+      if (settings.autoRunPaused) {
+        const resumeAt = typeof settings.autoRunResumeAt === "string" ? Date.parse(settings.autoRunResumeAt) : Number.NaN;
+        if (!Number.isFinite(resumeAt)) return;
+        if (resumeAt <= Date.now()) settings = this.store.clearAutoRunPause(workId);
+        else resolvedDelay = Math.max(resolvedDelay, resumeAt - Date.now());
+      }
+      if (settings.autoRunPaused && resolvedDelay === 0) return;
     } catch {
       return;
     }
@@ -1587,29 +1640,25 @@ export class AiManager {
     const timer = setTimeout(() => {
       this.autoRunTimers.delete(workId);
       void this.drainAutoRun(workId);
-    }, 0);
+    }, Math.min(resolvedDelay, 2_147_483_647));
     this.autoRunTimers.set(workId, timer);
-    logger.debug("ai.auto_run.scheduled", { workId });
+    logger.debug("ai.auto_run.scheduled", { workId, delayMs: resolvedDelay });
   }
 
-  startAutoRunBatch(workId: string): Record<string, unknown> {
+  resumeAutoRun(workId: string): Record<string, unknown> {
     this.store.getWork(workId);
-    const settings = this.store.getWorkAiSettings(workId);
+    let settings = this.store.getWorkAiSettings(workId);
     if (!settings.autoRunEnabled) {
       throw new AppError(400, "AUTO_RUN_DISABLED", "请先开启分析任务自动运行");
     }
-    this.resetAutoRunBatch(workId);
+    settings = this.store.clearAutoRunPause(workId);
     this.scheduleAutoRun(workId);
-    logger.info("ai.auto_run.batch_started", {
+    logger.info("ai.auto_run.resumed", {
       workId,
-      concurrency: settings.autoRunConcurrency,
-      batchLimit: settings.autoRunBatchLimit
+      concurrency: settings.autoRunConcurrency
     });
     return {
-      workId,
-      autoRunEnabled: true,
-      autoRunConcurrency: settings.autoRunConcurrency,
-      autoRunBatchLimit: settings.autoRunBatchLimit,
+      ...settings,
       pendingCount: this.store.countPendingTasks(workId),
       runningCount: this.store.countRunningTasks(workId)
     };
@@ -1617,9 +1666,11 @@ export class AiManager {
 
   dispose(): void {
     logger.info("ai.manager.disposing", { scheduledWorks: this.autoRunTimers.size, activeTasks: this.taskControllers.size });
+    if (this.autoRunStartupTimer) clearTimeout(this.autoRunStartupTimer);
+    this.autoRunStartupTimer = null;
     for (const timer of this.autoRunTimers.values()) clearTimeout(timer);
     this.autoRunTimers.clear();
-    this.autoRunBatches.clear();
+    this.autoRunStarting.clear();
     this.relationshipIndexDisposed = true;
     for (const timer of this.relationshipIndexSyncTimers.values()) clearTimeout(timer);
     this.relationshipIndexSyncTimers.clear();
@@ -1630,11 +1681,11 @@ export class AiManager {
     logger.info("ai.manager.disposed");
   }
 
-  private getAutoRunBatch(workId: string): { claimed: number; starting: Set<string> } {
-    const existing = this.autoRunBatches.get(workId);
+  private getAutoRunStarting(workId: string): Set<string> {
+    const existing = this.autoRunStarting.get(workId);
     if (existing) return existing;
-    const created = { claimed: 0, starting: new Set<string>() };
-    this.autoRunBatches.set(workId, created);
+    const created = new Set<string>();
+    this.autoRunStarting.set(workId, created);
     return created;
   }
 
@@ -1642,26 +1693,44 @@ export class AiManager {
     try {
       logger.debug("ai.auto_run.drain_started", { workId });
       const settings = this.store.getWorkAiSettings(workId);
-      if (!settings.autoRunEnabled) return;
-      const batch = this.getAutoRunBatch(workId);
+      if (!settings.autoRunEnabled || settings.autoRunPaused) return;
+      const dailyTaskLimit = Number(settings.autoRunDailyTaskLimit);
+      if (dailyTaskLimit > 0 && this.store.countAutoRunAttemptsToday(workId) >= dailyTaskLimit) {
+        const resumeAt = new Date();
+        resumeAt.setUTCHours(24, 0, 0, 0);
+        this.store.pauseAutoRun(workId, `已达到每日自动执行上限 ${dailyTaskLimit} 个任务`, resumeAt.toISOString());
+        this.scheduleAutoRun(workId);
+        logger.info("ai.auto_run.daily_limit_reached", { workId, dailyTaskLimit, resumeAt: resumeAt.toISOString() });
+        return;
+      }
+      const starting = this.getAutoRunStarting(workId);
       const concurrency = Number(settings.autoRunConcurrency);
-      const batchLimit = Number(settings.autoRunBatchLimit);
-      while (true) {
-        // 只计 DB running：starting 任务会在 runTask 同步阶段立刻标为 running，再加 starting 会重复计数
-        const inFlight = this.store.countRunningTasks(workId);
-        const remainingClaims = batchLimit - batch.claimed;
-        if (inFlight >= concurrency || remainingClaims <= 0) return;
-        const candidates = this.store.listOldestPendingTaskIds(workId, remainingClaims)
-          .filter((taskId) => !batch.starting.has(taskId) && !this.taskControllers.has(taskId));
-        if (!candidates.length) return;
+      const remainingDailyTasks = dailyTaskLimit > 0
+        ? Math.max(0, dailyTaskLimit - this.store.countAutoRunAttemptsToday(workId))
+        : Number.POSITIVE_INFINITY;
+      let availableSlots = Math.min(
+        Math.max(0, concurrency - this.store.countRunningTasks(workId)),
+        remainingDailyTasks
+      );
+      while (availableSlots > 0) {
+        const candidates = this.store.listOldestPendingTaskIds(workId, concurrency)
+          .filter((taskId) => !starting.has(taskId) && !this.taskControllers.has(taskId));
+        if (!candidates.length) {
+          const nextAttemptAt = this.store.nextPendingTaskAttemptAt(workId);
+          if (nextAttemptAt) this.scheduleAutoRun(workId, Math.max(1, Date.parse(nextAttemptAt) - Date.now()));
+          return;
+        }
         const taskId = candidates[0];
         if (!taskId) return;
-        batch.starting.add(taskId);
-        batch.claimed += 1;
-        void this.runTask(taskId)
-          .catch(() => undefined)
+        starting.add(taskId);
+        availableSlots -= 1;
+        void this.runTask(taskId, undefined, undefined, { runningLimit: concurrency, autoRun: true })
+          .then((result) => {
+            if (result.status === "review" || result.status === "completed") this.store.recordAutoRunSuccess(workId);
+          })
+          .catch((error) => this.handleAutoRunFailure(workId, taskId, error))
           .finally(() => {
-            batch.starting.delete(taskId);
+            starting.delete(taskId);
             this.scheduleAutoRun(workId);
           });
       }
@@ -1669,6 +1738,38 @@ export class AiManager {
       logger.warn("ai.auto_run.drain_failed", { workId, error: aiErrorForLog(error) });
       // 数据库已关闭或作品不存在时忽略自动调度
     }
+  }
+
+  private handleAutoRunFailure(workId: string, taskId: string, error: unknown): void {
+    let current = this.store.getTask(taskId);
+    if (current.status === "pending" && error instanceof AppError && error.code === "TASK_NOT_PENDING") return;
+    if (current.status === "pending" && current.nextAttemptAt) {
+      logger.info("ai.auto_run.retry_waiting", {
+        workId,
+        taskId,
+        attemptCount: current.attemptCount,
+        nextAttemptAt: current.nextAttemptAt
+      });
+      return;
+    }
+    const message = error instanceof AppError ? error.message : "自动执行失败";
+    if (current.status === "pending") {
+      current = this.store.updateTask(taskId, {
+        status: "partial",
+        progress: 100,
+        failures: [{ message, ...(error instanceof AppError ? { code: error.code } : {}) }]
+      });
+    }
+    if (current.status !== "partial") return;
+    const disposition = autoRunFailureDisposition(error, Number(current.attemptCount));
+    const settings = this.store.recordAutoRunFailure(workId, message, disposition.pauseImmediately);
+    logger.warn("ai.auto_run.task_failed", {
+      workId,
+      taskId,
+      consecutiveFailures: settings.autoRunConsecutiveFailures,
+      paused: settings.autoRunPaused,
+      error: aiErrorForLog(error)
+    });
   }
 
   private outboundFetch(url: string, init: RequestInit): Promise<Awaited<ReturnType<typeof fetch>>> {
@@ -2579,7 +2680,12 @@ export class AiManager {
     };
   }
 
-  async runTask(taskId: string, modelId?: string, actor?: TaskRunActor): Promise<Record<string, unknown>> {
+  async runTask(
+    taskId: string,
+    modelId?: string,
+    actor?: TaskRunActor,
+    options: { runningLimit?: number; autoRun?: boolean } = {}
+  ): Promise<Record<string, unknown>> {
     const task = this.store.getTask(taskId);
     this.authorizeTaskRun?.(task, actor);
     const workId = String(task.workId);
@@ -2587,23 +2693,17 @@ export class AiManager {
       ? task.model as Record<string, unknown>
       : null;
     const selectedModelId = modelId ?? (typeof taskModel?.id === "string" ? taskModel.id : undefined);
-    const batch = this.getAutoRunBatch(workId);
     const startedAt = process.hrtime.bigint();
     logger.info("ai.task.started", { taskId, workId, taskType: task.taskType, modelId: selectedModelId ?? null });
     if (task.status !== "pending") throw new AppError(409, "TASK_NOT_PENDING", "只有待执行任务可以运行");
     if (!this.store.isTaskSourceCurrent(taskId)) {
       const expired = this.store.updateTask(taskId, { status: "expired" });
-      batch.starting.delete(taskId);
       this.scheduleAutoRun(workId);
       logger.warn("ai.task.expired", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
       return expired;
     }
-    const settings = this.store.getWorkAiSettings(workId);
-    // 自动 drain 已在 starting 集合中认领；手动运行在开关开启时计入本轮配额
-    if (Boolean(settings.autoRunEnabled) && !batch.starting.has(taskId)) {
-      batch.claimed += 1;
-    }
-    this.store.updateTask(taskId, { status: "running", progress: 5 });
+    const claimed = this.store.claimPendingTask(taskId, options.runningLimit);
+    if (!claimed) throw new AppError(409, "TASK_NOT_PENDING", "任务已被其他执行器认领或当前并发已满");
     const taskController = new AbortController();
     this.taskControllers.set(taskId, taskController);
     try {
@@ -2651,12 +2751,27 @@ export class AiManager {
       const failure = error instanceof AppError
         ? { message, code: error.code, ...(error.details === undefined ? {} : { details: error.details }) }
         : { message };
+      if (options.autoRun) {
+        const current = this.store.getTask(taskId);
+        const disposition = autoRunFailureDisposition(error, Number(current.attemptCount));
+        if (disposition.retry) {
+          const nextAttemptAt = new Date(Date.now() + disposition.retryDelayMs).toISOString();
+          const pending = this.store.rescheduleTask(taskId, failure, nextAttemptAt);
+          logger.warn("ai.task.retry_scheduled", {
+            taskId,
+            workId,
+            attemptCount: pending.attemptCount,
+            nextAttemptAt,
+            error: aiErrorForLog(error)
+          });
+          throw error;
+        }
+      }
       this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [failure] });
       logger.error("ai.task.failed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000, error: aiErrorForLog(error) });
       throw error;
     } finally {
       this.taskControllers.delete(taskId);
-      batch.starting.delete(taskId);
       this.scheduleAutoRun(workId);
     }
   }
