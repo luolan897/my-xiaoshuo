@@ -48,6 +48,7 @@ import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-s
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
+import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -116,6 +117,21 @@ const state = {
   collapsedRaceIds: new Set(),
   contextChapterId: null
 };
+
+const moduleRequestCache = createModuleRequestCache();
+const cachedWorkModules = new Set([
+  "drafts",
+  "settings",
+  "characters",
+  "races",
+  "organizations",
+  "timeline",
+  "outlines",
+  "relationships",
+  "reviews",
+  "tasks",
+  "ai-settings"
+]);
 
 function createPresenceClientId() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -2127,14 +2143,19 @@ async function api(path, options = {}) {
     if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
       state.user = null;
       state.csrfToken = null;
+      moduleRequestCache.clear();
       showAuth(false);
     }
     const error = new Error(payload.error?.message ?? `请求失败：${response.status}`);
     error.code = payload.error?.code;
     throw error;
   }
-  if (response.status === 204) return null;
+  if (response.status === 204) {
+    invalidateModuleRequestsAfterMutation(path, method);
+    return null;
+  }
   const payload = await response.json();
+  invalidateModuleRequestsAfterMutation(path, method);
   return payload.data;
 }
 
@@ -2154,6 +2175,63 @@ async function apiAllPages(path, limit = 100) {
     if (!result.hasMore || !result.nextPage) return items;
     page = result.nextPage;
   }
+}
+
+function cachedModuleRequest(module, requestKey, loader, options = {}) {
+  const workId = state.work?.id;
+  if (!workId) return Promise.resolve().then(loader);
+  return moduleRequestCache.request(workId, module, requestKey, loader, options);
+}
+
+function moduleApi(module, path, options = {}) {
+  return cachedModuleRequest(module, `api:${path}`, () => api(path), options);
+}
+
+function moduleApiPage(module, path, page = 1, limit = 30, options = {}) {
+  return cachedModuleRequest(module, `page:${path}:${page}:${limit}`, () => apiPage(path, page, limit), options);
+}
+
+function moduleApiAllPages(module, path, limit = 100, options = {}) {
+  return cachedModuleRequest(module, `all:${path}:${limit}`, () => apiAllPages(path, limit), options);
+}
+
+function invalidateModuleRequestsAfterMutation(path, method) {
+  if (["GET", "HEAD", "OPTIONS"].includes(method) || !state.work) return;
+  if (
+    path.startsWith("/api/auth/")
+    || path.includes("/presence")
+    || path.includes("/context/prepare")
+    || path.includes("/ai-context-usage")
+    || path.includes("/chat/stream")
+  ) return;
+
+  const affected = new Set();
+  if (path.includes("/ai-settings") || path.includes("/task-defaults") || path.includes("/providers") || path.includes("/models")) {
+    affected.add("ai-settings");
+  }
+  if (path.includes("/tasks")) affected.add("tasks");
+  if (path.includes("/drafts")) affected.add("drafts");
+  if (path.includes("/settings") && !path.includes("/ai-settings")) affected.add("settings");
+  if (path.includes("/characters") || path.includes("/character-sections")) affected.add("characters");
+  if (path.includes("/races")) affected.add("races");
+  if (path.includes("/organizations")) affected.add("organizations");
+  if (path.includes("/timeline")) affected.add("timeline");
+  if (path.includes("/outlines") || path.includes("/foreshadows")) affected.add("outlines");
+  if (path.includes("/relationships")) affected.add("relationships");
+  if (path.includes("/reviews")) affected.add("reviews");
+  if (path.includes("/entity-versions/")) {
+    if (path.includes("/draft/")) affected.add("drafts");
+    if (path.includes("/setting/")) affected.add("settings");
+    if (path.includes("/character/")) affected.add("characters");
+    if (path.includes("/race/")) affected.add("races");
+    if (path.includes("/organization/")) affected.add("organizations");
+    if (path.includes("/timeline-event/") || path.includes("/timeline-track/")) affected.add("timeline");
+    if (path.includes("/chapter-outline/") || path.includes("/foreshadow/")) affected.add("outlines");
+    if (path.includes("/relationship/")) affected.add("relationships");
+    if (path.includes("/review/")) affected.add("reviews");
+  }
+  if (cachedWorkModules.has(state.module)) affected.add(state.module);
+  affected.forEach((module) => moduleRequestCache.invalidate(state.work.id, module));
 }
 
 async function initializeProductFooters() {
@@ -3717,7 +3795,7 @@ async function deleteChapter(chapterId) {
 async function selectChapter(chapterId, { editMode = false } = {}) {
   if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) return;
   cancelChapterAutoSave();
-  state.chapter = await api(`/api/chapters/${chapterId}`);
+  if (state.chapter?.id !== chapterId) state.chapter = await api(`/api/chapters/${chapterId}`);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
   chapterEditorReadOnly = !canEditProse() || !editMode;
   state.module = "editor";
@@ -4310,7 +4388,7 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
 }
 
 async function renderDrafts(page = moduleListPages.drafts) {
-  const allDrafts = await apiAllPages(`/api/works/${state.work.id}/drafts`);
+  const allDrafts = await moduleApiAllPages("drafts", `/api/works/${state.work.id}/drafts`);
   const drafts = draftTypeFilter === "all"
     ? allDrafts
     : allDrafts.filter((draft) => draft.draftType === draftTypeFilter);
@@ -4400,7 +4478,7 @@ function renderSettingRows(records) {
 }
 
 async function renderSettings(page = moduleListPages.settings) {
-  const records = await apiAllPages(`/api/works/${state.work.id}/settings`);
+  const records = await moduleApiAllPages("settings", `/api/works/${state.work.id}/settings`);
   state.settings = records;
   mountModuleCount(records.length);
   const pageResult = paginateModuleItems(records, page, "settings");
@@ -4421,9 +4499,11 @@ async function renderCharacters(page = characterListPage) {
   const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
-    hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page, pageSize),
-    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
+    hasCharacterFilters
+      ? moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)
+      : moduleApiPage("characters", `/api/works/${state.work.id}/characters`, page, pageSize),
+    canReadModule("races") ? moduleApi("characters", `/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("organizations") ? moduleApiAllPages("characters", `/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
     ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, pageSize)
@@ -4599,7 +4679,7 @@ async function renderRaces() {
   const workId = state.work.id;
   const generation = workScopedUiGeneration;
   const requestId = ++raceListRequestId;
-  const roots = await api(`/api/works/${workId}/races?scope=roots`);
+  const roots = await moduleApi("races", `/api/works/${workId}/races?scope=roots`);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
   state.races = roots.items;
   loadedRaceHierarchyWorkId = roots.items.length === roots.total ? workId : null;
@@ -4607,7 +4687,7 @@ async function renderRaces() {
   if (loadedRaceHierarchyWorkId === workId) return;
 
   const dismissLoadingToast = persistentToast("正在加载子种族……");
-  const loadPromise = api(`/api/works/${workId}/races?scope=descendants`).then((descendants) => {
+  const loadPromise = moduleApi("races", `/api/works/${workId}/races?scope=descendants`).then((descendants) => {
     if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
     state.races = [...roots.items, ...descendants];
     loadedRaceHierarchyWorkId = workId;
@@ -4631,8 +4711,8 @@ async function renderRaces() {
 
 async function renderOrganizations(page = moduleListPages.organizations) {
   [state.organizations, state.characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/organizations`),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+    moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`),
+    canReadModule("characters") ? moduleApiAllPages("organizations", `/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   mountModuleCount(state.organizations.length);
   const pageResult = paginateModuleItems(state.organizations, page, "organizations");
@@ -4698,8 +4778,8 @@ function setTimelineMultiSelectMode(enabled) {
 
 async function renderTimeline(page = moduleListPages.timeline) {
   const [events, tracks] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/timeline`),
-    apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
+    moduleApiAllPages("timeline", `/api/works/${state.work.id}/timeline`),
+    moduleApiAllPages("timeline", `/api/works/${state.work.id}/timeline-tracks`)
   ]);
   mountModuleCount(events.length);
   const pageResult = paginateModuleItems(events, page, "timeline");
@@ -4742,8 +4822,8 @@ async function renderTimeline(page = moduleListPages.timeline) {
 async function renderOutlines(outlinePage = moduleListPages.outlinePlans, foreshadowPage = moduleListPages.foreshadows) {
   const currentChapterId = state.chapter?.id;
   const [outlines, foreshadows] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/outlines`),
-    apiAllPages(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
+    moduleApiAllPages("outlines", `/api/works/${state.work.id}/outlines`),
+    moduleApiAllPages("outlines", `/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
   ]);
   mountModuleCount(outlines.length + foreshadows.length);
   const outlinePageResult = paginateModuleItems(outlines, outlinePage, "outlines");
@@ -4796,8 +4876,8 @@ async function renderOutlines(outlinePage = moduleListPages.outlinePlans, foresh
 }
 
 async function renderRelationships(page = moduleListPages.relationships) {
-  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const relationships = await apiAllPages(`/api/works/${state.work.id}/relationships`);
+  state.characters = canReadModule("characters") ? await moduleApiAllPages("relationships", `/api/works/${state.work.id}/characters`) : [];
+  const relationships = await moduleApiAllPages("relationships", `/api/works/${state.work.id}/relationships`);
   const filteredRelationships = filterRelationships(relationships, relationshipFilters);
   const pageResult = paginateModuleItems(filteredRelationships, page, "relationships");
   moduleListPages.relationships = pageResult.page;
@@ -4871,8 +4951,8 @@ async function renderReviews(page = moduleListPages.reviews) {
   const canMergeCharacters = canResolveReview
     && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
   const [reviews, characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/reviews`),
-    canReadCharacters ? apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
+    moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`),
+    canReadCharacters ? moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
   ]);
   mountModuleCount(reviews.length);
   const pageResult = paginateModuleItems(reviews, page, "reviews");
@@ -4960,16 +5040,16 @@ async function renderReviews(page = moduleListPages.reviews) {
   }));
 }
 
-async function renderTasks(page = taskListPage) {
+async function renderTasks(page = taskListPage, { refresh = false } = {}) {
   stopTaskProgressRefresh();
   const pageSize = pageSizeFor("analysisTasks");
   const [taskPage, settings] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/tasks`, page, pageSize),
+    moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh }),
     canReadModule("ai-settings")
-      ? api(`/api/works/${state.work.id}/ai-settings`)
+      ? moduleApi("tasks", `/api/works/${state.work.id}/ai-settings`, { refresh })
       : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunPaused: false })
   ]);
-  if (!taskPage.items.length && page > 1) return renderTasks(page - 1);
+  if (!taskPage.items.length && page > 1) return renderTasks(page - 1, { refresh });
   taskListPage = taskPage.page;
   const tasks = taskPage.items;
   const taskTotal = Number(taskPage.total ?? taskPage.stats?.total ?? tasks.length);
@@ -5080,7 +5160,7 @@ async function renderTasks(page = taskListPage) {
         : "自动执行已关闭");
       taskAutoRunEditing = false;
       taskAutoRunEditingWorkId = null;
-      await renderTasks();
+      await renderTasks(taskListPage, { refresh: true });
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
@@ -5239,7 +5319,7 @@ function scheduleTaskProgressRefresh(workId, runningCount) {
       return;
     }
     try {
-      await renderTasks();
+      await renderTasks(taskListPage, { refresh: true });
     } catch (error) {
       console.error("Failed to refresh task progress", error);
       scheduleTaskProgressRefresh(workId, runningCount);
@@ -6119,12 +6199,12 @@ async function renderBookAiSettings() {
     relationshipSearchIndexRefreshTimer = null;
   }
   const [settings, providers, models, taskDefaults, relationshipIndex, usage] = await Promise.all([
-    api(`/api/works/${state.work.id}/ai-settings`),
-    api("/api/platform/ai/providers"),
-    api(`/api/works/${state.work.id}/models`),
-    api(`/api/works/${state.work.id}/task-defaults`),
-    api(`/api/works/${state.work.id}/ai-settings/relationship-search-index`),
-    api(`/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`)
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings`),
+    moduleApi("ai-settings", "/api/platform/ai/providers"),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/models`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/task-defaults`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/relationship-search-index`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`)
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
