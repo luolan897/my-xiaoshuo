@@ -107,6 +107,12 @@ describe("AI 对话上下文压缩", () => {
       role: "assistant",
       content: "已结合压缩摘要和最近对话回答。"
     });
+
+    const retryConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const retryPayload = { role: "assistant", content: "可恢复的回答", requestId: "assistant-retry-1" };
+    const firstRetry = await request(runtime.app).post(`/api/ai-conversations/${retryConversation.body.data.id}/messages`).send(retryPayload).expect(201);
+    const secondRetry = await request(runtime.app).post(`/api/ai-conversations/${retryConversation.body.data.id}/messages`).send(retryPayload).expect(201);
+    expect(secondRetry.body.data.id).toBe(firstRetry.body.data.id);
   });
 
   it("手动整理较长对话时优先保留最近八条原始消息", async () => {

@@ -5987,7 +5987,7 @@ export class Store {
       : requiredString(conversation, "title");
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id, request_id) WHERE request_id IS NOT NULL DO NOTHING",
         messageId,
         conversationId,
         input.role,
@@ -5998,9 +5998,12 @@ export class Store {
         timestamp,
         currentRequestActor()?.userId ?? null
       );
-      this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
+      const inserted = this.db.get("SELECT id FROM ai_conversation_messages WHERE id = ?", messageId);
+      if (inserted) this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
     });
-    const message = this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
+    const message = requestId
+      ? this.db.get("SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?", conversationId, requestId)
+      : this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
     if (!message) throw notFound("AI 对话消息");
     return this.mapAiConversationMessage(message);
   }
