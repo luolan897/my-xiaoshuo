@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("作品工作台按需加载", () => {
-  it("打开作品时只加载目录和当前章节", async () => {
+  it("打开作品时先加载折叠分卷，再异步加载章节目录", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
     const selectWorkSource = application.slice(
       application.indexOf("async function selectWork(workId, preferredChapterId = null)"),
@@ -11,11 +11,25 @@ describe("作品工作台按需加载", () => {
     );
 
     expect(selectWorkSource).toContain("renderTree();");
-    expect(selectWorkSource).toContain("await selectChapter(targetChapter.id)");
-    expect(selectWorkSource).toContain("chapter.id === preferredChapterId");
+    expect(selectWorkSource).toContain("?directory=volumes");
+    expect(selectWorkSource).toContain("void loadAllVolumeChapters(nextWork.id)");
+    expect(selectWorkSource).not.toContain("await selectChapter(targetChapter.id)");
     expect(selectWorkSource).not.toContain("await loadModels()");
     expect(selectWorkSource).not.toContain("await loadAiReferences()");
     expect(selectWorkSource).not.toContain("await loadAiConversations()");
+  });
+
+  it("作品树先显示折叠分卷，展开后才渲染章节节点", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderTreeSource = application.slice(
+      application.indexOf("function renderTree()"),
+      application.indexOf("function renderChapterBatchDialog()")
+    );
+
+    expect(renderTreeSource).toContain("const collapsed = state.collapsedVolumeIds.has(volume.id);");
+    expect(renderTreeSource).toContain("const chapterContent = collapsed");
+    expect(renderTreeSource).toContain("void loadVolumeChapters(volumeId)");
+    expect(application).toContain("/api/volumes/${encodeURIComponent(volumeId)}/chapters");
   });
 
   it("子模块和创作助手资源只在首次使用时加载", async () => {
@@ -43,7 +57,7 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain('moduleApiPage("characters", `/api/works/${state.work.id}/characters`, page, pageSize)');
     expect(application).toContain('moduleApiAllPages("relationships", `/api/works/${state.work.id}/relationships`)');
     expect(application).toContain('moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh })');
-    expect(application).toContain('if (state.chapter?.id !== chapterId) state.chapter = await api(`/api/chapters/${chapterId}`)');
+    expect(application).toContain('if (state.chapter?.id !== chapterId) {\n    state.chapter = await api(`/api/chapters/${chapterId}`);\n    mergeChapterDirectoryEntry(state.chapter);\n  }');
     expect(application).toContain('await renderTasks(taskListPage, { refresh: true });');
     expect(application).toContain("invalidateModuleRequestsAfterMutation(path, method);");
   });

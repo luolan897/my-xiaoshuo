@@ -967,6 +967,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.createImportedWork(input, originalFileName, extension.slice(1), parsedNovel), 201);
   });
   app.get("/api/works/:workId", (request, response) => {
+    if (request.query.directory === "volumes") {
+      data(response, store.getWorkVolumeDirectory(request.params.workId));
+      return;
+    }
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.getWorkDirectoryPage(request.params.workId, pagination) : store.getWorkDirectory(request.params.workId));
   });
@@ -1098,6 +1102,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updateVolume(request.params.volumeId, volumeInput, expectedVersionNo, "manual", null, changeNote));
   });
   app.get("/api/volumes/:volumeId", (request, response) => data(response, store.getVolume(request.params.volumeId)));
+  app.get("/api/volumes/:volumeId/chapters", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listVolumeChaptersPage(request.params.volumeId, pagination)
+      : store.listVolumeChapters(request.params.volumeId));
+  });
   app.delete("/api/volumes/:volumeId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     store.deleteVolume(request.params.volumeId, input.expectedVersionNo);
@@ -1838,6 +1848,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       role: z.enum(["user", "assistant"]),
       content: nonEmpty.max(200_000),
       citations: z.array(z.unknown()).max(100).optional(),
+      requestId: identifier.optional(),
       metadata: z.object({
         modelDisplayName: z.string().max(200).optional(),
         outputTokens: z.number().int().min(0).max(10_000_000).optional(),
@@ -2001,6 +2012,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         onProcessStep: (step) => sendEvent("process_step", step),
         conversationId: input.conversationId,
         excludeConversationMessageId: input.currentMessageId,
+        ...(input.currentMessageId ? { assistantMessageRequestId: `assistant:${input.currentMessageId}` } : {}),
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
@@ -2013,7 +2025,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         cacheHitPercent: suggestion.cacheHitPercent,
         chapterVersion: suggestion.chapterVersion,
         toolCalls: suggestion.toolCalls,
-        processSteps: suggestion.processSteps
+        processSteps: suggestion.processSteps,
+        messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
+          ? (suggestion.conversationMessage as Record<string, unknown>).id
+          : undefined,
+        messageCreatedAt: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
+          ? (suggestion.conversationMessage as Record<string, unknown>).createdAt
+          : undefined
       });
     } catch (error) {
       if (!controller.signal.aborted) {

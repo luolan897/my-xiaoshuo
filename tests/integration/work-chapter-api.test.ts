@@ -232,6 +232,26 @@ describe("作品、导入和章节版本 API", () => {
     expect(secondPage.body.data.volumes[0].chapters).toHaveLength(1);
   });
 
+  it("先返回分卷元数据，再按分卷分页加载章节目录", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "分卷懒加载作品" }).expect(201);
+    const workId = work.body.data.id;
+    const text = Array.from({ length: 101 }, (_, index) => `第${index + 1}章 章节${index + 1}\n正文`).join("\n");
+    await request(runtime.app).post(`/api/works/${workId}/import`).attach("file", Buffer.from(`第一卷\n${text}`), "懒加载.txt").expect(201);
+
+    const volumeDirectory = await request(runtime.app).get(`/api/works/${workId}?directory=volumes`).expect(200);
+    expect(volumeDirectory.body.data.volumes[0]).toMatchObject({ title: "第一卷", chapterCount: 101, chapters: [] });
+    const volumeId = volumeDirectory.body.data.volumes[0].id;
+
+    const firstPage = await request(runtime.app).get(`/api/volumes/${volumeId}/chapters?page=1&limit=100`).expect(200);
+    expect(firstPage.body.data).toMatchObject({ hasMore: true, nextPage: 2 });
+    expect(firstPage.body.data.items).toHaveLength(100);
+    expect(firstPage.body.data.items[0]).not.toHaveProperty("content");
+
+    const secondPage = await request(runtime.app).get(`/api/volumes/${volumeId}/chapters?page=2&limit=100`).expect(200);
+    expect(secondPage.body.data).toMatchObject({ hasMore: false, nextPage: null });
+    expect(secondPage.body.data.items).toHaveLength(1);
+  });
+
   it("从 DOCX 正文中提取并解析卷章", async () => {
     const zip = new JSZip();
     zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

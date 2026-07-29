@@ -22,6 +22,7 @@ import {
   now,
   splitDocumentParagraphs
 } from "./utils.js";
+import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
 
 type WorkInput = {
   title: string;
@@ -362,6 +363,7 @@ type AiConversationMessageInput = {
   role: "user" | "assistant";
   content: string;
   citations?: unknown[];
+  requestId?: string;
   metadata?: { modelDisplayName?: string; outputTokens?: number; cacheHitPercent?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
 };
 
@@ -1366,6 +1368,51 @@ export class Store {
       chapters: chaptersByVolume.get(requiredString(row, "id")) ?? []
     }));
     return { ...work, volumes };
+  }
+
+  getWorkVolumeDirectory(workId: string): Record<string, unknown> {
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none") return { ...work, volumes: [] };
+    const volumeRows = this.db.all(
+      `SELECT volume.*,
+        (SELECT COUNT(*) FROM chapters chapter WHERE chapter.volume_id = volume.id AND chapter.deleted_at IS NULL) AS chapter_count
+       FROM volumes volume WHERE volume.work_id = ? ORDER BY volume.sort_order, volume.created_at`,
+      workId
+    );
+    const volumes = volumeRows.map((row) => ({
+      ...this.mapVolume(row),
+      chapterCount: numberValue(row, "chapter_count"),
+      chapters: []
+    }));
+    return { ...work, volumes };
+  }
+
+  listVolumeChapters(volumeId: string): Record<string, unknown>[] {
+    const volume = this.getVolume(volumeId);
+    const work = this.getWork(String(volume.workId));
+    if ((work.modulePermissions as WorkModulePermissions).prose === "none") return [];
+    return this.db.all(
+      `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
+        analysis_status, excluded_from_analysis, created_at, updated_at
+       FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at`,
+      volumeId
+    ).map((row) => this.mapChapterDirectoryEntry(row));
+  }
+
+  listVolumeChaptersPage(volumeId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const volume = this.getVolume(volumeId);
+    const work = this.getWork(String(volume.workId));
+    if ((work.modulePermissions as WorkModulePermissions).prose === "none") return paginated([], pagination);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
+        analysis_status, excluded_from_analysis, created_at, updated_at
+       FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at${page.sql}`,
+      volumeId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapChapterDirectoryEntry(row)), pagination);
   }
 
   getWorkDirectoryPage(workId: string, pagination: Pagination): Record<string, unknown> {
@@ -5969,6 +6016,15 @@ export class Store {
   addAiConversationMessage(conversationId: string, input: AiConversationMessageInput): Record<string, unknown> {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
+    const requestId = input.requestId?.trim() || null;
+    if (requestId) {
+      const existing = this.db.get(
+        "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?",
+        conversationId,
+        requestId
+      );
+      if (existing) return this.mapAiConversationMessage(existing);
+    }
     const messageId = id("message");
     const timestamp = now();
     const title = requiredString(conversation, "title") === "新对话" && input.role === "user"
@@ -5976,19 +6032,23 @@ export class Store {
       : requiredString(conversation, "title");
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id, request_id) WHERE request_id IS NOT NULL DO NOTHING",
         messageId,
         conversationId,
         input.role,
         input.content,
         JSON.stringify(input.citations ?? []),
         JSON.stringify(input.metadata ?? {}),
+        requestId,
         timestamp,
         currentRequestActor()?.userId ?? null
       );
-      this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
+      const inserted = this.db.get("SELECT id FROM ai_conversation_messages WHERE id = ?", messageId);
+      if (inserted) this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
     });
-    const message = this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
+    const message = requestId
+      ? this.db.get("SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?", conversationId, requestId)
+      : this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
     if (!message) throw notFound("AI 对话消息");
     return this.mapAiConversationMessage(message);
   }
@@ -6023,13 +6083,14 @@ export class Store {
       );
       for (const message of messages.slice(0, targetIndex + 1)) {
         this.db.run(
-          "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           id("message"),
           forkId,
           requiredString(message, "role"),
           requiredString(message, "content"),
           requiredString(message, "citations_json"),
           requiredString(message, "metadata_json"),
+          optionalString(message, "request_id"),
           requiredString(message, "created_at"),
           currentRequestActor()?.userId ?? null
         );
@@ -6061,6 +6122,7 @@ export class Store {
       content: requiredString(row, "content"),
       citations: json(requiredString(row, "citations_json"), []),
       metadata: json(requiredString(row, "metadata_json"), {}),
+      requestId: optionalString(row, "request_id"),
       createdAt: requiredString(row, "created_at")
     };
   }
@@ -7610,22 +7672,18 @@ export class Store {
     const goal = this.db.get("SELECT * FROM writing_goals WHERE work_id = ?", workId);
     const dailyGoal = goal ? numberValue(goal, "daily_goal") : 1000;
     const targetTotal = goal ? numberValue(goal, "target_total") : 100000;
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const start = new Date(today);
-    start.setUTCDate(start.getUTCDate() - days + 1);
-    const startKey = start.toISOString().slice(0, 10);
+    const calendar = buildWritingCalendar(new Date(), days);
     const versions = this.db.all(
       `SELECT chapter_id, content, source, created_at FROM chapter_versions
-       WHERE work_id = ? AND created_at <= ? ORDER BY created_at, version_no, id`,
+       WHERE work_id = ? AND created_at < ? ORDER BY created_at, version_no, id`,
       workId,
-      `${today.toISOString().slice(0, 10)}T23:59:59.999Z`
+      calendar.endExclusive
     );
     const chapterWords = new Map<string, number>();
     const events = new Map<string, Row[]>();
     for (const version of versions) {
-      const day = requiredString(version, "created_at").slice(0, 10);
-      if (day < startKey) {
+      const day = writingDateKey(new Date(requiredString(version, "created_at")), calendar.timeZone);
+      if (day < calendar.startKey) {
         chapterWords.set(requiredString(version, "chapter_id"), requiredString(version, "source") === "delete" ? 0 : countWords(requiredString(version, "content")));
       } else {
         const dayEvents = events.get(day) ?? [];
@@ -7635,10 +7693,7 @@ export class Store {
     }
     let previousTotal = [...chapterWords.values()].reduce((sum, value) => sum + value, 0);
     const trend: Record<string, unknown>[] = [];
-    for (let index = 0; index < days; index += 1) {
-      const date = new Date(start);
-      date.setUTCDate(start.getUTCDate() + index);
-      const day = date.toISOString().slice(0, 10);
+    for (const day of calendar.dateKeys) {
       for (const version of events.get(day) ?? []) {
         chapterWords.set(requiredString(version, "chapter_id"), requiredString(version, "source") === "delete" ? 0 : countWords(requiredString(version, "content")));
       }

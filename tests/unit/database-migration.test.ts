@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 55 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 56 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -142,6 +142,8 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "context_window")).toBe(true);
     expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "thinking_enabled" && column.dflt_value === "1")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "metadata_json")).toBe(true);
+    expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "request_id")).toBe(true);
+    expect(first.all("PRAGMA index_list(ai_conversation_messages)").some((index) => index.name === "idx_ai_conversation_messages_request")).toBe(true);
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
     expect(first.get("SELECT toast_position, page_sizes_json FROM platform_ui_settings WHERE id = 1")).toEqual({

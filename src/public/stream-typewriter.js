@@ -1,11 +1,18 @@
 const STREAMING_CHARACTERS_PER_FRAME = 1;
 const FINISHING_CHARACTERS_PER_FRAME = 2;
+const FINISHING_ACCELERATION = 0.9;
+const MAX_STREAMING_CHARACTERS_PER_FRAME = 12;
+const MAX_FINISHING_CHARACTERS_PER_FRAME = 24;
 
 export function streamTypewriterBatchSize(pendingCharacters, finishing = false) {
   const pending = Math.max(0, Math.floor(Number(pendingCharacters) || 0));
   if (pending === 0) return 0;
-  const maximum = finishing ? FINISHING_CHARACTERS_PER_FRAME : STREAMING_CHARACTERS_PER_FRAME;
-  return Math.min(pending, maximum);
+  const minimum = finishing ? FINISHING_CHARACTERS_PER_FRAME : STREAMING_CHARACTERS_PER_FRAME;
+  const maximum = finishing ? MAX_FINISHING_CHARACTERS_PER_FRAME : MAX_STREAMING_CHARACTERS_PER_FRAME;
+  const adaptive = finishing
+    ? Math.ceil(Math.sqrt(pending) * FINISHING_ACCELERATION)
+    : Math.ceil(pending / 30);
+  return Math.min(pending, maximum, Math.max(minimum, adaptive));
 }
 
 export function createStreamTypewriter({

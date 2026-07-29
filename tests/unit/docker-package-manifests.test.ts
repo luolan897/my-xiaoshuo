@@ -79,5 +79,6 @@ describe("Docker 依赖清单规范化", () => {
     expect(buildCopy).toBeGreaterThan(productionInstall);
     expect(versionedManifestCopy).toBeGreaterThan(buildCopy);
     expect(runtimeEnv).toBeGreaterThan(versionedManifestCopy);
+    expect(runtimeStage).toContain("TZ=Asia/Shanghai");
   });
 });
