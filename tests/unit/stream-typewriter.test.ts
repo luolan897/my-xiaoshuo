@@ -45,7 +45,7 @@ describe("流式打字机", () => {
     expect(renders).toEqual(["你"]);
 
     const completed = typewriter.finish();
-    expect(frames.runAll()).toBeLessThanOrEqual(36);
+    expect(frames.runAll()).toBe(2);
     await expect(completed).resolves.toBe("你好，A");
     expect(renders.at(-1)).toBe("你好，A");
   });
@@ -83,11 +83,31 @@ describe("流式打字机", () => {
     expect(renders).toEqual(["部分回复"]);
   });
 
-  it("根据积压量增加每帧字符数", () => {
+  it("限制生成和收尾阶段每帧显示的字符数", () => {
     expect(streamTypewriterBatchSize(0)).toBe(0);
     expect(streamTypewriterBatchSize(4)).toBe(1);
-    expect(streamTypewriterBatchSize(180)).toBe(10);
-    expect(streamTypewriterBatchSize(180, 6)).toBe(30);
+    expect(streamTypewriterBatchSize(180)).toBe(1);
+    expect(streamTypewriterBatchSize(180, true)).toBe(2);
+  });
+
+  it("大量文本积压时仍然逐字平滑显示", async () => {
+    const frames = manualFrames();
+    const lengths: number[] = [];
+    const typewriter = createStreamTypewriter({
+      onRender: (text) => lengths.push(Array.from(text).length),
+      scheduleFrame: frames.schedule,
+      cancelFrame: frames.cancel,
+      reducedMotion: false
+    });
+
+    typewriter.append("字".repeat(180));
+    frames.runNext();
+    expect(lengths).toEqual([1]);
+
+    const completed = typewriter.finish();
+    expect(frames.runAll()).toBe(90);
+    await expect(completed).resolves.toBe("字".repeat(180));
+    expect(lengths.every((length, index) => index === 0 || length - (lengths[index - 1] ?? 0) <= 2)).toBe(true);
   });
 
   it("逐帧解析复杂 Markdown 并在完成时渲染为真实表格", async () => {
