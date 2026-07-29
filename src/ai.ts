@@ -2214,7 +2214,7 @@ export class AiManager {
     });
   }
 
-  rerunTask(taskId: string): Record<string, unknown> {
+  rerunTask(taskId: string, modelOverrideId?: string): Record<string, unknown> {
     const original = this.store.getTask(taskId);
     const rerunnableStatuses = new Set(["review", "completed", "partial", "expired", "cancelled"]);
     if (!rerunnableStatuses.has(String(original.status))) {
@@ -2231,7 +2231,8 @@ export class AiManager {
     const originalModel = original.model && typeof original.model === "object" && !Array.isArray(original.model)
       ? original.model as Record<string, unknown>
       : null;
-    const modelId = typeof originalModel?.id === "string" ? originalModel.id : undefined;
+    const originalModelId = typeof originalModel?.id === "string" ? originalModel.id : undefined;
+    const modelId = modelOverrideId ?? originalModelId;
     if (modelId) this.resolveModel(String(original.workId), this.analysisTaskModelPurpose(String(original.taskType)), modelId);
     const rerun = this.store.createTask(String(original.workId), {
       taskType: String(original.taskType),
@@ -2243,7 +2244,8 @@ export class AiManager {
       taskId: rerun.id,
       originalTaskId: taskId,
       workId: original.workId,
-      taskType: original.taskType
+      taskType: original.taskType,
+      ...(modelOverrideId ? { modelId: modelOverrideId } : {})
     });
     return { ...rerun, rerunOfTaskId: taskId };
   }

@@ -4862,6 +4862,51 @@ async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {
   }
 }
 
+async function rerunAnalysisTaskWithModel(task, button) {
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "加载模型";
+  try {
+    const models = await api(`/api/works/${encodeURIComponent(task.workId)}/models`);
+    const currentModelId = String(task.model?.id ?? "");
+    const availableModels = models.filter((model) =>
+      model.id !== currentModelId
+      && model.enabled
+      && model.providerStatus === "enabled"
+      && model.providerConnectionStatus === "success"
+    );
+    if (!availableModels.length) throw new Error("当前没有其他可用模型，请先配置并测试模型");
+    $("#form-dialog").close();
+    const currentModelLabel = task.model?.displayName || "运行时默认模型";
+    openDialog("选择重试模型",
+      `<p class="task-rerun-model-intro">当前模型：${esc(currentModelLabel)}。选择其他模型后，将按原任务范围和最新资料创建新任务。</p><label>重试模型<select name="modelId" required aria-label="重试模型">
+        ${availableModels.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")}
+      </select></label>`,
+      async (form) => {
+        const modelId = String(form.get("modelId") ?? "").trim();
+        const selectedModel = availableModels.find((model) => model.id === modelId);
+        const rerun = await api(`/api/tasks/${encodeURIComponent(task.id)}/rerun`, {
+          method: "POST",
+          body: { modelId }
+        });
+        toast(`已使用${selectedModel ? `“${modelOptionLabel(selectedModel)}”` : "新模型"}创建重试任务 ${rerun.id}`);
+        await refreshBackgroundTaskCenter({ announce: false });
+        if (state.module === "tasks" && state.work?.id === task.workId) await renderTasks();
+      },
+      "AI 分析重试",
+      {
+        submitLabel: "换模型重试",
+        pendingLabel: "创建中…",
+        pendingMessage: "正在使用新模型创建重试任务，请稍候",
+        errorPrefix: "换模型重试失败："
+      });
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
 function stopTaskProgressRefresh() {
   if (taskProgressRefreshTimer === null) return;
   window.clearTimeout(taskProgressRefreshTimer);
@@ -5312,7 +5357,7 @@ function openTaskDetailDialog(task, trace) {
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
         <div><strong>失败信息</strong>${failureHtml}${identityRepairHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
-        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重新执行</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
+        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重新执行</button><button class="ghost-button" type="button" data-rerun-task-model="${esc(task.id)}">换模型重试</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
@@ -5323,6 +5368,9 @@ function openTaskDetailDialog(task, trace) {
   bindTaskResultActions($("#dialog-fields"));
   $("#dialog-fields").querySelector("[data-rerun-task-detail]")?.addEventListener("click", async (event) => {
     await rerunAnalysisTask(event.currentTarget.dataset.rerunTaskDetail, event.currentTarget, { closeDetail: true });
+  });
+  $("#dialog-fields").querySelector("[data-rerun-task-model]")?.addEventListener("click", async (event) => {
+    await rerunAnalysisTaskWithModel(task, event.currentTarget);
   });
   $("#dialog-fields").querySelector("[data-task-identity-repair]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;

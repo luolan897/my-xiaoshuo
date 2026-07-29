@@ -768,6 +768,14 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     runtime = createTestRuntime();
     const { workId, chapters } = await seedWork(runtime);
     const modelId = await configureAi(runtime, workId);
+    const providerId = String(runtime.database.get<Record<string, unknown>>(
+      "SELECT provider_id FROM models WHERE id = ?",
+      modelId
+    )?.provider_id);
+    const alternateModel = await request(runtime.app).post(`/api/providers/${providerId}/models`).send({
+      displayName: "备用功能模型",
+      modelId: "feature-model-fallback"
+    }).expect(201);
     const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "银月基多拉"
     }).expect(201);
@@ -794,13 +802,15 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const expired = await request(runtime.app).get(`/api/tasks/${original.body.data.id}`).expect(200);
     expect(expired.body.data.status).toBe("expired");
 
-    const rerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(201);
+    const rerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({
+      modelId: alternateModel.body.data.id
+    }).expect(201);
     expect(rerun.body.data).toMatchObject({
       taskType: "relationship-analysis",
       status: "pending",
       progress: 0,
       rerunOfTaskId: original.body.data.id,
-      model: { id: modelId },
+      model: { id: alternateModel.body.data.id },
       scope: {
         type: "book",
         characterIds: [character.body.data.id],
@@ -821,7 +831,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(JSON.parse(String(audit?.detail_json))).toMatchObject({ rerunOfTaskId: original.body.data.id });
 
     const invalidBody = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({
-      modelId: "model_override"
+      unsupported: true
     }).expect(400);
     expect(invalidBody.body.error.code).toBe("VALIDATION_ERROR");
   });
