@@ -11,7 +11,7 @@ describe("AI 分析全流程追踪界面", () => {
     ]);
 
     expect(application).toContain("Promise.all([");
-    expect(application).toContain('apiPage(`/api/works/${state.work.id}/tasks`, page, pageSize)');
+    expect(application).toContain('moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh })');
     expect(application).toContain('const pageSize = pageSizeFor("analysisTasks")');
     expect(application).not.toContain('apiAllPages(`/api/works/${state.work.id}/tasks`');
     expect(application).toContain('aria-label="AI 分析任务分页"');
