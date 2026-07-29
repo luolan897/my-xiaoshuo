@@ -2057,6 +2057,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body .markdown-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .message-body .markdown-table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; }
 .message-body .markdown-table-scroll th, .message-body .markdown-table-scroll td { padding: 7px 9px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow-wrap: normal; white-space: nowrap; }
+.message-body .markdown-table-scroll th { cursor: context-menu; }
+.message-body .markdown-table-scroll th:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.message-body .markdown-table-scroll.is-wrapping { overflow-x: hidden; scrollbar-gutter: auto; }
+.message-body .markdown-table-scroll.is-wrapping table { width: 100%; table-layout: fixed; }
+.message-body .markdown-table-scroll.is-wrapping th, .message-body .markdown-table-scroll.is-wrapping td { overflow-wrap: anywhere; white-space: normal; word-break: break-word; }
 .message-body .markdown-table-scroll th:last-child, .message-body .markdown-table-scroll td:last-child { border-right: 0; }
 .message-body .markdown-table-scroll tbody tr:last-child td { border-bottom: 0; }
 .message-body .markdown-table-scroll th { background: var(--surface-soft); font-weight: 600; }
@@ -2244,6 +2249,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .line-citation-menu { position: fixed; z-index: 82; display: grid; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .line-citation-menu strong { padding: 5px 7px 8px; color: var(--muted); font-size: 9px; }
 .line-citation-menu button { border: 0; border-radius: 4px; padding: 8px; background: transparent; text-align: left; font-size: 11px; }.line-citation-menu button:hover { background: var(--paper-deep); color: var(--accent-dark); }
+.markdown-table-menu { position: fixed; z-index: 84; min-width: 210px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
+.markdown-table-menu button { position: relative; display: grid; width: 100%; gap: 2px; padding: 8px 9px 8px 31px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; }
+.markdown-table-menu button::before { content: ""; position: absolute; top: 12px; left: 10px; width: 11px; height: 11px; border: 1px solid var(--muted); border-radius: 2px; background: var(--surface); }
+.markdown-table-menu button[aria-checked="true"]::before { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--surface); }
+.markdown-table-menu button:hover, .markdown-table-menu button:focus-visible { background: var(--paper-deep); color: var(--accent-dark); }
+.markdown-table-menu button span { font-size: 11px; font-weight: 600; }
+.markdown-table-menu button small { color: var(--muted); font-size: 9px; }
 .chapter-annotations-dialog { width: min(820px, 94vw); }
 .chapter-annotations-list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; padding: 18px 24px; }
 .chapter-annotation-card { display: grid; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }

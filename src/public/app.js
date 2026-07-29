@@ -1,6 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
+import { renderMarkdown } from "/markdown.js?v=20260730-table-wrap-menu-v1";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
@@ -1386,6 +1386,45 @@ const AI_TOOL_DESCRIPTIONS = {
 };
 
 let aiFeedScrollFrame = null;
+let markdownTableMenuTarget = null;
+let markdownTableMenuTrigger = null;
+
+function closeMarkdownTableMenu(restoreFocus = false) {
+  const trigger = markdownTableMenuTrigger;
+  $("#markdown-table-menu").classList.add("hidden");
+  markdownTableMenuTarget = null;
+  markdownTableMenuTrigger = null;
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
+}
+
+function setMarkdownTableWrapping(table, wrapping) {
+  table.classList.toggle("is-wrapping", wrapping);
+  table.setAttribute("aria-label", wrapping ? "Markdown 表格，内容自动换行" : "Markdown 表格，内容不换行");
+}
+
+function openMarkdownTableMenu(header, clientX, clientY) {
+  const table = header.closest(".markdown-table-scroll");
+  if (!table) return;
+  if (header.closest(".is-streaming")) {
+    toast("回复生成完成后可以设置表格换行");
+    return;
+  }
+  closeChapterTypeMenu();
+  closeLineCitationMenu();
+  markdownTableMenuTarget = table;
+  markdownTableMenuTrigger = header;
+  const menu = $("#markdown-table-menu");
+  const toggle = $("#markdown-table-wrap-toggle");
+  toggle.setAttribute("aria-checked", String(table.classList.contains("is-wrapping")));
+  menu.classList.remove("hidden");
+  const menuRect = menu.getBoundingClientRect();
+  const headerRect = header.getBoundingClientRect();
+  const anchorX = clientX > 0 ? clientX : headerRect.left;
+  const anchorY = clientY > 0 ? clientY : headerRect.bottom;
+  menu.style.left = `${Math.max(8, Math.min(anchorX, window.innerWidth - menuRect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(anchorY, window.innerHeight - menuRect.height - 8))}px`;
+  toggle.focus();
+}
 
 function scrollAiFeedToBottom() {
   const feed = $("#ai-feed");
@@ -10212,9 +10251,24 @@ $("#chapter-type-menu").addEventListener("click", async (event) => {
     toast(error.message, "error");
   }
 });
+$("#markdown-table-wrap-toggle").addEventListener("click", () => {
+  const table = markdownTableMenuTarget;
+  if (!table?.isConnected) return closeMarkdownTableMenu();
+  const wrapping = !table.classList.contains("is-wrapping");
+  setMarkdownTableWrapping(table, wrapping);
+  closeMarkdownTableMenu(true);
+  toast(wrapping ? "表格已启用自动换行" : "表格已恢复横向滚动");
+});
+document.addEventListener("contextmenu", (event) => {
+  const header = event.target.closest?.("[data-markdown-table-header]");
+  if (!header) return;
+  event.preventDefault();
+  openMarkdownTableMenu(header, event.clientX, event.clientY);
+});
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#chapter-type-menu")) closeChapterTypeMenu();
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
+  if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
     $("#account-menu").classList.add("hidden");
@@ -10226,9 +10280,16 @@ document.addEventListener("pointerdown", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
+  const header = event.target.closest?.("[data-markdown-table-header]");
+  if (header && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+    event.preventDefault();
+    openMarkdownTableMenu(header, 0, 0);
+    return;
+  }
   if (event.key === "Escape") {
     closeChapterTypeMenu();
     closeLineCitationMenu();
+    closeMarkdownTableMenu(true);
     hideAiMentionMenu();
   }
 });
