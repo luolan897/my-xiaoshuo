@@ -4,6 +4,7 @@ import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
+import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
@@ -6962,6 +6963,107 @@ function toggleVditorLineNumbers(editor) {
   const enabled = host.classList.toggle("show-line-numbers");
   const button = host.querySelector(".vditor-line-number-button");
   if (button) button.setAttribute("aria-pressed", String(enabled));
+  updateVditorLineNumbers(editor, getVditorMarkdown(editor));
+}
+
+function getVditorMarkdown(editor) {
+  if (typeof editor?.getValue === "function") {
+    try {
+      return String(editor.getValue() ?? "");
+    } catch {
+      return "";
+    }
+  }
+  const host = editor?.vditor?.element;
+  const valueField = host?.closest("[data-vditor-editor-field], .setting-markdown-field, .character-markdown-editor")?.querySelector("[data-vditor-value]")
+    ?? host?.parentElement?.querySelector("[data-vditor-value]");
+  return String(valueField?.value ?? "");
+}
+
+function getVditorVisibleSurface(content) {
+  const candidates = [
+    content.querySelector(".vditor-ir .vditor-reset"),
+    content.querySelector(".vditor-wysiwyg .vditor-reset"),
+    content.querySelector(".vditor-sv textarea"),
+    content.querySelector(".vditor-sv")
+  ];
+  return candidates.find((surface) => {
+    if (!surface) return false;
+    const rect = surface.getBoundingClientRect();
+    const style = getComputedStyle(surface);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }) ?? null;
+}
+
+function getVditorLineHeight(surface) {
+  const style = getComputedStyle(surface);
+  return parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5 || 24;
+}
+
+function collectVditorVisualLineRects(surface) {
+  const rects = [];
+  const scrollTop = Number(surface.scrollTop) || 0;
+  const visit = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!node.textContent) return;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      [...range.getClientRects()].forEach((rect) => {
+        if (rect.height > 0) rects.push({ top: rect.top + scrollTop, height: rect.height });
+      });
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    if (node.tagName === "BR") {
+      const rect = node.getBoundingClientRect();
+      if (rect.height > 0) rects.push({ top: rect.top + scrollTop, height: rect.height });
+    }
+    [...node.childNodes].forEach(visit);
+  };
+  visit(surface);
+  if (rects.length === 0) {
+    const rect = surface.getBoundingClientRect();
+    const style = getComputedStyle(surface);
+    rects.push({ top: rect.top + scrollTop + (parseFloat(style.paddingTop) || 0), height: getVditorLineHeight(surface) });
+  }
+  return rects;
+}
+
+function syncVditorLineNumberScroll(editor) {
+  const surface = editor?.__vditorLineNumberSurface;
+  const gutter = editor?.vditor?.element?.querySelector(".vditor-line-numbers");
+  if (!surface || !gutter) return;
+  gutter.style.transform = `translateY(${-surface.scrollTop}px)`;
+  gutter.dataset.scrollTop = String(surface.scrollTop);
+}
+
+function scheduleVditorLineNumbers(editor) {
+  if (!editor || editor.__vditorLineNumberFrame) return;
+  editor.__vditorLineNumberFrame = requestAnimationFrame(() => {
+    editor.__vditorLineNumberFrame = null;
+    updateVditorLineNumbers(editor, getVditorMarkdown(editor));
+  });
+}
+
+function setupVditorLineNumberSync(editor, content, surface) {
+  if (editor.__vditorLineNumberSurface !== surface) {
+    editor.__vditorLineNumberSurface?.removeEventListener("scroll", editor.__vditorLineNumberScrollHandler);
+    editor.__vditorLineNumberSurface = surface;
+    editor.__vditorLineNumberScrollHandler = () => syncVditorLineNumberScroll(editor);
+    surface.addEventListener("scroll", editor.__vditorLineNumberScrollHandler, { passive: true });
+  }
+  if (!editor.__vditorLineNumberObserver) {
+    editor.__vditorLineNumberObserver = new MutationObserver((mutations) => {
+      if (mutations.some((mutation) => !(mutation.target instanceof Element) || !mutation.target.closest(".vditor-line-numbers"))) {
+        scheduleVditorLineNumbers(editor);
+      }
+    });
+    editor.__vditorLineNumberObserver.observe(content, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style"] });
+  }
+  if (!editor.__vditorLineNumberResizeObserver && typeof ResizeObserver !== "undefined") {
+    editor.__vditorLineNumberResizeObserver = new ResizeObserver(() => scheduleVditorLineNumbers(editor));
+    editor.__vditorLineNumberResizeObserver.observe(content);
+  }
 }
 
 function updateVditorLineNumbers(editor, markdown) {
@@ -6974,14 +7076,30 @@ function updateVditorLineNumbers(editor, markdown) {
     gutter.setAttribute("aria-hidden", "true");
     content.prepend(gutter);
   }
-  const lineCount = Math.max(1, String(markdown ?? "").split(/\r?\n/gu).length);
+  const surface = getVditorVisibleSurface(content);
+  if (!surface) return;
+  setupVditorLineNumberSync(editor, content, surface);
+  const contentRect = content.getBoundingClientRect();
+  const lineHeight = getVditorLineHeight(surface);
+  const normalizedMarkdown = String(markdown ?? "").replace(/\r\n?/gu, "\n");
+  const blankLineCount = normalizedMarkdown.trim() === "" ? 0 : normalizedMarkdown.split("\n").filter((line) => line.trim() === "").length;
+  const visualRows = buildVditorLineNumberRows(collectVditorVisualLineRects(surface), { lineHeight, blankLineCount });
+  gutter.style.height = `${content.clientHeight}px`;
   const fragment = document.createDocumentFragment();
-  for (let line = 1; line <= lineCount; line += 1) {
+  visualRows.forEach((row, index) => {
     const number = document.createElement("span");
-    number.textContent = String(line);
+    number.className = "vditor-line-number";
+    number.textContent = String(index + 1);
+    number.dataset.lineNumber = String(index + 1);
+    number.dataset.blank = String(row.blank);
+    number.style.top = `${row.top - contentRect.top}px`;
+    number.style.height = `${row.height}px`;
+    number.style.lineHeight = `${row.height}px`;
     fragment.append(number);
-  }
+  });
   gutter.replaceChildren(fragment);
+  gutter.dataset.lineCount = String(visualRows.length);
+  syncVditorLineNumberScroll(editor);
 }
 
 function updateVditorWordCount(editor, markdown) {
@@ -7026,6 +7144,12 @@ function ensureVditorIconScript() {
 function destroyVditorEditor(editor) {
   if (!editor) return;
   editor.__attachmentObserver?.disconnect();
+  editor.__vditorLineNumberObserver?.disconnect();
+  editor.__vditorLineNumberResizeObserver?.disconnect();
+  if (editor.__vditorLineNumberSurface && editor.__vditorLineNumberScrollHandler) {
+    editor.__vditorLineNumberSurface.removeEventListener("scroll", editor.__vditorLineNumberScrollHandler);
+  }
+  if (editor.__vditorLineNumberFrame) cancelAnimationFrame(editor.__vditorLineNumberFrame);
   const host = editor.vditor?.element;
   editor.destroy();
   if (host) delete host.__vditor;
