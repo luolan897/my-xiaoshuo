@@ -1370,6 +1370,51 @@ export class Store {
     return { ...work, volumes };
   }
 
+  getWorkVolumeDirectory(workId: string): Record<string, unknown> {
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none") return { ...work, volumes: [] };
+    const volumeRows = this.db.all(
+      `SELECT volume.*,
+        (SELECT COUNT(*) FROM chapters chapter WHERE chapter.volume_id = volume.id AND chapter.deleted_at IS NULL) AS chapter_count
+       FROM volumes volume WHERE volume.work_id = ? ORDER BY volume.sort_order, volume.created_at`,
+      workId
+    );
+    const volumes = volumeRows.map((row) => ({
+      ...this.mapVolume(row),
+      chapterCount: numberValue(row, "chapter_count"),
+      chapters: []
+    }));
+    return { ...work, volumes };
+  }
+
+  listVolumeChapters(volumeId: string): Record<string, unknown>[] {
+    const volume = this.getVolume(volumeId);
+    const work = this.getWork(String(volume.workId));
+    if ((work.modulePermissions as WorkModulePermissions).prose === "none") return [];
+    return this.db.all(
+      `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
+        analysis_status, excluded_from_analysis, created_at, updated_at
+       FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at`,
+      volumeId
+    ).map((row) => this.mapChapterDirectoryEntry(row));
+  }
+
+  listVolumeChaptersPage(volumeId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const volume = this.getVolume(volumeId);
+    const work = this.getWork(String(volume.workId));
+    if ((work.modulePermissions as WorkModulePermissions).prose === "none") return paginated([], pagination);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
+        analysis_status, excluded_from_analysis, created_at, updated_at
+       FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at${page.sql}`,
+      volumeId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapChapterDirectoryEntry(row)), pagination);
+  }
+
   getWorkDirectoryPage(workId: string, pagination: Pagination): Record<string, unknown> {
     const work = this.getWork(workId);
     const permissions = work.modulePermissions as WorkModulePermissions;

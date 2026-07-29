@@ -967,6 +967,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.createImportedWork(input, originalFileName, extension.slice(1), parsedNovel), 201);
   });
   app.get("/api/works/:workId", (request, response) => {
+    if (request.query.directory === "volumes") {
+      data(response, store.getWorkVolumeDirectory(request.params.workId));
+      return;
+    }
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.getWorkDirectoryPage(request.params.workId, pagination) : store.getWorkDirectory(request.params.workId));
   });
@@ -1098,6 +1102,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updateVolume(request.params.volumeId, volumeInput, expectedVersionNo, "manual", null, changeNote));
   });
   app.get("/api/volumes/:volumeId", (request, response) => data(response, store.getVolume(request.params.volumeId)));
+  app.get("/api/volumes/:volumeId/chapters", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listVolumeChaptersPage(request.params.volumeId, pagination)
+      : store.listVolumeChapters(request.params.volumeId));
+  });
   app.delete("/api/volumes/:volumeId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     store.deleteVolume(request.params.volumeId, input.expectedVersionNo);

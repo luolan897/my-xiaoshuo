@@ -320,7 +320,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260730-ai-stream-typewriter-v3');
+    expect(page.text).toContain('/app.js?v=20260730-volume-lazy-loading-v1');
     expect(page.text).toContain('/styles.css?v=20260730-drafts-stream-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -734,7 +734,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
     expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");
-    expect(application.text).toContain('title="左键折叠，右键设置分卷；可将章节拖到这里追加"');
+    expect(application.text).toContain('title="左键展开或折叠；右键设置分卷；可将章节拖到这里追加"');
     expect(application.text).toContain("const proseEditable = canEditProse();");
     expect(application.text).toContain("${proseEditable ? `<button class=\"add-button chapter-add-button\"");
     expect(application.text).toContain('class="add-button chapter-add-button"');
@@ -765,7 +765,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")');
     expect(application.text).toContain('Number(work.wordCount ?? 0).toLocaleString("zh-CN")');
-    expect(application.text).toContain('<span>${volume.chapters.length} 章</span>');
+    expect(application.text).toContain('<span>${Number(volume.chapterCount ?? chapters.length)} 章</span>');
     expect(application.text).toContain("function renderKnowledgeMarkdownSections()");
     expect(application.text).toContain("data-knowledge-section-create");
     expect(application.text).toContain("function openKnowledgeSectionEditor");

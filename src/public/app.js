@@ -371,6 +371,9 @@ let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
 let workScopedUiGeneration = 0;
+const loadedVolumeChapterIds = new Set();
+const volumeChapterLoadingIds = new Set();
+const volumeChapterRequests = new Map();
 let raceHierarchyLoadPromise = null;
 let raceHierarchyLoadWorkId = null;
 let loadedRaceHierarchyWorkId = null;
@@ -3352,6 +3355,9 @@ function resetWorkScopedUiCaches() {
   relationshipFilters.toCharacterIds = [];
   taskListPage = 1;
   state.collapsedVolumeIds.clear();
+  loadedVolumeChapterIds.clear();
+  volumeChapterLoadingIds.clear();
+  volumeChapterRequests.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
   if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
@@ -3375,7 +3381,13 @@ function resetWorkScopedUiCaches() {
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
-  const nextWork = await api(`/api/works/${workId}`);
+  if (state.work?.id === workId) {
+    workScopedUiGeneration += 1;
+    loadedVolumeChapterIds.clear();
+    volumeChapterLoadingIds.clear();
+    volumeChapterRequests.clear();
+  }
+  const nextWork = await api(`/api/works/${workId}?directory=volumes`);
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
@@ -3386,6 +3398,8 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#settings-button").removeAttribute("aria-current");
   settingsReturnContext = null;
   state.work = nextWork;
+  state.work.volumes = state.work.volumes.map((volume) => ({ ...volume, chapters: Array.isArray(volume.chapters) ? volume.chapters : [] }));
+  state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));
   state.chapter = null;
   chapterEditorReadOnly = true;
   if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
@@ -3395,40 +3409,121 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   $("#top-search-button").disabled = !canReadAggregateContent();
   renderTree();
-  const chapters = state.work.volumes.flatMap((volume) => volume.chapters);
-  const targetChapter = chapters.find((chapter) => chapter.id === preferredChapterId) ?? chapters[0];
+  void loadAllVolumeChapters(nextWork.id);
   if (state.module === "editor" && preferredChapterId) await selectChapter(preferredChapterId);
-  else if (state.module === "editor" && targetChapter) await selectChapter(targetChapter.id);
   else if (state.module === "editor" && canReadModule("editor")) showWelcome(true);
   else if (!canReadModule(state.module)) showWelcome(true);
   else await showModule(state.module);
   return true;
 }
 
+async function loadVolumeChapters(volumeId) {
+  if (!state.work || loadedVolumeChapterIds.has(volumeId)) return;
+  const existingRequest = volumeChapterRequests.get(volumeId);
+  if (existingRequest) return existingRequest;
+  const workId = state.work.id;
+  const generation = workScopedUiGeneration;
+  volumeChapterLoadingIds.add(volumeId);
+  renderTree();
+  const request = (async () => {
+    try {
+      const chapters = await apiAllPages(`/api/volumes/${encodeURIComponent(volumeId)}/chapters`, 100);
+      if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
+      const volume = state.work.volumes.find((item) => item.id === volumeId);
+      if (!volume) return;
+      volume.chapters = chapters;
+      volume.chapterCount = chapters.length;
+      loadedVolumeChapterIds.add(volumeId);
+      renderTree();
+    } catch (error) {
+      if (state.work?.id === workId && generation === workScopedUiGeneration) {
+        toast(`加载分卷章节失败：${error.message}`, "error");
+        renderTree();
+      }
+    } finally {
+      volumeChapterLoadingIds.delete(volumeId);
+      volumeChapterRequests.delete(volumeId);
+      if (state.work?.id === workId && generation === workScopedUiGeneration) renderTree();
+    }
+  })();
+  volumeChapterRequests.set(volumeId, request);
+  return request;
+}
+
+async function loadAllVolumeChapters(workId) {
+  const volumeIds = state.work?.id === workId ? state.work.volumes.map((volume) => volume.id) : [];
+  for (const volumeId of volumeIds) {
+    if (state.work?.id !== workId) return;
+    await loadVolumeChapters(volumeId);
+  }
+}
+
+function mergeChapterDirectoryEntry(chapter) {
+  if (!state.work || !chapter?.volumeId) return;
+  const volume = state.work.volumes.find((item) => item.id === chapter.volumeId);
+  if (!volume) return;
+  const directoryEntry = {
+    id: chapter.id,
+    workId: chapter.workId,
+    volumeId: chapter.volumeId,
+    title: chapter.title,
+    chapterType: chapter.chapterType,
+    sortOrder: chapter.sortOrder,
+    wordCount: chapter.wordCount,
+    versionNo: chapter.versionNo,
+    analysisStatus: chapter.analysisStatus,
+    excludedFromAnalysis: chapter.excludedFromAnalysis,
+    createdAt: chapter.createdAt,
+    updatedAt: chapter.updatedAt
+  };
+  const chapters = Array.isArray(volume.chapters) ? volume.chapters : [];
+  const existingIndex = chapters.findIndex((item) => item.id === chapter.id);
+  if (existingIndex >= 0) chapters[existingIndex] = directoryEntry;
+  else chapters.push(directoryEntry);
+  chapters.sort((left, right) => Number(left.sortOrder) - Number(right.sortOrder));
+  volume.chapters = chapters;
+  volume.chapterCount = Math.max(Number(volume.chapterCount ?? 0), chapters.length);
+}
+
 function renderTree() {
   if (!state.work) return;
-  const count = state.work.volumes.reduce((total, volume) => total + volume.chapters.length, 0);
+  const count = state.work.volumes.reduce((total, volume) => total + Number(volume.chapterCount ?? volume.chapters?.length ?? 0), 0);
   const proseEditable = canEditProse();
   $("#chapter-count").textContent = `${count} 章`;
   $("#novel-tree").classList.remove("empty-copy");
-  $("#novel-tree").innerHTML = state.work.volumes.map((volume) => `
-    <div class="volume-node ${state.collapsedVolumeIds.has(volume.id) ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
+  $("#novel-tree").innerHTML = state.work.volumes.map((volume) => {
+    const collapsed = state.collapsedVolumeIds.has(volume.id);
+    const chapters = Array.isArray(volume.chapters) ? volume.chapters : [];
+    const chapterContent = collapsed
+      ? ""
+      : volumeChapterLoadingIds.has(volume.id)
+        ? '<p class="entity-history-empty">正在加载章节……</p>'
+        : !loadedVolumeChapterIds.has(volume.id)
+          ? '<p class="entity-history-empty">展开后加载章节。</p>'
+          : chapters.length
+            ? chapters.map((chapter) => `
+        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}" draggable="${proseEditable ? "true" : "false"}" title="${proseEditable ? "拖拽排序；Alt+方向键排序，Alt+Shift+方向键跨卷" : ""}">
+          <span>${esc(chapter.title)}</span><span class="chapter-node-meta">${chapter.chapterType && chapter.chapterType !== "正文" ? `<em class="chapter-type-badge">${esc(chapter.chapterType)}</em>` : ""}<small>${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small></span>
+        </button>`).join("")
+            : '<p class="entity-history-empty">本卷还没有章节。</p>';
+    return `
+    <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
-        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
-      ${volume.chapters.map((chapter) => `
-        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}" draggable="${proseEditable ? "true" : "false"}" title="${proseEditable ? "拖拽排序；Alt+方向键排序，Alt+Shift+方向键跨卷" : ""}">
-          <span>${esc(chapter.title)}</span><span class="chapter-node-meta">${chapter.chapterType && chapter.chapterType !== "正文" ? `<em class="chapter-type-badge">${esc(chapter.chapterType)}</em>` : ""}<small>${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small></span>
-        </button>`).join("")}
+      ${chapterContent}
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   $("#novel-tree").querySelectorAll("[data-volume-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       const volumeId = button.dataset.volumeToggle;
-      if (state.collapsedVolumeIds.has(volumeId)) state.collapsedVolumeIds.delete(volumeId);
-      else state.collapsedVolumeIds.add(volumeId);
+      if (state.collapsedVolumeIds.has(volumeId)) {
+        state.collapsedVolumeIds.delete(volumeId);
+        void loadVolumeChapters(volumeId);
+      } else state.collapsedVolumeIds.add(volumeId);
       renderTree();
     });
     button.addEventListener("contextmenu", (event) => {
@@ -3448,7 +3543,7 @@ function renderTree() {
         button.closest(".volume-node")?.classList.remove("is-drag-target");
         const chapterId = event.dataTransfer?.getData("text/plain");
         const volume = state.work?.volumes.find((item) => item.id === button.dataset.volumeToggle);
-        if (chapterId && volume) await moveChapterInTree(chapterId, volume.id, volume.chapters.length);
+        if (chapterId && volume) await moveChapterInTree(chapterId, volume.id, Number(volume.chapterCount ?? volume.chapters.length));
       });
     }
   });
@@ -3718,6 +3813,8 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) return;
   cancelChapterAutoSave();
   state.chapter = await api(`/api/chapters/${chapterId}`);
+  mergeChapterDirectoryEntry(state.chapter);
+  state.collapsedVolumeIds.delete(state.chapter.volumeId);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
   chapterEditorReadOnly = !canEditProse() || !editMode;
   state.module = "editor";
