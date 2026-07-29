@@ -900,6 +900,32 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
 const contentPermissionModules = workPermissionModules.filter((module) => !["reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
 const aiInteractionModules = ["ai-chat", "ai-analysis"] as const satisfies readonly WorkPermissionModule[];
 
+const analysisTaskDirectReadModules: Record<string, readonly WorkPermissionModule[]> = {
+  structure: ["prose"],
+  "chapter-analysis": ["prose"],
+  "character-extraction": ["prose", "characters", "races", "organizations"],
+  "character-summary": ["prose", "characters", "races", "organizations"],
+  "character-identity-audit": [...contentPermissionModules, "reviews"],
+  "timeline-analysis": ["prose", "timeline", "characters"],
+  "worldview-analysis": ["prose", "settings"],
+  "setting-extraction": ["prose", "settings"],
+  "consistency-check": [...contentPermissionModules, "reviews"],
+  "book-analysis": ["prose"],
+  "report-update": ["prose"]
+};
+
+export function analysisTaskReadModules(taskType: unknown, scope: unknown): WorkPermissionModule[] {
+  const scopeValue = scope && typeof scope === "object" && !Array.isArray(scope)
+    ? scope as Record<string, unknown>
+    : { type: "book" };
+  const modules = new Set<WorkPermissionModule>(scopeValue.type === "none" ? [] : contentPermissionModules);
+  for (const module of analysisTaskDirectReadModules[String(taskType)] ?? []) modules.add(module);
+  if (taskType === "relationship-analysis") {
+    for (const module of relationshipAnalysisReadModules(scopeValue)) modules.add(module);
+  }
+  return [...modules];
+}
+
 type WorkAuthorizationRequirements = {
   read?: WorkPermissionModule[];
   write?: WorkPermissionModule[];
@@ -1020,7 +1046,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     const body = requestBodyRecord(request);
     const sourceModules = pathname.includes("/relationship-source-preview")
       ? relationshipAnalysisReadModules(body.scope)
-      : body.taskType === "relationship-analysis" ? relationshipAnalysisReadModules(body.scope) : [];
+      : analysisTaskReadModules(body.taskType, body.scope);
     if (sourceModules.length > 0) {
       return { read: sourceModules, write: ["ai-analysis"] };
     }

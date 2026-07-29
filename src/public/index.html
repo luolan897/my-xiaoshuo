@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260728-shelf-cover-scale-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260729-continuous-analysis-queue-merge-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -557,7 +557,21 @@
       </div>
       <div class="access-dialog-body">
         <form id="search-form" class="search-form">
-          <label>关键词<input id="search-query" name="query" type="search" maxlength="100" placeholder="搜索正文、设定、角色、种族或组织" required></label>
+          <label>关键词<input id="search-query" name="query" type="search" maxlength="500" placeholder="搜索正文、设定、人物、时间线、关系、大纲或伏笔" required></label>
+          <label>资料类型<select id="search-type" name="type">
+            <option value="">全部资料</option>
+            <option value="chapter">章节</option>
+            <option value="setting">设定</option>
+            <option value="character">角色</option>
+            <option value="race">种族</option>
+            <option value="organization">组织</option>
+            <option value="timeline-track">独立时间轴</option>
+            <option value="timeline-event">时间线事件</option>
+            <option value="relationship">人物关系</option>
+            <option value="chapter-outline">章节大纲</option>
+            <option value="foreshadow">伏笔</option>
+            <option value="review">审核项</option>
+          </select></label>
           <button class="primary-button" type="submit">搜索</button>
         </form>
         <div id="search-results" class="search-results" aria-live="polite">
@@ -696,12 +710,11 @@
           <label>Toast 提示位置<select id="toast-position" name="toastPosition" aria-label="Toast 提示位置"><option value="bottom-right">右下角（默认）</option><option value="top-right">右上角</option></select></label>
           <small>该设置对所有用户生效，保存后的提示会立即显示在新位置。</small>
           <fieldset class="pagination-settings-fieldset">
-            <legend>各模块单页数量</legend>
-            <small>每个模块独立设置，允许 10–100 条；默认均为 30 条。</small>
+            <legend>可分页模块单页数量</legend>
+            <small>以下模块独立设置，允许 10–100 条；默认均为 30 条。种族层级始终完整展示。</small>
             <div class="pagination-settings-grid">
               <label>设定库<input id="page-size-settings" name="pageSizeSettings" type="number" min="10" max="100" step="1" required aria-label="设定库单页数量"></label>
               <label>角色列表<input id="page-size-characters" name="pageSizeCharacters" type="number" min="10" max="100" step="1" required aria-label="角色列表单页数量"></label>
-              <label>种族列表<input id="page-size-races" name="pageSizeRaces" type="number" min="10" max="100" step="1" required aria-label="种族列表单页数量"></label>
               <label>组织列表<input id="page-size-organizations" name="pageSizeOrganizations" type="number" min="10" max="100" step="1" required aria-label="组织列表单页数量"></label>
               <label>时间线事件<input id="page-size-timeline" name="pageSizeTimeline" type="number" min="10" max="100" step="1" required aria-label="时间线事件单页数量"></label>
               <label>大纲与伏笔<input id="page-size-outlines" name="pageSizeOutlines" type="number" min="10" max="100" step="1" required aria-label="大纲与伏笔单页数量"></label>
@@ -739,7 +752,7 @@
             <button id="api-key-reset-button" class="primary-button" type="button">生成 API Key</button>
             <div id="api-key-result" class="api-key-result hidden">
               <label>请立即保存<input id="api-key-value" readonly spellcheck="false"></label>
-              <button id="api-key-copy-button" type="button">复制</button>
+              <button id="api-key-copy-button" class="ghost-button" type="button"><svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>复制</button>
             </div>
           </div>
         </section>
@@ -863,6 +876,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260728-chapter-purge-v1"></script>
+    <script type="module" src="/app.js?v=20260729-continuous-analysis-queue-merge-v1"></script>
   </body>
 </html>

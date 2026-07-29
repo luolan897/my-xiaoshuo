@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260728-shelf-cover-scale-v1');
-    expect(page.text).toContain('/app.js?v=20260728-chapter-purge-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260728-chapter-purge-v1"></script>');
+    expect(page.text).toContain('/styles.css?v=20260729-continuous-analysis-queue-merge-v1');
+    expect(page.text).toContain('/app.js?v=20260729-continuous-analysis-queue-merge-v1');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260729-continuous-analysis-queue-merge-v1"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -62,7 +62,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('置信度 ${Math.round(entry.confidence * 100)}%');
     expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
     expect(application.text).toContain('hideCancel: true');
-    expect(application.text).toContain('/display-labels.js?v=20260726-anthropic-messages-v2');
+    expect(application.text).toContain('/display-labels.js?v=20260728-hybrid-search-v1');
     expect(application.text).toContain('settingStatusLabel(item.status)');
     expect(application.text).not.toContain('characterVisibilityLabel(item.visibility)');
     expect(application.text).toContain('timelineStatusLabel(item.status)');
@@ -113,7 +113,9 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('relationshipFilters.fromCharacterIds = [];');
     expect(application.text).toContain('relationshipFilters.toCharacterIds = [];');
     expect(application.text).toContain('await api(`/api/${route.entity === "setting" ? "settings" : route.entity === "character" ? "characters" : route.entity === "race" ? "races" : "organizations"}/${encodeURIComponent(route.entityId)}`)');
-    expect(application.text).toContain('apiAllPages(`/api/works/${state.work.id}/races`)');
+    expect(application.text).toContain('api(`/api/works/${state.work.id}/races`)');
+    expect(application.text).not.toContain('apiAllPages(`/api/works/${state.work.id}/races`)');
+    expect(application.text).toContain('${directChildCount(item)} 个直接子种族');
     expect(application.text).toContain('apiAllPages(`/api/works/${state.work.id}/organizations`)');
     expect(application.text).toContain('data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"');
     expect(application.text).not.toContain("人工修正");

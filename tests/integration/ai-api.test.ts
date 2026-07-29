@@ -473,8 +473,8 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(results.get("chapter-both")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, summary: "", content: "林舟启动了飞船。" }] } });
       expect(results.get("grep-default")).toMatchObject({ ok: true, data: { keyword: "林舟", limit: 20, matches: [{ chapterId, chapterTitle: "第一章", paragraph: "林舟启动了飞船。" }] } });
       expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
-      expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "literal_substring" } });
-      expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matchMode: "literal_substring", matches: expect.any(Array) } });
+      expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "hybrid_exact_phonetic" } });
+      expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matchMode: "hybrid_exact_phonetic", matches: expect.any(Array) } });
       expect(results.get("character-section-summary")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, characterName: "哥斯拉", summary: "哥斯拉在远古时期守护地球生态。" }] } });
       expect(results.get("character-section-summary")).not.toHaveProperty("data.sections.0.contentMarkdown");
       expect(results.get("character-section-content")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, contentMarkdown: "## 远古时期\n\n哥斯拉守护地球生态。" }] } });

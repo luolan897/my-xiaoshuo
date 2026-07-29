@@ -14,6 +14,15 @@ import {
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import {
+  HYBRID_SEARCH_TYPES,
+  buildHybridSearchSnippet,
+  documentParagraphLineRange,
+  fuseHybridSearchChannels,
+  type HybridSearchCandidate,
+  type HybridSearchMatchKind,
+  type HybridSearchType
+} from "./hybrid-search.js";
 import { logger, sanitizeError } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -28,6 +37,7 @@ import {
   normalizeRelationshipSearchText,
   relationshipCharacterTokenText,
   relationshipCharacterTokens,
+  relationshipPinyinSearchTokens,
   relationshipPinyinTokenText,
   relationshipPinyinTokens
 } from "./relationship-search.js";
@@ -66,6 +76,49 @@ export function aiErrorForLog(error: unknown): Record<string, unknown> {
   if (httpStatus) return { name: sanitized.name ?? "Error", message: `Provider returned HTTP ${httpStatus}` };
   if (message.includes("returned invalid JSON")) return { name: sanitized.name ?? "Error", message: "Provider returned invalid JSON" };
   return sanitized;
+}
+
+const AUTO_RUN_MAX_ATTEMPTS = 3;
+const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
+const AUTO_RUN_FATAL_CODES = new Set([
+  "CREDENTIAL_DECRYPT_FAILED",
+  "MODEL_REQUIRED",
+  "MODEL_DISABLED",
+  "MODEL_PLATFORM_MISMATCH",
+  "PROVIDER_DISABLED",
+  "PROVIDER_UNAVAILABLE",
+  "WORK_ACCESS_DENIED",
+  "WORK_MODULE_READ_DENIED"
+]);
+
+export type AutoRunFailureDisposition = {
+  retry: boolean;
+  retryDelayMs: number;
+  pauseImmediately: boolean;
+};
+
+export function autoRunFailureDisposition(error: unknown, attemptCount: number): AutoRunFailureDisposition {
+  const appError = error instanceof AppError ? error : null;
+  const details = appError?.details && typeof appError.details === "object" && !Array.isArray(appError.details)
+    ? appError.details as Record<string, unknown>
+    : null;
+  const providerFailure = typeof details?.failure === "string" ? details.failure : "";
+  const httpStatus = Number(providerFailure.match(/HTTP (\d{3})/u)?.[1] ?? 0);
+  const pauseImmediately = Boolean(
+    appError && (AUTO_RUN_FATAL_CODES.has(appError.code) || httpStatus === 401 || httpStatus === 403)
+  );
+  const retryable = !pauseImmediately && (
+    !appError
+    || (appError.code === "AI_CALL_FAILED"
+      ? httpStatus === 0 || httpStatus === 408 || httpStatus === 425 || httpStatus === 429 || httpStatus >= 500
+      : appError.status >= 500)
+  );
+  const retry = retryable && attemptCount < AUTO_RUN_MAX_ATTEMPTS;
+  return {
+    retry,
+    retryDelayMs: retry ? AUTO_RUN_RETRY_DELAYS_MS[Math.max(0, attemptCount - 1)] ?? AUTO_RUN_RETRY_DELAYS_MS.at(-1) ?? 30_000 : 0,
+    pauseImmediately
+  };
 }
 
 type ProviderRow = Row & {
@@ -483,7 +536,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "search_story_entities",
-      description: "按短关键词在结构化作品实体中做字面/子串匹配：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义检索或知识库问答；请传入实体名、别名、标题或其子串，不要传入自然语言整句。返回简要匹配项；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
+      description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 } }, required: ["query"], additionalProperties: false }
     }
   },
@@ -1227,8 +1280,9 @@ export class ContextBuilder {
 export class AiManager {
   readonly contextBuilder: ContextBuilder;
   private readonly taskControllers = new Map<string, AbortController>();
-  private readonly autoRunBatches = new Map<string, { claimed: number; starting: Set<string> }>();
+  private readonly autoRunStarting = new Map<string, Set<string>>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private autoRunStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly relationshipIndexBuilds = new Map<string, Promise<number>>();
   private readonly relationshipSelectionCache = new Map<string, RelationshipLocalSourceSelection>();
   private readonly relationshipSelectionBuilds = new Map<string, Promise<RelationshipLocalSourceSelection>>();
@@ -1260,6 +1314,10 @@ export class AiManager {
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
+    this.autoRunStartupTimer = setTimeout(() => {
+      this.autoRunStartupTimer = null;
+      for (const workId of this.store.listAutoRunWorkIds()) this.scheduleAutoRun(workId);
+    }, 0);
     this.store.setRelationshipIndexQueuedHandler((workId) => this.scheduleRelationshipIndexSync(workId));
     this.relationshipIndexTimer = setTimeout(() => {
       this.relationshipIndexTimer = null;
@@ -1275,6 +1333,199 @@ export class AiManager {
   getWorkTokenUsage(workId: string, timezoneOffset: number): Record<string, unknown> {
     this.store.getWork(workId);
     return this.getTokenUsage(workId, timezoneOffset, false);
+  }
+
+  async searchWork(
+    workId: string,
+    query: string,
+    options: { type?: HybridSearchType; limit?: number } = {}
+  ): Promise<Record<string, unknown>[]> {
+    this.store.getWork(workId);
+    const normalizedQuery = normalizeRelationshipSearchText(query).trim();
+    if (!normalizedQuery) return [];
+    await this.ensureRelationshipSearchIndex(workId);
+    const requestedTypes = options.type ? new Set<HybridSearchType>([options.type]) : new Set(HYBRID_SEARCH_TYPES);
+    const resultLimit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 50)));
+    const channelLimit = Math.min(200, Math.max(50, resultLimit * 4));
+    const accepts = (type: string): type is HybridSearchType => requestedTypes.has(type as HybridSearchType);
+    const metadataDetails = new Map<string, Record<string, unknown>>();
+
+    const metadataCandidates = this.store.search(workId, normalizedQuery).flatMap((item): HybridSearchCandidate[] => {
+      const type = String(item.type);
+      const itemId = String(item.id ?? "");
+      if (!itemId || !accepts(type)) return [];
+      const key = `${type}:${itemId}`;
+      const { type: _type, id: _id, title: _title, snippet: _snippet, ...details } = item;
+      metadataDetails.set(key, { ...(metadataDetails.get(key) ?? {}), ...details });
+      return [{
+        key,
+        type,
+        id: itemId,
+        title: String(item.title ?? "未命名资料"),
+        subtitle: typeof item.category === "string" ? item.category : undefined,
+        snippet: buildHybridSearchSnippet(String(item.snippet ?? ""), normalizedQuery),
+        sectionId: typeof item.sectionId === "string" ? item.sectionId : undefined,
+        matchKind: "metadata"
+      }];
+    }).slice(0, channelLimit);
+
+    const exactCandidates = [
+      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit) : []),
+      ...this.hybridIndexedSourceMatches(workId, normalizedQuery, "exact", requestedTypes, channelLimit)
+    ];
+    const phoneticCandidates = [
+      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit) : []),
+      ...this.hybridIndexedSourceMatches(workId, normalizedQuery, "phonetic", requestedTypes, channelLimit)
+    ];
+    return fuseHybridSearchChannels([
+      { weight: 1.4, candidates: metadataCandidates },
+      { weight: 1, candidates: exactCandidates },
+      { weight: 0.55, candidates: phoneticCandidates }
+    ], resultLimit).map((item) => ({
+      ...(metadataDetails.get(`${item.type}:${item.id}`) ?? {}),
+      ...item
+    }));
+  }
+
+  private hybridChapterMatches(
+    workId: string,
+    query: string,
+    matchKind: Extract<HybridSearchMatchKind, "exact" | "phonetic">,
+    limit: number
+  ): HybridSearchCandidate[] {
+    let rows: Row[];
+    if (matchKind === "phonetic") {
+      const tokens = relationshipPinyinSearchTokens(query);
+      if (tokens.length === 0) return [];
+      rows = this.store.db.all(
+        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
+                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+         FROM chapter_paragraph_pinyin_fts pinyin
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = pinyin.rowid
+         JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
+           AND chapter_paragraph_pinyin_fts MATCH ?
+         ORDER BY bm25(chapter_paragraph_pinyin_fts), volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+         LIMIT ?`,
+        workId,
+        ftsPhrase(tokens),
+        limit
+      );
+    } else if ([...query].length < 3) {
+      rows = this.store.db.all(
+        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
+                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+         FROM chapter_paragraph_short_terms term
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = term.paragraph_id
+         JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND term.term = ?
+         ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+         LIMIT ?`,
+        workId,
+        query,
+        limit
+      );
+    } else {
+      rows = this.store.db.all(
+        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
+                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+         FROM chapter_paragraph_search_fts fts
+         JOIN chapter_paragraph_search paragraph ON paragraph.id = fts.rowid
+         JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
+           AND chapter_paragraph_search_fts MATCH ?
+         ORDER BY bm25(chapter_paragraph_search_fts), volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+         LIMIT ?`,
+        workId,
+        `"${query.replaceAll('"', '""')}"`,
+        limit
+      );
+    }
+    const seen = new Set<string>();
+    return rows.flatMap((row): HybridSearchCandidate[] => {
+      const chapterId = String(row.chapter_id ?? "");
+      const key = `chapter:${chapterId}`;
+      if (!chapterId || seen.has(key)) return [];
+      seen.add(key);
+      const range = documentParagraphLineRange(String(row.chapter_content ?? ""), Number(row.paragraph_order));
+      return [{
+        key,
+        type: "chapter",
+        id: chapterId,
+        title: String(row.chapter_title ?? "未命名章节"),
+        subtitle: String(row.volume_title ?? ""),
+        snippet: buildHybridSearchSnippet(String(row.paragraph_content ?? ""), query),
+        matchKind,
+        ...(range ?? {})
+      }];
+    });
+  }
+
+  private hybridIndexedSourceMatches(
+    workId: string,
+    query: string,
+    matchKind: Extract<HybridSearchMatchKind, "exact" | "phonetic">,
+    requestedTypes: ReadonlySet<HybridSearchType>,
+    limit: number
+  ): HybridSearchCandidate[] {
+    const tokens = matchKind === "exact" ? relationshipCharacterTokens(query) : relationshipPinyinSearchTokens(query);
+    if (tokens.length === 0) return [];
+    const table = matchKind === "exact" ? "relationship_source_exact_fts" : "relationship_source_pinyin_fts";
+    const rows = this.store.db.all(
+      `SELECT source.source_type, source.source_id FROM ${table} search_index
+       JOIN relationship_source_search source ON source.id = search_index.rowid
+       WHERE source.work_id = ? AND ${table} MATCH ?
+       ORDER BY bm25(${table}), source.source_type, source.source_id
+       LIMIT ?`,
+      workId,
+      ftsPhrase(tokens),
+      limit
+    );
+    return rows.flatMap((row): HybridSearchCandidate[] => {
+      const sourceType = String(row.source_type ?? "") as HybridSearchType;
+      const sourceId = String(row.source_id ?? "");
+      if (!sourceId || !requestedTypes.has(sourceType)) return [];
+      const source = this.relationshipIndexedSource(workId, sourceType, sourceId);
+      if (!source) return [];
+      return [{
+        key: `${sourceType}:${sourceId}`,
+        type: sourceType,
+        id: sourceId,
+        title: this.hybridSourceTitle(sourceType, source.title),
+        snippet: buildHybridSearchSnippet(source.content, query),
+        matchKind
+      }];
+    });
+  }
+
+  private hybridSourceTitle(sourceType: HybridSearchType, title: string): string {
+    const prefixes: Partial<Record<HybridSearchType, string>> = {
+      character: "人物档案：",
+      race: "种族设定：",
+      organization: "组织设定：",
+      "timeline-track": "时间轴：",
+      "timeline-event": "时间线事件：",
+      relationship: "人物关系：",
+      "chapter-outline": "章节大纲：",
+      foreshadow: "伏笔：",
+      review: "审核项："
+    };
+    const prefix = prefixes[sourceType] ?? "";
+    return prefix && title.startsWith(prefix) ? title.slice(prefix.length) : title;
+  }
+
+  private hybridAiSearchDetails(workId: string, sourceType: string, sourceId: string): Record<string, unknown> {
+    const source = this.relationshipIndexedSource(workId, sourceType, sourceId);
+    if (!source) return {};
+    try {
+      const parsed = JSON.parse(source.content) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
   }
 
   private getTokenUsage(workId: string | null, timezoneOffset: number, includeWorks: boolean): Record<string, unknown> {
@@ -1369,13 +1620,18 @@ export class AiManager {
     };
   }
 
-  resetAutoRunBatch(workId: string): void {
-    this.autoRunBatches.set(workId, { claimed: 0, starting: new Set() });
-  }
-
-  scheduleAutoRun(workId: string): void {
+  scheduleAutoRun(workId: string, delayMs = 0): void {
+    let resolvedDelay = Math.max(0, delayMs);
     try {
-      if (!this.store.getWorkAiSettings(workId).autoRunEnabled) return;
+      let settings = this.store.getWorkAiSettings(workId);
+      if (!settings.autoRunEnabled) return;
+      if (settings.autoRunPaused) {
+        const resumeAt = typeof settings.autoRunResumeAt === "string" ? Date.parse(settings.autoRunResumeAt) : Number.NaN;
+        if (!Number.isFinite(resumeAt)) return;
+        if (resumeAt <= Date.now()) settings = this.store.clearAutoRunPause(workId);
+        else resolvedDelay = Math.max(resolvedDelay, resumeAt - Date.now());
+      }
+      if (settings.autoRunPaused && resolvedDelay === 0) return;
     } catch {
       return;
     }
@@ -1384,29 +1640,25 @@ export class AiManager {
     const timer = setTimeout(() => {
       this.autoRunTimers.delete(workId);
       void this.drainAutoRun(workId);
-    }, 0);
+    }, Math.min(resolvedDelay, 2_147_483_647));
     this.autoRunTimers.set(workId, timer);
-    logger.debug("ai.auto_run.scheduled", { workId });
+    logger.debug("ai.auto_run.scheduled", { workId, delayMs: resolvedDelay });
   }
 
-  startAutoRunBatch(workId: string): Record<string, unknown> {
+  resumeAutoRun(workId: string): Record<string, unknown> {
     this.store.getWork(workId);
-    const settings = this.store.getWorkAiSettings(workId);
+    let settings = this.store.getWorkAiSettings(workId);
     if (!settings.autoRunEnabled) {
       throw new AppError(400, "AUTO_RUN_DISABLED", "请先开启分析任务自动运行");
     }
-    this.resetAutoRunBatch(workId);
+    settings = this.store.clearAutoRunPause(workId);
     this.scheduleAutoRun(workId);
-    logger.info("ai.auto_run.batch_started", {
+    logger.info("ai.auto_run.resumed", {
       workId,
-      concurrency: settings.autoRunConcurrency,
-      batchLimit: settings.autoRunBatchLimit
+      concurrency: settings.autoRunConcurrency
     });
     return {
-      workId,
-      autoRunEnabled: true,
-      autoRunConcurrency: settings.autoRunConcurrency,
-      autoRunBatchLimit: settings.autoRunBatchLimit,
+      ...settings,
       pendingCount: this.store.countPendingTasks(workId),
       runningCount: this.store.countRunningTasks(workId)
     };
@@ -1414,9 +1666,11 @@ export class AiManager {
 
   dispose(): void {
     logger.info("ai.manager.disposing", { scheduledWorks: this.autoRunTimers.size, activeTasks: this.taskControllers.size });
+    if (this.autoRunStartupTimer) clearTimeout(this.autoRunStartupTimer);
+    this.autoRunStartupTimer = null;
     for (const timer of this.autoRunTimers.values()) clearTimeout(timer);
     this.autoRunTimers.clear();
-    this.autoRunBatches.clear();
+    this.autoRunStarting.clear();
     this.relationshipIndexDisposed = true;
     for (const timer of this.relationshipIndexSyncTimers.values()) clearTimeout(timer);
     this.relationshipIndexSyncTimers.clear();
@@ -1427,11 +1681,11 @@ export class AiManager {
     logger.info("ai.manager.disposed");
   }
 
-  private getAutoRunBatch(workId: string): { claimed: number; starting: Set<string> } {
-    const existing = this.autoRunBatches.get(workId);
+  private getAutoRunStarting(workId: string): Set<string> {
+    const existing = this.autoRunStarting.get(workId);
     if (existing) return existing;
-    const created = { claimed: 0, starting: new Set<string>() };
-    this.autoRunBatches.set(workId, created);
+    const created = new Set<string>();
+    this.autoRunStarting.set(workId, created);
     return created;
   }
 
@@ -1439,26 +1693,44 @@ export class AiManager {
     try {
       logger.debug("ai.auto_run.drain_started", { workId });
       const settings = this.store.getWorkAiSettings(workId);
-      if (!settings.autoRunEnabled) return;
-      const batch = this.getAutoRunBatch(workId);
+      if (!settings.autoRunEnabled || settings.autoRunPaused) return;
+      const dailyTaskLimit = Number(settings.autoRunDailyTaskLimit);
+      if (dailyTaskLimit > 0 && this.store.countAutoRunAttemptsToday(workId) >= dailyTaskLimit) {
+        const resumeAt = new Date();
+        resumeAt.setUTCHours(24, 0, 0, 0);
+        this.store.pauseAutoRun(workId, `已达到每日自动执行上限 ${dailyTaskLimit} 个任务`, resumeAt.toISOString());
+        this.scheduleAutoRun(workId);
+        logger.info("ai.auto_run.daily_limit_reached", { workId, dailyTaskLimit, resumeAt: resumeAt.toISOString() });
+        return;
+      }
+      const starting = this.getAutoRunStarting(workId);
       const concurrency = Number(settings.autoRunConcurrency);
-      const batchLimit = Number(settings.autoRunBatchLimit);
-      while (true) {
-        // 只计 DB running：starting 任务会在 runTask 同步阶段立刻标为 running，再加 starting 会重复计数
-        const inFlight = this.store.countRunningTasks(workId);
-        const remainingClaims = batchLimit - batch.claimed;
-        if (inFlight >= concurrency || remainingClaims <= 0) return;
-        const candidates = this.store.listOldestPendingTaskIds(workId, remainingClaims)
-          .filter((taskId) => !batch.starting.has(taskId) && !this.taskControllers.has(taskId));
-        if (!candidates.length) return;
+      const remainingDailyTasks = dailyTaskLimit > 0
+        ? Math.max(0, dailyTaskLimit - this.store.countAutoRunAttemptsToday(workId))
+        : Number.POSITIVE_INFINITY;
+      let availableSlots = Math.min(
+        Math.max(0, concurrency - this.store.countRunningTasks(workId)),
+        remainingDailyTasks
+      );
+      while (availableSlots > 0) {
+        const candidates = this.store.listOldestPendingTaskIds(workId, concurrency)
+          .filter((taskId) => !starting.has(taskId) && !this.taskControllers.has(taskId));
+        if (!candidates.length) {
+          const nextAttemptAt = this.store.nextPendingTaskAttemptAt(workId);
+          if (nextAttemptAt) this.scheduleAutoRun(workId, Math.max(1, Date.parse(nextAttemptAt) - Date.now()));
+          return;
+        }
         const taskId = candidates[0];
         if (!taskId) return;
-        batch.starting.add(taskId);
-        batch.claimed += 1;
-        void this.runTask(taskId)
-          .catch(() => undefined)
+        starting.add(taskId);
+        availableSlots -= 1;
+        void this.runTask(taskId, undefined, undefined, { runningLimit: concurrency, autoRun: true })
+          .then((result) => {
+            if (result.status === "review" || result.status === "completed") this.store.recordAutoRunSuccess(workId);
+          })
+          .catch((error) => this.handleAutoRunFailure(workId, taskId, error))
           .finally(() => {
-            batch.starting.delete(taskId);
+            starting.delete(taskId);
             this.scheduleAutoRun(workId);
           });
       }
@@ -1466,6 +1738,38 @@ export class AiManager {
       logger.warn("ai.auto_run.drain_failed", { workId, error: aiErrorForLog(error) });
       // 数据库已关闭或作品不存在时忽略自动调度
     }
+  }
+
+  private handleAutoRunFailure(workId: string, taskId: string, error: unknown): void {
+    let current = this.store.getTask(taskId);
+    if (current.status === "pending" && error instanceof AppError && error.code === "TASK_NOT_PENDING") return;
+    if (current.status === "pending" && current.nextAttemptAt) {
+      logger.info("ai.auto_run.retry_waiting", {
+        workId,
+        taskId,
+        attemptCount: current.attemptCount,
+        nextAttemptAt: current.nextAttemptAt
+      });
+      return;
+    }
+    const message = error instanceof AppError ? error.message : "自动执行失败";
+    if (current.status === "pending") {
+      current = this.store.updateTask(taskId, {
+        status: "partial",
+        progress: 100,
+        failures: [{ message, ...(error instanceof AppError ? { code: error.code } : {}) }]
+      });
+    }
+    if (current.status !== "partial") return;
+    const disposition = autoRunFailureDisposition(error, Number(current.attemptCount));
+    const settings = this.store.recordAutoRunFailure(workId, message, disposition.pauseImmediately);
+    logger.warn("ai.auto_run.task_failed", {
+      workId,
+      taskId,
+      consecutiveFailures: settings.autoRunConsecutiveFailures,
+      paused: settings.autoRunPaused,
+      error: aiErrorForLog(error)
+    });
   }
 
   private outboundFetch(url: string, init: RequestInit): Promise<Awaited<ReturnType<typeof fetch>>> {
@@ -2376,7 +2680,12 @@ export class AiManager {
     };
   }
 
-  async runTask(taskId: string, modelId?: string, actor?: TaskRunActor): Promise<Record<string, unknown>> {
+  async runTask(
+    taskId: string,
+    modelId?: string,
+    actor?: TaskRunActor,
+    options: { runningLimit?: number; autoRun?: boolean } = {}
+  ): Promise<Record<string, unknown>> {
     const task = this.store.getTask(taskId);
     this.authorizeTaskRun?.(task, actor);
     const workId = String(task.workId);
@@ -2384,23 +2693,17 @@ export class AiManager {
       ? task.model as Record<string, unknown>
       : null;
     const selectedModelId = modelId ?? (typeof taskModel?.id === "string" ? taskModel.id : undefined);
-    const batch = this.getAutoRunBatch(workId);
     const startedAt = process.hrtime.bigint();
     logger.info("ai.task.started", { taskId, workId, taskType: task.taskType, modelId: selectedModelId ?? null });
     if (task.status !== "pending") throw new AppError(409, "TASK_NOT_PENDING", "只有待执行任务可以运行");
     if (!this.store.isTaskSourceCurrent(taskId)) {
       const expired = this.store.updateTask(taskId, { status: "expired" });
-      batch.starting.delete(taskId);
       this.scheduleAutoRun(workId);
       logger.warn("ai.task.expired", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
       return expired;
     }
-    const settings = this.store.getWorkAiSettings(workId);
-    // 自动 drain 已在 starting 集合中认领；手动运行在开关开启时计入本轮配额
-    if (Boolean(settings.autoRunEnabled) && !batch.starting.has(taskId)) {
-      batch.claimed += 1;
-    }
-    this.store.updateTask(taskId, { status: "running", progress: 5 });
+    const claimed = this.store.claimPendingTask(taskId, options.runningLimit);
+    if (!claimed) throw new AppError(409, "TASK_NOT_PENDING", "任务已被其他执行器认领或当前并发已满");
     const taskController = new AbortController();
     this.taskControllers.set(taskId, taskController);
     try {
@@ -2448,12 +2751,27 @@ export class AiManager {
       const failure = error instanceof AppError
         ? { message, code: error.code, ...(error.details === undefined ? {} : { details: error.details }) }
         : { message };
+      if (options.autoRun) {
+        const current = this.store.getTask(taskId);
+        const disposition = autoRunFailureDisposition(error, Number(current.attemptCount));
+        if (disposition.retry) {
+          const nextAttemptAt = new Date(Date.now() + disposition.retryDelayMs).toISOString();
+          const pending = this.store.rescheduleTask(taskId, failure, nextAttemptAt);
+          logger.warn("ai.task.retry_scheduled", {
+            taskId,
+            workId,
+            attemptCount: pending.attemptCount,
+            nextAttemptAt,
+            error: aiErrorForLog(error)
+          });
+          throw error;
+        }
+      }
       this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [failure] });
       logger.error("ai.task.failed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000, error: aiErrorForLog(error) });
       throw error;
     } finally {
       this.taskControllers.delete(taskId);
-      batch.starting.delete(taskId);
       this.scheduleAutoRun(workId);
     }
   }
@@ -2618,7 +2936,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（传入短实体名或关键词子串，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -2688,7 +3006,7 @@ export class AiManager {
     return this.enabledAgentToolIds(workId, taskType, requestedToolIds).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
-  private executeAgentTool(workId: string, toolCall: CompletionToolCall): AgentToolCallResult {
+  private async executeAgentTool(workId: string, toolCall: CompletionToolCall): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
     let rawArguments: unknown = toolCall.function.arguments;
@@ -2807,14 +3125,19 @@ export class AiManager {
       const { query, categories: categoryList } = args as z.infer<typeof searchStoryEntitiesArguments>;
       const categories = new Set<string>(categoryList);
       const allowed = new Set(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"]);
-      const matches = this.store.search(workId, query).filter((item) => !categories.size || categories.has(String(item.type))).slice(0, 20);
-      const extra = [
-        ...this.store.listTimelineEvents(workId).map((item) => ({ type: "timeline", id: item.id, title: item.name, snippet: `${item.description} ${item.timeLabel}` })),
-        ...this.store.listRelationships(workId).map((item) => ({ type: "relationship", id: item.id, title: `${item.fromCharacterId} / ${item.toCharacterId}`, snippet: `${item.category} ${item.subtype} ${(item.keywords as string[]).join(" ")}` })),
-        ...this.store.listChapterOutlines(workId).map((item) => ({ type: "outline", id: item.chapterId, title: item.chapterTitle, snippet: `${item.goal} ${item.conflict} ${item.turningPoint} ${item.notes}` })),
-        ...this.store.listForeshadows(workId).map((item) => ({ type: "foreshadow", id: item.id, title: item.title, snippet: `${item.description} ${item.resolutionNote}` }))
-      ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
-      const combined = [...matches, ...extra].slice(0, 30);
+      const combined = (await this.searchWork(workId, query, { limit: 100 })).flatMap((item) => {
+        const sourceType = String(item.type);
+        const type = sourceType === "timeline-track" || sourceType === "timeline-event"
+          ? "timeline"
+          : sourceType === "chapter-outline" ? "outline" : sourceType;
+        if (!allowed.has(type) || (categories.size > 0 && !categories.has(type))) return [];
+        return [{
+          ...item,
+          ...this.hybridAiSearchDetails(workId, sourceType, String(item.id)),
+          type,
+          sourceType
+        }];
+      }).slice(0, 30);
       return {
         id: toolCall.id,
         name,
@@ -2825,10 +3148,10 @@ export class AiManager {
           ok: true,
           data: {
             query,
-            matchMode: "literal_substring",
+            matchMode: "hybrid_exact_phonetic",
             matches: combined,
             ...(combined.length === 0
-              ? { hint: "无字面匹配。请改用更短的实体名、别名或标题子串；也可改用 story_index 浏览目录，或用 grep 搜索正文关键字。" }
+              ? { hint: "没有找到精确或拼音相关结果。请改用更短的实体名、别名或标题，也可使用 story_index 浏览目录，或用 grep 搜索正文关键字。" }
               : {})
           }
         }
@@ -3146,7 +3469,7 @@ export class AiManager {
           ...(choice.message.anthropic_content?.length ? { anthropic_content: choice.message.anthropic_content } : {})
         });
         for (const toolCall of toolCalls) {
-          const execution = this.executeAgentTool(input.workId, toolCall);
+          const execution = await this.executeAgentTool(input.workId, toolCall);
           logger.info("ai.tool_call.completed", { callId, toolName: execution.name, status: execution.status, round });
           executedToolCalls.push(execution);
           traceRounds.at(-1)?.toolExecutions.push(execution);
@@ -5326,14 +5649,24 @@ export class AiManager {
         return source(`人物档案：${String(item.name)}`, {
           name: item.name, aliases: item.aliases, code: item.code, species: item.species, race: item.race,
           organizations: item.organizations, attributes: item.attributes, profile: item.profile,
-          currentState: item.currentState, lockedFields: item.lockedFields
+          currentState: item.currentState, lockedFields: item.lockedFields,
+          profileSections: this.store.listCharacterProfileSections(sourceId).map((section) => ({
+            title: section.title,
+            sectionType: section.sectionType,
+            summary: section.summary,
+            contentMarkdown: section.contentMarkdown
+          }))
         }, item.versionNo);
       }
       if (sourceType === "race") {
         const item = this.store.getRace(sourceId);
         if (String(item.workId) !== workId) return null;
         return source(`种族设定：${String(item.name)}`, {
-          name: item.name, description: item.description, lineage: item.lineage, settings: item.settings,
+          name: item.name,
+          description: item.description,
+          racePath: (item.lineage as Array<{ name: string }>).map((entry) => entry.name).join(" / "),
+          lineage: item.lineage,
+          settings: item.settings,
           effectiveSettings: item.effectiveSettings, members: item.members
         }, item.versionNo);
       }

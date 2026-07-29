@@ -161,7 +161,7 @@ describe("设定、角色、时间轴、关系和审核 API", () => {
     expect(JSON.stringify(provider.body)).not.toContain("never-export-this");
 
     const search = await request(runtime.app).get(`/api/works/${workId}/search?q=${encodeURIComponent("北港")}`).expect(200);
-    expect(search.body.data.map((item: { type: string }) => item.type)).toEqual(["character", "setting", "chapter"]);
+    expect(search.body.data.map((item: { type: string }) => item.type)).toEqual(expect.arrayContaining(["character", "setting", "chapter"]));
 
     const exported = await request(runtime.app).get(`/api/works/${workId}/export?format=json`).expect(200);
     const serialized = JSON.stringify(exported.body);

@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 52 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 54 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -157,7 +157,23 @@ describe("数据库版本化迁移", () => {
     expect(first.get(`SELECT paragraph.rowid AS id FROM chapter_paragraph_search_fts paragraph
       WHERE chapter_paragraph_search_fts MATCH '"旧正文"'`)).toEqual({ id: 1 });
     expect(first.all("PRAGMA table_info(work_ai_settings)").map((column) => column.name)).toEqual(
-      expect.arrayContaining(["auto_run_enabled", "auto_run_concurrency", "auto_run_batch_limit", "book_summary_context_percent", "context_compact_threshold", "agent_tools_json"])
+      expect.arrayContaining([
+        "auto_run_enabled",
+        "auto_run_concurrency",
+        "auto_run_batch_limit",
+        "auto_run_daily_task_limit",
+        "auto_run_failure_threshold",
+        "auto_run_paused",
+        "auto_run_pause_reason",
+        "auto_run_resume_at",
+        "auto_run_consecutive_failures",
+        "book_summary_context_percent",
+        "context_compact_threshold",
+        "agent_tools_json"
+      ])
+    );
+    expect(first.all("PRAGMA table_info(analysis_tasks)").map((column) => column.name)).toEqual(
+      expect.arrayContaining(["attempt_count", "next_attempt_at", "last_attempt_at"])
     );
     expect(first.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["compacted_summary", "compacted_message_count", "context_warning_at"])
@@ -196,6 +212,39 @@ describe("数据库版本化迁移", () => {
     expect(second.get("SELECT status FROM ai_calls WHERE id = 'call-running'")?.status).toBe("failed");
     expect(second.get("SELECT status FROM analysis_tasks WHERE id = 'task-running'")?.status).toBe("partial");
     second.close();
+  });
+
+  it("迁移 53 只重排可重建索引并保留领域数据", () => {
+    const filename = createLegacyDatabase();
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO relationship_source_search(work_id, source_type, source_id, source_version, content_hash, updated_at)
+       VALUES ('work-old', 'character', 'character-a', '1', 'hash-before', '2025-01-01')`
+    );
+    current.run("DELETE FROM relationship_source_index_queue WHERE work_id = 'work-old'");
+    current.run(
+      `INSERT INTO relationship_source_index_state(work_id, status, generation, error, updated_at)
+       VALUES ('work-old', 'ready', 4, '', '2025-01-01')
+       ON CONFLICT(work_id) DO UPDATE SET status = excluded.status, generation = excluded.generation, updated_at = excluded.updated_at`
+    );
+    current.run("DELETE FROM schema_migrations WHERE version = 53");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.all(
+      "SELECT source_type, source_id FROM relationship_source_index_queue WHERE work_id = 'work-old' ORDER BY source_type, source_id"
+    )).toEqual([
+      { source_type: "chapter", source_id: "chapter-old" },
+      { source_type: "character", source_id: "character-a" }
+    ]);
+    expect(migrated.get(
+      "SELECT source_version, content_hash FROM relationship_source_search WHERE work_id = 'work-old' AND source_type = 'character'"
+    )).toEqual({ source_version: "1", content_hash: "hash-before" });
+    expect(migrated.get("SELECT status, generation FROM relationship_source_index_state WHERE work_id = 'work-old'"))
+      .toEqual({ status: "queued", generation: 4 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
   });
 
   it("历史名称冲突时原子回滚名称索引迁移", () => {

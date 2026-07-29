@@ -33,16 +33,16 @@ import {
   taskScopeLabel,
   timelineStatusLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260726-anthropic-messages-v2";
+} from "/display-labels.js?v=20260728-hybrid-search-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
-import { eligibleRaceParents, orderRaceFilterOptions, paginateRaceForest, racePathLabel } from "/race-hierarchy.js?v=20260727-race-tree-pagination-v1";
+import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
-import { resolveGlobalSearchTarget } from "/global-search.js?v=20260726-search-result-details";
+import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
@@ -210,8 +210,12 @@ function renderAnalysisTaskStatus(item) {
   const status = normalizedAnalysisTaskStatus(item.status);
   const statusChanged = taskStatusSnapshots.get(taskId) !== status;
   taskStatusSnapshots.set(taskId, status);
-  const label = analysisTaskStatusLabel(item.status);
-  return `<span class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}" aria-label="任务状态：${esc(label)}">
+  const waitingToRetry = status === "pending" && Boolean(item.nextAttemptAt);
+  const label = waitingToRetry ? "等待重试" : analysisTaskStatusLabel(item.status);
+  const retryTitle = waitingToRetry
+    ? ` title="第 ${esc(String(item.attemptCount ?? 0))} 次尝试失败，将于 ${esc(formatDateTime(item.nextAttemptAt))} 重试"`
+    : "";
+  return `<span class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}" aria-label="任务状态：${esc(label)}"${retryTitle}>
     <span class="task-status-indicator" aria-hidden="true"></span>
     <span>${esc(label)}</span>
   </span>`;
@@ -362,6 +366,10 @@ let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
 let workScopedUiGeneration = 0;
+let raceHierarchyLoadPromise = null;
+let raceHierarchyLoadWorkId = null;
+let loadedRaceHierarchyWorkId = null;
+let raceListRequestId = 0;
 let importHistoryRecords = [];
 let importHistoryNextPage = null;
 let importHistoryRequestId = 0;
@@ -862,7 +870,6 @@ let characterListPage = 1;
 let taskListPage = 1;
 const moduleListPages = {
   settings: 1,
-  races: 1,
   organizations: 1,
   timeline: 1,
   outlinePlans: 1,
@@ -1364,7 +1371,7 @@ const AI_TOOL_DESCRIPTIONS = {
   story_index: "分页读取当前作品的卷章目录和章节概要。",
   read_chapters: "读取指定章节的概要、正文或两者。",
   grep: "查询正文关键字所在的完整段落及章节信息。",
-  search_story_entities: "按实体名或关键词子串匹配设定、人物、组织等结构化记录；非语义检索。",
+  search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。"
 };
 
@@ -2290,6 +2297,22 @@ function toast(message, type = "info") {
   }, 3600);
 }
 
+function persistentToast(message, type = "info") {
+  const region = $("#toast-region");
+  const element = document.createElement("div");
+  element.className = `toast ${type}`;
+  element.setAttribute("role", "status");
+  element.textContent = message;
+  region.append(element);
+  raiseToastRegion();
+  return () => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  };
+}
+
 function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
   const region = $("#toast-region");
   const element = document.createElement("section");
@@ -2887,7 +2910,6 @@ async function openPlatformUiSettingsDialog() {
     const pageSizes = normalizePageSizes(settings.pageSizes);
     $("#page-size-settings").value = String(pageSizes.settings);
     $("#page-size-characters").value = String(pageSizes.characters);
-    $("#page-size-races").value = String(pageSizes.races);
     $("#page-size-organizations").value = String(pageSizes.organizations);
     $("#page-size-timeline").value = String(pageSizes.timeline);
     $("#page-size-outlines").value = String(pageSizes.outlines);
@@ -3010,24 +3032,40 @@ async function openSearchDialog() {
   }
   $("#search-dialog .eyebrow").textContent = `当前作品 · 《${state.work.title}》`;
   $("#search-query").value = "";
+  $("#search-type").value = "";
   $("#search-results").innerHTML = '<p class="search-results-empty">输入关键词后开始检索。</p>';
   $("#search-dialog").showModal();
   queueMicrotask(() => $("#search-query").focus());
 }
 
-function renderSearchResults(results) {
+function highlightedSearchText(value, query) {
+  return splitGlobalSearchHighlight(value, query)
+    .map((segment) => segment.match ? `<mark>${esc(segment.text)}</mark>` : esc(segment.text))
+    .join("");
+}
+
+function renderSearchResults(results, query) {
   if (!results.length) {
     $("#search-results").innerHTML = '<p class="search-results-status">未找到相关内容。</p>';
     return;
   }
-  $("#search-results").innerHTML = results.map((item) => `
-    <button type="button" class="search-result" data-search-type="${esc(item.type)}" data-search-id="${esc(item.id)}">
-      <div class="search-result-meta"><span>${esc(searchResultTypeLabel(item.type))}</span><strong>${esc(item.title)}</strong></div>
-      <p>${esc(item.snippet || "无摘要")}</p>
-    </button>`).join("");
-  $("#search-results").querySelectorAll(".search-result").forEach((button) => {
+  const matchKindLabel = { metadata: "资料命中", exact: "精确命中", phonetic: "拼音命中" };
+  $("#search-results").innerHTML = `<p class="search-results-summary">找到 ${results.length} 条结果，按综合相关度排序。</p>${results.map((item) => {
+    const matchKinds = Array.isArray(item.matchKinds) ? item.matchKinds : [];
+    const lineRange = Number.isInteger(item.startLine)
+      ? `<span class="search-result-chip">${item.startLine === item.endLine ? `第 ${item.startLine} 行` : `第 ${item.startLine}-${item.endLine} 行`}</span>`
+      : "";
+    const subtitle = item.subtitle ? `<small>${esc(item.subtitle)}</small>` : "";
+    return `
+    <button type="button" class="search-result">
+      <div class="search-result-meta"><span>${esc(searchResultTypeLabel(item.type))}</span><strong>${highlightedSearchText(item.title, query)}</strong></div>
+      <p>${highlightedSearchText(item.snippet || "无摘要", query)}</p>
+      <div class="search-result-details">${subtitle}${lineRange}${matchKinds.map((kind) => `<span class="search-result-chip search-result-chip-${esc(kind)}">${esc(matchKindLabel[kind] ?? kind)}</span>`).join("")}</div>
+    </button>`;
+  }).join("")}`;
+  $("#search-results").querySelectorAll(".search-result").forEach((button, index) => {
     button.addEventListener("click", () => {
-      openSearchResult({ type: button.dataset.searchType, id: button.dataset.searchId })
+      openSearchResult(results[index])
         .catch((error) => toast(error.message, "error"));
     });
   });
@@ -3041,8 +3079,50 @@ async function runWorkSearch() {
     return;
   }
   $("#search-results").innerHTML = '<p class="search-results-status">正在检索……</p>';
-  const results = await api(`/api/works/${encodeURIComponent(state.work.id)}/search?q=${encodeURIComponent(query)}`);
-  renderSearchResults(results);
+  const parameters = new URLSearchParams({ q: query });
+  const type = $("#search-type").value;
+  if (type) parameters.set("type", type);
+  const results = await api(`/api/works/${encodeURIComponent(state.work.id)}/search?${parameters}`);
+  renderSearchResults(results, query);
+}
+
+function revealChapterSearchLines(startLine, endLine) {
+  const start = Math.max(0, Number(startLine) - 1);
+  const end = Math.max(start, Number(endLine ?? startLine) - 1);
+  const input = $("#chapter-content");
+  const selection = selectedChapterLinePayload(start, end);
+  chapterLineSelection = { start: selection.safeStart, end: selection.safeEnd };
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(selection.startOffset, selection.startOffset + selection.text.length);
+  scheduleChapterLineNumbers();
+  requestAnimationFrame(() => {
+    paintChapterLineSelection(selection.safeStart, selection.safeEnd);
+    const row = $("#chapter-line-numbers-inner").querySelector(`[data-line-index="${selection.safeStart}"]`);
+    if (row) input.scrollTop = Math.max(0, row.offsetTop - input.clientHeight / 3);
+    syncChapterLineNumberScroll();
+  });
+}
+
+function openSearchEntityPreview(result, item) {
+  const rowsByType = {
+    "timeline-track": [["时间轴名称", item.name], ["简介", item.description], ["排序", item.sortOrder]],
+    "timeline-event": [["事件名称", item.name], ["时间", item.timeLabel], ["类型", item.eventType], ["地点", item.location], ["说明", item.description], ["状态", item.status]],
+    relationship: [["关系", result.title], ["大类", relationshipCategoryLabel(item.category)], ["子类", item.subtype], ["关键词", Array.isArray(item.keywords) ? item.keywords.join("、") : ""], ["当前状态", item.currentStatus], ["置信度", typeof item.confidence === "number" ? `${Math.round(item.confidence * 100)}%` : ""]],
+    "chapter-outline": [["章节", item.chapterTitle], ["本章目标", item.goal], ["核心冲突", item.conflict], ["关键转折", item.turningPoint], ["补充说明", item.notes], ["规划状态", outlineStatusLabel(item.status)]],
+    foreshadow: [["伏笔名称", item.title], ["内容与作用", item.description], ["重要程度", levelLabel(item.importance)], ["状态", foreshadowStatusLabel(item.status)], ["回收结论", item.resolutionNote]]
+  };
+  const rows = rowsByType[result.type] ?? [];
+  const content = rows
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+    .map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`)
+    .join("");
+  openDialog(
+    result.title || searchResultTypeLabel(result.type),
+    `<dl class="search-result-preview">${content || "<div><dt>详情</dt><dd>暂无补充信息</dd></div>"}</dl>`,
+    async () => undefined,
+    searchResultTypeLabel(result.type),
+    { submitLabel: "关闭", hideCancel: true, wide: true }
+  );
 }
 
 async function openSearchResult(result) {
@@ -3055,6 +3135,10 @@ async function openSearchResult(result) {
   if (inSettings) await returnFromSettings();
   if (target.kind === "chapter") {
     await selectChapter(target.id);
+    if (state.chapter?.id === target.id && target.startLine) {
+      revealChapterSearchLines(target.startLine, target.endLine);
+      toast(target.startLine === target.endLine ? `已定位到第 ${target.startLine} 行` : `已定位到第 ${target.startLine}-${target.endLine} 行`);
+    }
     return;
   }
   await showModule(target.module);
@@ -3064,6 +3148,10 @@ async function openSearchResult(result) {
   if (target.entity === "character") await openCharacterEditor(item, { readOnly: true });
   if (target.entity === "race") await openRaceDialog(item, { readOnly: true });
   if (target.entity === "organization") await openOrganizationDialog(item, { readOnly: true });
+  if (target.entity === "review") openReviewDetailDialog(item);
+  if (["timeline-track", "timeline-event", "relationship", "chapter-outline", "foreshadow"].includes(target.entity)) {
+    openSearchEntityPreview(result, item);
+  }
 }
 
 async function showSettingsHub() {
@@ -3192,9 +3280,14 @@ function resetWorkScopedUiCaches() {
   aiReferencesLoadWorkId = null;
   aiConversationsLoadPromise = null;
   aiConversationsLoadWorkId = null;
+  raceHierarchyLoadPromise = null;
+  raceHierarchyLoadWorkId = null;
+  loadedRaceHierarchyWorkId = null;
+  raceListRequestId += 1;
   state.models = [];
   state.characters = [];
   state.settings = [];
+  state.races = [];
   characterListPage = 1;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
@@ -4125,7 +4218,7 @@ async function renderCharacters(page = characterListPage) {
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
     hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page, pageSize),
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
@@ -4228,15 +4321,16 @@ async function renderCharacters(page = characterListPage) {
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(pageCharacters.find((item) => item.id === button.dataset.editCharacter))));
 }
 
-async function renderRaces(page = moduleListPages.races) {
-  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
-  mountModuleCount(state.races.length);
+function renderRaceCollection(total, descendantsLoading = false) {
+  mountModuleCount(total);
   const layout = readModuleLayout();
-  const pageResult = layout === "rows"
-    ? paginateModuleItems(state.races, page, "races")
-    : paginateRaceForest(state.races, page, pageSizeFor("races"));
-  moduleListPages.races = pageResult.page;
+  const raceItems = layout === "rows"
+    ? [...state.races].sort((left, right) => String(left.name).localeCompare(String(right.name), "zh-CN"))
+    : buildRaceForest(state.races);
   const canEditRaces = canEditModule("races");
+  const directChildCount = (item) => Number.isInteger(Number(item.childCount))
+    ? Number(item.childCount)
+    : Array.isArray(item.children) ? item.children.length : 0;
   const raceActions = (item) => canEditRaces
     ? recordCardEditButton("edit-race", item.id, `种族“${item.name}”`)
     : recordHistoryButton("race", item.id, item.name);
@@ -4244,7 +4338,7 @@ async function renderRaces(page = moduleListPages.races) {
     ? raceActions(item)
     : `<div class="card-actions">${raceActions(item)}</div>`;
   const renderRaceNode = (item) => `<details class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"} data-race-node="${esc(item.id)}">
-    <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
+    <summary><span>${esc(item.name)}</span><small>${directChildCount(item)} 个直接子种族</small></summary>
     <div class="race-tree-branch">
     <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settingsCount ?? item.settings?.length ?? 0} 条自身设定</small>
         <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
@@ -4256,9 +4350,9 @@ async function renderRaces(page = moduleListPages.races) {
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
-  const raceRows = () => `<div class="module-row-list">${pageResult.items.map((item) => {
+  const raceRows = () => `<div class="module-row-list">${raceItems.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写种族简介");
-    const meta = `${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
+    const meta = `${directChildCount(item)} 个直接子种族 · ${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
     return `
     <article class="record-card module-row race-card preview-record-card" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}">
       <small>${esc(meta)}</small>
@@ -4270,15 +4364,65 @@ async function renderRaces(page = moduleListPages.races) {
   if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
   if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle();
   $("#module-content").innerHTML = state.races.length
-    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${pageResult.items.map(renderRaceNode).join("")}</section>`}${renderModulePagination(pageResult, "races", "种族列表")}`
+    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级" aria-busy="${descendantsLoading}">${raceItems.map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
-  bindModuleLayoutToggle(() => renderRaces(pageResult.page));
-  bindModulePagination("races", renderRaces);
+  bindModuleLayoutToggle(() => renderRaceCollection(total, descendantsLoading));
   bindRaceTreeExpandToggle();
   bindRaceTreeNodeToggles();
   const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
-  bindEntityHistoryButtons(async () => { await renderRaces(pageResult.page); await loadAiReferences(); });
+  bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
+}
+
+async function ensureCompleteRaceList() {
+  const workId = state.work?.id;
+  if (!workId) return false;
+  const generation = workScopedUiGeneration;
+  if (loadedRaceHierarchyWorkId === workId) return true;
+  if (raceHierarchyLoadPromise && raceHierarchyLoadWorkId === workId) {
+    await raceHierarchyLoadPromise.catch(() => {});
+  }
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return false;
+  if (loadedRaceHierarchyWorkId === workId) return true;
+  const races = await api(`/api/works/${workId}/races`);
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return false;
+  state.races = races;
+  loadedRaceHierarchyWorkId = workId;
+  return true;
+}
+
+async function renderRaces() {
+  const workId = state.work.id;
+  const generation = workScopedUiGeneration;
+  const requestId = ++raceListRequestId;
+  const roots = await api(`/api/works/${workId}/races?scope=roots`);
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
+  state.races = roots.items;
+  loadedRaceHierarchyWorkId = roots.items.length === roots.total ? workId : null;
+  renderRaceCollection(roots.total, loadedRaceHierarchyWorkId !== workId);
+  if (loadedRaceHierarchyWorkId === workId) return;
+
+  const dismissLoadingToast = persistentToast("正在加载子种族……");
+  const loadPromise = api(`/api/works/${workId}/races?scope=descendants`).then((descendants) => {
+    if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
+    state.races = [...roots.items, ...descendants];
+    loadedRaceHierarchyWorkId = workId;
+    if (state.module === "races") renderRaceCollection(roots.total);
+  });
+  raceHierarchyLoadPromise = loadPromise;
+  raceHierarchyLoadWorkId = workId;
+  void loadPromise.catch((error) => {
+    if (state.work?.id === workId && generation === workScopedUiGeneration && requestId === raceListRequestId) {
+      renderRaceCollection(roots.total);
+      toast(`父种族已显示，但子种族载入失败：${error.message}`, "error");
+    }
+  }).finally(() => {
+    if (raceHierarchyLoadPromise === loadPromise) {
+      raceHierarchyLoadPromise = null;
+      raceHierarchyLoadWorkId = null;
+    }
+    dismissLoadingToast();
+  });
 }
 
 async function renderOrganizations(page = moduleListPages.organizations) {
@@ -4619,7 +4763,7 @@ async function renderTasks(page = taskListPage) {
     apiPage(`/api/works/${state.work.id}/tasks`, page, pageSize),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
-      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
+      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunPaused: false })
   ]);
   if (!taskPage.items.length && page > 1) return renderTasks(page - 1);
   taskListPage = taskPage.page;
@@ -4631,6 +4775,12 @@ async function renderTasks(page = taskListPage) {
   const runningCount = Number(taskPage.stats?.runningCount ?? 0);
   const activeTaskCount = pendingCount + runningCount;
   const runningProgress = runningCount ? analysisTaskProgressValue(taskPage.stats?.runningProgress) : 0;
+  const autoRunPaused = Boolean(settings.autoRunEnabled && settings.autoRunPaused);
+  const autoRunActive = Boolean(settings.autoRunEnabled && !autoRunPaused);
+  const queueProgressLabel = runningCount
+    ? "运行中任务平均进度"
+    : autoRunPaused ? "自动执行已暂停" : autoRunActive ? "等待任务开始" : "自动执行已关闭";
+  const queueProgressClass = runningCount ? "is-running" : autoRunPaused ? "is-paused" : "is-waiting";
   const visibleTaskIds = new Set(tasks.map((item) => String(item.id)));
   for (const taskId of taskStatusSnapshots.keys()) {
     if (!visibleTaskIds.has(taskId)) taskStatusSnapshots.delete(taskId);
@@ -4647,27 +4797,30 @@ async function renderTasks(page = taskListPage) {
       <div class="task-auto-run-copy">
         <strong id="task-auto-run-title">自动执行待分析任务</strong>
         <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
-        <small>每轮最多启动「每轮任务上限」个，同时运行数量不超过「同时运行上限」；剩余任务需点击“开始下一轮”。</small>
+        <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
       </div>
       <div class="task-auto-run-controls">
-        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>自动执行待分析任务</span></label>
+        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>持续自动执行</span></label>
         <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
-        <label>每轮任务上限<input id="task-auto-run-batch-limit" type="number" min="1" max="200" value="${esc(String(settings.autoRunBatchLimit ?? 20))}"></label>
+        <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" aria-describedby="task-auto-run-daily-help"></label>
+        <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}"></label>
         <button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button>
-        <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>开始下一轮</button>
+        <button id="task-auto-run-toggle" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>${autoRunPaused ? "恢复自动执行" : "暂停自动执行"}</button>
       </div>
-      <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
+      <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
+      <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个 · ${autoRunPaused ? "已暂停" : autoRunActive ? "持续执行中" : "未开启"}</p>
+      ${autoRunPaused ? `<p class="task-auto-run-alert" role="status"><strong>自动执行已暂停</strong><span>${esc(settings.autoRunPauseReason || "需要人工确认后恢复")}</span>${settings.autoRunResumeAt ? `<small>预计 ${esc(formatDateTime(settings.autoRunResumeAt))} 自动恢复</small>` : ""}</p>` : ""}
       <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
-        <div class="task-auto-run-progress-ring ${runningCount ? "is-running" : "is-waiting"}" role="progressbar" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${runningProgress}">
+        <div class="task-auto-run-progress-ring ${queueProgressClass}" role="progressbar" aria-label="${queueProgressLabel}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${runningProgress}">
           <svg viewBox="0 0 120 120" aria-hidden="true" focusable="false">
             <circle class="task-auto-run-progress-ring-track" cx="60" cy="60" r="52"></circle>
             <circle class="task-auto-run-progress-ring-value" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="${runningProgress} 100"></circle>
           </svg>
-          <div class="task-auto-run-progress-ring-label"><strong>${runningProgress}%</strong><span>${runningCount ? "运行中平均进度" : "等待任务开始"}</span></div>
+          <div class="task-auto-run-progress-ring-label"><strong>${runningProgress}%</strong><span>${queueProgressLabel}</span></div>
         </div>
         <div class="task-auto-run-progress-bar-layout">
-          <div class="task-auto-run-progress-label"><span>${runningCount ? "运行中任务平均进度" : "等待任务开始"}</span><strong>${runningProgress}%</strong></div>
-          <progress class="task-auto-run-progress-bar ${runningCount ? "is-running" : "is-waiting"}" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
+          <div class="task-auto-run-progress-label"><span>${queueProgressLabel}</span><strong>${runningProgress}%</strong></div>
+          <progress class="task-auto-run-progress-bar ${queueProgressClass}" max="100" value="${runningProgress}" aria-label="${queueProgressLabel}">${runningProgress}%</progress>
         </div>
       </div>
     </section>
@@ -4680,7 +4833,7 @@ async function renderTasks(page = taskListPage) {
       <td class="task-progress-cell">${renderAnalysisTaskProgress(item)}</td>
       <td class="task-row-actions">
         <button class="ghost-button" type="button" data-task-detail="${esc(item.id)}">详情</button>
-        ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
+        ${item.status === "pending" && !item.nextAttemptAt ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
     </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
@@ -4700,26 +4853,34 @@ async function renderTasks(page = taskListPage) {
         body: {
           autoRunEnabled: $("#task-auto-run-enabled").checked,
           autoRunConcurrency: Number($("#task-auto-run-concurrency").value),
-          autoRunBatchLimit: Number($("#task-auto-run-batch-limit").value)
+          autoRunDailyTaskLimit: Number($("#task-auto-run-daily-limit").value),
+          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value)
         }
       });
       toast(updated.autoRunEnabled
-        ? `自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个，每轮最多 ${updated.autoRunBatchLimit} 个`
+        ? `持续自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个`
         : "自动执行已关闭");
       await renderTasks();
+      window.setTimeout(() => $("#task-auto-run-save")?.focus(), 0);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
     }
   });
-  $("#task-auto-run-continue")?.addEventListener("click", async () => {
-    const button = $("#task-auto-run-continue");
+  $("#task-auto-run-toggle")?.addEventListener("click", async () => {
+    const button = $("#task-auto-run-toggle");
     button.disabled = true;
     try {
-      const result = await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
-      toast(`已开始下一轮，队列中还有 ${result.pendingCount} 个待执行任务`);
+      if (autoRunPaused) {
+        await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
+        toast("自动执行已恢复");
+      } else {
+        await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { autoRunEnabled: false } });
+        toast("已暂停启动新的分析任务，正在运行的任务会继续完成");
+      }
       await refreshBackgroundTaskCenter({ announce: false });
       await renderTasks();
+      window.setTimeout(() => $(autoRunPaused ? "#task-auto-run-toggle" : "#task-auto-run-enabled")?.focus(), 0);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
@@ -4776,7 +4937,7 @@ async function renderTasks(page = taskListPage) {
       button.disabled = false;
     }
   }));
-  scheduleTaskProgressRefresh(state.work.id, runningCount);
+  scheduleTaskProgressRefresh(state.work.id, runningCount > 0 || (pendingCount > 0 && autoRunActive) ? 1 : 0);
 }
 
 async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {
@@ -5703,7 +5864,7 @@ async function renderBookAiSettings() {
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名或关键词子串匹配设定、人物、组织、时间线、关系、大纲和伏笔；非语义检索。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
@@ -7307,7 +7468,7 @@ async function showCharacterHistory() {
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   [state.races, state.organizations, state.characters] = await Promise.all([
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
@@ -7440,6 +7601,7 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
 async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   await discardPendingMarkdownAttachments();
+  if (kind === "race" && !(await ensureCompleteRaceList())) return;
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const isRace = kind === "race";
@@ -9209,7 +9371,6 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
         pageSizes: {
           settings: Number($("#page-size-settings").value),
           characters: Number($("#page-size-characters").value),
-          races: Number($("#page-size-races").value),
           organizations: Number($("#page-size-organizations").value),
           timeline: Number($("#page-size-timeline").value),
           outlines: Number($("#page-size-outlines").value),

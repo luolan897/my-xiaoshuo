@@ -81,7 +81,19 @@ export function occurrenceRoleLabel(value) {
 }
 
 export function searchResultTypeLabel(value) {
-  return enumLabel({ chapter: "章节", setting: "设定", character: "角色", race: "种族", organization: "组织" }, value, "其他资料");
+  return enumLabel({
+    chapter: "章节",
+    setting: "设定",
+    character: "角色",
+    race: "种族",
+    organization: "组织",
+    "timeline-track": "独立时间轴",
+    "timeline-event": "时间线事件",
+    relationship: "人物关系",
+    "chapter-outline": "章节大纲",
+    foreshadow: "伏笔",
+    review: "审核项"
+  }, value, "其他资料");
 }
 
 export function characterStateFieldLabel(value) {

@@ -907,6 +907,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({ name: "边界组织", memberIds: [characterId] })
       .expect(201);
     const organizationId = String(organization.body.data.id);
+    const review = await owner.agent.post(`/api/works/${workId}/reviews`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ itemType: "timeline-conflict", title: "边界审核项", description: "仅审核模块可见。" })
+      .expect(201);
+    const reviewId = String(review.body.data.id);
     const permissions = {
       prose: "none",
       settings: "none",
@@ -928,6 +933,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     await collaborator.agent.get(`/api/works/${workId}/audit-logs`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
+    await collaborator.agent.get(`/api/works/${workId}/search?q=边界`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/file-versions`).expect(403);
     await collaborator.agent
       .post(`/api/works/${workId}/file-versions/file_missing/restore`)
@@ -940,6 +946,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(403);
     expect(hiddenProseImport.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     await collaborator.agent.get(`/api/works/${workId}/reviews`).expect(200);
+    await collaborator.agent.get(`/api/reviews/${reviewId}`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/ai-calls`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/models`).expect(200);
     const chatDenied = await collaborator.agent.get(`/api/works/${workId}/ai-conversations`).expect(403);
@@ -993,6 +1000,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
       organizations: []
     });
     expect(JSON.stringify(visibleCharacters.body.data)).not.toContain("不可跨模块泄露");
+    const noReviewPermissions = { ...characterOnly, reviews: "none" };
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: noReviewPermissions })
+      .expect(200);
+    const reviewReadDenied = await collaborator.agent.get(`/api/reviews/${reviewId}`).expect(403);
+    expect(reviewReadDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
@@ -1225,6 +1239,15 @@ describe("用户、作品权限与操作者追踪 API", () => {
       code: "WORK_MODULE_READ_DENIED"
     });
     expect(runtime.store.getTask(String(collaboratorTargetedTask.body.data.id)).status).toBe("pending");
+    await expect(runtime.ai.runTask(taskId)).rejects.toMatchObject({
+      code: "WORK_MODULE_READ_DENIED"
+    });
+    expect(runtime.store.getTask(taskId).status).toBe("pending");
+    const protectedBookTaskCreation = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({ taskType: "book-analysis", scope: { type: "book" } })
+      .expect(403);
+    expect(protectedBookTaskCreation.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
