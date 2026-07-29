@@ -4784,6 +4784,7 @@ async function renderTasks(page = taskListPage) {
   const runningProgress = runningCount ? analysisTaskProgressValue(taskPage.stats?.runningProgress) : 0;
   const autoRunPaused = Boolean(settings.autoRunEnabled && settings.autoRunPaused);
   const autoRunActive = Boolean(settings.autoRunEnabled && !autoRunPaused);
+  const autoRunPauseLabel = autoRunPaused ? "恢复自动执行" : "暂停自动执行";
   const queueProgressLabel = runningCount
     ? "运行中任务平均进度"
     : autoRunPaused ? "自动执行已暂停" : autoRunActive ? "等待任务开始" : "自动执行已关闭";
@@ -4815,7 +4816,7 @@ async function renderTasks(page = taskListPage) {
         <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-daily-help"></label>
         <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
         ${autoRunEditing
-          ? '<button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button><button id="task-auto-run-pause" class="ghost-button" type="button">暂停自动执行</button>'
+          ? `<button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button><button id="task-auto-run-pause" class="ghost-button" type="button">${autoRunPauseLabel}</button>`
           : ""}
       </div>
       <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
@@ -4889,12 +4890,18 @@ async function renderTasks(page = taskListPage) {
     const button = $("#task-auto-run-pause");
     button.disabled = true;
     try {
-      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { autoRunEnabled: false } });
+      if (autoRunPaused) {
+        await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
+        toast("自动执行已恢复");
+      } else {
+        await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { autoRunEnabled: false } });
+        toast("已暂停自动执行");
+      }
       taskAutoRunEditing = false;
       taskAutoRunEditingWorkId = null;
-      toast("已暂停自动执行");
+      await refreshBackgroundTaskCenter({ announce: false });
       await renderTasks();
-      window.setTimeout(() => $("#task-auto-run-save")?.focus(), 0);
+      window.setTimeout(() => $("#task-auto-run-edit")?.focus(), 0);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
