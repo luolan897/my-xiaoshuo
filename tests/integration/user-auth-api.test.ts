@@ -739,6 +739,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     const permissions = {
       prose: "read",
+      drafts: "read",
       settings: "write",
       characters: "none",
       races: "none",
@@ -789,6 +790,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ title: "可编辑设定", category: "世界规则", content: "允许写入。" })
       .expect(201);
+    await collaborator.agent.get(`/api/works/${workId}/drafts`).expect(200);
+    await collaborator.agent.post(`/api/works/${workId}/drafts`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ draftType: "prose", title: "只读草稿", content: "不应写入。" })
+      .expect(403);
     const characterReadDenied = await collaborator.agent.get(`/api/works/${workId}/characters`).expect(403);
     expect(characterReadDenied.body.error).toMatchObject({ code: "WORK_MODULE_READ_DENIED" });
     await collaborator.agent.get(`/api/works/${workId}/timeline`).expect(200);
@@ -914,6 +920,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const reviewId = String(review.body.data.id);
     const permissions = {
       prose: "none",
+      drafts: "none",
       settings: "none",
       characters: "none",
       races: "write",
@@ -1021,6 +1028,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const workId = String(work.body.data.id);
     const basePermissions = {
       prose: "read",
+      drafts: "read",
       settings: "read",
       characters: "read",
       races: "read",

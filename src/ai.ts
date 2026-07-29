@@ -271,7 +271,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
 }
 
-const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"] as const;
+const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 
 type AiCallTraceAttempt = {
@@ -506,6 +506,11 @@ const readCharacterSectionsArguments = z.object({
   sectionIds: z.array(z.string().min(1).max(300)).min(1).max(3),
   include: z.enum(["summary", "content", "both"]).default("both")
 }).strict();
+const searchDraftsArguments = z.object({
+  query: z.string().trim().max(200).default(""),
+  draftType: z.enum(["all", "prose", "setting"]).default("all"),
+  limit: z.number().int().min(1).max(30).default(20)
+}).strict();
 
 const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
   story_index: {
@@ -546,6 +551,14 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "read_character_sections",
       description: "读取指定人物 Markdown 档案章节的摘要或原文。先通过 search_story_entities 获取 sectionId；每次最多读取 3 个章节。",
       parameters: { type: "object", properties: { sectionIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] } }, required: ["sectionIds"], additionalProperties: false }
+    }
+  },
+  search_drafts: {
+    type: "function",
+    function: {
+      name: "search_drafts",
+      description: "搜索当前作品的作者草稿。草稿只是用于记录可能采用、也可能永远不会写入正文或正式设定的临时想法，不是已确认的故事事实，不能当作正文或设定依据。可按关键词和“正文草稿/设定草稿”类型筛选；query 为空时返回最近更新的草稿。",
+      parameters: { type: "object", properties: { query: { type: "string", maxLength: 200, default: "" }, draftType: { type: "string", enum: ["all", "prose", "setting"], default: "all" }, limit: { type: "integer", minimum: 1, maximum: 30, default: 20 } }, additionalProperties: false }
     }
   }
 };
@@ -2938,7 +2951,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到草稿时调用 search_drafts。草稿可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -3001,7 +3014,10 @@ export class AiManager {
     const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
     const requested = requestedToolIds ? new Set(requestedToolIds) : null;
-    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId) && (!requested || requested.has(toolId)));
+    const permissions = this.store.getWork(workId).modulePermissions as Record<string, unknown>;
+    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
+      && (!requested || requested.has(toolId))
+      && (toolId !== "search_drafts" || permissions.drafts === "read" || permissions.drafts === "write"));
   }
 
   private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): Record<string, unknown>[] {
@@ -3034,6 +3050,7 @@ export class AiManager {
       : name === "grep" ? grepArguments
       : name === "search_story_entities" ? searchStoryEntitiesArguments
       : name === "read_character_sections" ? readCharacterSectionsArguments
+      : name === "search_drafts" ? searchDraftsArguments
       : null;
     if (!schema) {
       return {
@@ -3185,6 +3202,42 @@ export class AiManager {
         }
       });
       return { id: toolCall.id, name, calledAt, arguments: { sectionIds, include }, status: "completed", result: { ok: true, data: { sections, contentLimitChars: 48_000 } } };
+    }
+    if (name === "search_drafts") {
+      const { query, draftType, limit } = args as z.infer<typeof searchDraftsArguments>;
+      let remainingChars = 36_000;
+      const matches = this.store.searchDrafts(workId, query, draftType === "all" ? undefined : draftType, limit).map((draft) => {
+        const content = collapseAiBlankLines(String(draft.content));
+        const excerpt = content.slice(0, Math.max(0, Math.min(12_000, remainingChars)));
+        remainingChars -= excerpt.length;
+        return {
+          id: draft.id,
+          draftType: draft.draftType,
+          draftTypeLabel: draft.draftType === "prose" ? "正文草稿" : "设定草稿",
+          title: draft.title,
+          content: excerpt,
+          contentTruncated: excerpt.length < content.length,
+          versionNo: draft.versionNo,
+          updatedAt: draft.updatedAt
+        };
+      });
+      return {
+        id: toolCall.id,
+        name,
+        calledAt,
+        arguments: { query, draftType, limit },
+        status: "completed",
+        result: {
+          ok: true,
+          data: {
+            meaning: "这些内容是作者记录的未确认临时想法，可能采用，也可能永远不会写入正文或正式设定；不得视为故事事实。",
+            query,
+            draftType,
+            matches,
+            contentLimitChars: 36_000
+          }
+        }
+      };
     }
     throw new Error(`Unhandled agent tool: ${name}`);
   }

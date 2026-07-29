@@ -15,7 +15,7 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260725-unified-permissions";
-import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260725-enum-labels-zh";
+import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260729-drafts-v1";
 import {
   chapterVersionSourceLabel,
   foreshadowStatusLabel,
@@ -35,12 +35,12 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260728-hybrid-search-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260729-drafts-v1";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260729-drafts-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
@@ -59,6 +59,7 @@ import {
 } from "/avatar-crop.js?v=20260725-avatar-crop";
 
 const defaultPageSizes = Object.freeze({
+  drafts: 30,
   settings: 30,
   characters: 30,
   races: 30,
@@ -871,7 +872,9 @@ let entityEditorReadOnly = false;
 let chapterEditorReadOnly = true;
 let characterListPage = 1;
 let taskListPage = 1;
+let draftTypeFilter = "all";
 const moduleListPages = {
+  drafts: 1,
   settings: 1,
   organizations: 1,
   timeline: 1,
@@ -901,6 +904,7 @@ let characterSectionEditorDirty = false;
 let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
+let formDialogVditors = [];
 let entityHistoryContext = null;
 let moduleContentInteractionsBound = false;
 
@@ -1367,7 +1371,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   read_chapters: "读取章节",
   grep: "查询正文关键字",
   search_story_entities: "搜索作品实体",
-  read_character_sections: "读取人物 Markdown 章节"
+  read_character_sections: "读取人物 Markdown 章节",
+  search_drafts: "搜索草稿"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -1375,7 +1380,8 @@ const AI_TOOL_DESCRIPTIONS = {
   read_chapters: "读取指定章节的概要、正文或两者。",
   grep: "查询正文关键字所在的完整段落及章节信息。",
   search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
-  read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。"
+  read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。",
+  search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。"
 };
 
 let aiFeedScrollFrame = null;
@@ -2706,6 +2712,7 @@ function renderSettingsHub() {
   const hasWork = Boolean(state.work);
   const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
   const canReadAggregate = hasWork && canReadAggregateContent();
+  const canReadFullExport = canReadAggregate && canReadModule("drafts");
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
@@ -2715,7 +2722,7 @@ function renderSettingsHub() {
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !canReadAggregate;
-  $("#export-button").disabled = !canReadAggregate;
+  $("#export-button").disabled = !canReadFullExport;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出的 ZIP 内含 Markdown 正文，仅包含分卷、章节标题与正文。`
@@ -2796,11 +2803,15 @@ const workAuditActionLabels = {
   "chapter.deleted": "删除章节",
   "chapter.purged": "彻底删除章节",
   "chapter.restored": "恢复章节",
+  "draft.created": "创建草稿",
+  "draft.updated": "更新草稿",
+  "draft.deleted": "删除草稿",
+  "draft.restored": "恢复草稿",
   "work.imported": "导入正文"
 };
 
 function workAuditEntityLabel(type) {
-  return ({ work: "作品", volume: "分卷", chapter: "章节", user: "用户" })[type] ?? type;
+  return ({ work: "作品", volume: "分卷", chapter: "章节", draft: "草稿", user: "用户" })[type] ?? type;
 }
 
 function workAuditDetailText(detail) {
@@ -2911,6 +2922,7 @@ async function openPlatformUiSettingsDialog() {
     const settings = await api("/api/platform/ui-settings");
     $("#toast-position").value = settings.toastPosition === "top-right" ? "top-right" : "bottom-right";
     const pageSizes = normalizePageSizes(settings.pageSizes);
+    $("#page-size-drafts").value = String(pageSizes.drafts);
     $("#page-size-settings").value = String(pageSizes.settings);
     $("#page-size-characters").value = String(pageSizes.characters);
     $("#page-size-organizations").value = String(pageSizes.organizations);
@@ -3292,6 +3304,7 @@ function resetWorkScopedUiCaches() {
   state.settings = [];
   state.races = [];
   characterListPage = 1;
+  draftTypeFilter = "all";
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
@@ -3730,6 +3743,7 @@ function markActiveModule(module) {
 }
 
 const moduleMeta = {
+  drafts: ["临时想法", "创作草稿", "记录可能采用、也可能永远不会写入正文或正式设定的想法。", "新建草稿"],
   settings: ["世界事实", "世界观与设定库", "锁定的设定会成为 AI 续写与校对的硬约束。", "新建设定"],
   characters: ["人物档案", "角色与人物属性", "维护别名、属性、当前状态及不可被 AI 覆盖的字段。", "新建角色"],
   races: ["物种档案", "种族与共同设定", "先维护种族档案，再由角色选择引用；角色不能临时填写种族。", "新建种族"],
@@ -3785,6 +3799,7 @@ async function showModule(module) {
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   bindModuleContentInteractions();
   try {
+    if (module === "drafts") await renderDrafts();
     if (module === "settings") await renderSettings();
     if (module === "characters") await renderCharacters(characterListPage);
     if (module === "races") await renderRaces();
@@ -4183,6 +4198,135 @@ function settingRecordActions(item) {
   return canEditModule("settings")
     ? recordCardEditButton("edit-setting", item.id, `设定“${item.title}”`)
     : recordHistoryButton("setting", item.id, item.title);
+}
+
+function draftTypeLabel(draftType) {
+  return draftType === "setting" ? "设定草稿" : "正文草稿";
+}
+
+async function deleteDraft(item) {
+  if (!item || !canEditModule("drafts")) return;
+  if (!await confirmToast(`确认删除草稿“${item.title}”吗？草稿将从当前列表移除。`, {
+    title: "删除草稿",
+    confirmLabel: "确认删除"
+  })) return;
+  try {
+    await api(`/api/drafts/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    await renderDrafts(moduleListPages.drafts);
+    toast("草稿已删除");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function openDraftDialog(item = null, { readOnly = false } = {}) {
+  const viewOnly = readOnly || !canEditModule("drafts");
+  const fields = `<p class="form-field-note">草稿只记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
+    + field("draftType", "草稿类型", "select", item?.draftType ?? "prose", [["prose", "正文草稿"], ["setting", "设定草稿"]])
+    + field("title", "标题", "text", item?.title ?? "")
+    + field("content", "内容", "markdown", item?.content ?? "", {
+      placeholder: "记录尚未定稿的片段、方向或设定想法……",
+      readOnly: viewOnly
+    });
+  openDialog(item ? viewOnly ? "查看草稿" : "编辑草稿" : "新建草稿", fields, async (form) => {
+    if (viewOnly) return;
+    const title = String(form.get("title") ?? "").trim();
+    if (!title) throw new Error("请填写草稿标题");
+    const body = {
+      draftType: form.get("draftType"),
+      title,
+      content: String(form.get("content") ?? ""),
+      ...(item ? { expectedVersionNo: item.versionNo } : {})
+    };
+    await api(item ? `/api/drafts/${encodeURIComponent(item.id)}` : `/api/works/${encodeURIComponent(state.work.id)}/drafts`, {
+      method: item ? "PATCH" : "POST",
+      body
+    });
+    await renderDrafts(moduleListPages.drafts);
+    toast(item ? "草稿已保存" : "草稿已创建");
+  }, item ? draftTypeLabel(item.draftType) : "未确认想法", {
+    submitLabel: viewOnly ? "关闭" : "保存草稿",
+    hideCancel: viewOnly,
+    wide: true,
+    errorPrefix: "草稿保存失败："
+  });
+  if (viewOnly) {
+    $("#dialog-fields").querySelectorAll("input, select, textarea").forEach((control) => {
+      if (control instanceof HTMLSelectElement) control.disabled = true;
+      else control.readOnly = true;
+    });
+  }
+}
+
+async function renderDrafts(page = moduleListPages.drafts) {
+  const allDrafts = await apiAllPages(`/api/works/${state.work.id}/drafts`);
+  const drafts = draftTypeFilter === "all"
+    ? allDrafts
+    : allDrafts.filter((draft) => draft.draftType === draftTypeFilter);
+  mountModuleCount(drafts.length);
+  const pageResult = paginateModuleItems(drafts, page, "drafts");
+  moduleListPages.drafts = pageResult.page;
+  const layout = readModuleLayout();
+  if (drafts.length) mountModuleLayoutToggle(layout, "草稿列表样式");
+  else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+  const filterToolbar = `<section class="draft-filter-toolbar" aria-label="草稿筛选">
+    <label for="draft-type-filter">草稿类型</label>
+    <select id="draft-type-filter" aria-label="按草稿类型筛选">
+      <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部草稿</option>
+      <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文草稿</option>
+      <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定草稿</option>
+    </select>
+    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 篇草稿</span>`}
+  </section>`;
+  const actions = (item) => canEditModule("drafts")
+    ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}<button type="button" data-delete-draft="${esc(item.id)}">删除</button>${recordHistoryButton("draft", item.id, item.title)}`
+    : recordHistoryButton("draft", item.id, item.title);
+  const cards = `<div class="card-grid">${pageResult.items.map((item) => `
+    <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
+      <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
+      <h3>${esc(item.title)}</h3>
+      <div class="record-markdown-preview">${esc(item.contentPreview || "暂无内容")}</div>
+      <div class="card-actions">${actions(item)}</div>
+    </article>`).join("")}</div>`;
+  const rows = `<div class="module-row-list">${pageResult.items.map((item) => {
+    const preview = moduleRowPreview(item.contentPreview || "暂无内容");
+    return `<article class="record-card module-row preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
+      <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
+      <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
+      <div class="card-actions">${actions(item)}</div>
+    </article>`;
+  }).join("")}</div>`;
+  const emptyDrafts = allDrafts.length
+    ? emptyModule("没有符合筛选条件的草稿", "可以切换草稿类型查看其他想法。")
+    : emptyModule("还没有草稿", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
+  $("#module-content").innerHTML = filterToolbar + (drafts.length
+    ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "草稿列表")}`
+    : emptyDrafts);
+  $("#draft-type-filter").addEventListener("change", async (event) => {
+    draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
+  bindModuleLayoutToggle(() => renderDrafts(pageResult.page));
+  bindModulePagination("drafts", renderDrafts);
+  const draftById = (draftId) => drafts.find((draft) => draft.id === draftId);
+  $("#module-content").querySelectorAll("[data-open-draft]").forEach((card) => {
+    const open = async () => openDraftDialog(await api(`/api/drafts/${encodeURIComponent(card.dataset.openDraft)}`), { readOnly: true });
+    card.addEventListener("click", (event) => { if (!event.target.closest("button, a")) void open(); });
+    card.addEventListener("keydown", (event) => {
+      if ((event.key === "Enter" || event.key === " ") && !event.target.closest("button, a")) {
+        event.preventDefault();
+        void open();
+      }
+    });
+  });
+  $("#module-content").querySelectorAll("[data-edit-draft]").forEach((button) => button.addEventListener("click", async () => {
+    openDraftDialog(await api(`/api/drafts/${encodeURIComponent(button.dataset.editDraft)}`));
+  }));
+  $("#module-content").querySelectorAll("[data-delete-draft]").forEach((button) => button.addEventListener("click", () => {
+    void deleteDraft(draftById(button.dataset.deleteDraft));
+  }));
+  bindEntityHistoryButtons(() => renderDrafts(pageResult.page));
 }
 
 function renderSettingCards(records) {
@@ -5931,7 +6075,7 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
@@ -5944,6 +6088,10 @@ async function renderBookAiSettings() {
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "afterend",
     `<label><input name="agent-tool" type="checkbox" value="read_character_sections" ${agentTools.has("read_character_sections") ? "checked" : ""}><span><strong>读取人物 Markdown 章节</strong><small>根据知识查询返回的章节 ID 精读人物背景、能力与经历原文。</small></span></label>`
+  );
+  host.querySelector(".ai-agent-tools").insertAdjacentHTML(
+    "beforeend",
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索草稿</strong><small>查询正文草稿和设定草稿。草稿只是可能采用、也可能永远不会进入正文或正式设定的临时想法，Agent 不会把它当作已确认事实。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -6258,7 +6406,7 @@ async function ensureAiReferencesLoaded() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
-  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><div class="vditor-editor-host" data-vditor-editor data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="Markdown 原文">${esc(value)}</textarea></div>`;
+  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
@@ -6428,6 +6576,8 @@ function commitRelationshipKeywordInputs(container) {
 }
 
 function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
+  formDialogVditors.forEach(destroyVditorEditor);
+  formDialogVditors = [];
   void discardPendingMarkdownAttachments();
   const dialog = $("#form-dialog");
   const form = $("#dynamic-form");
@@ -6453,7 +6603,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   dialog.classList.toggle("large-dialog", Boolean(options.large));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
-  bindVditorEditors($("#dialog-fields"));
+  formDialogVditors = bindVditorEditors($("#dialog-fields"));
   form.onclick = null;
   form.onkeydown = null;
   dialog.oncancel = (event) => {
@@ -7227,6 +7377,7 @@ function destroyVditorEditor(editor) {
 }
 
 function bindVditorEditors(container) {
+  const editors = [];
   container.querySelectorAll("[data-vditor-editor]").forEach((host) => {
     const valueField = host.parentElement?.querySelector("[data-vditor-value]");
     const editor = createVditorEditor(host, valueField?.value ?? "", {
@@ -7234,10 +7385,12 @@ function bindVditorEditors(container) {
         if (valueField) valueField.value = markdown;
         markEntityEditorDirty();
       },
-      placeholder: "",
+      placeholder: host.dataset.placeholder ?? "",
       readOnly: Boolean(valueField?.readOnly)
     });
+    if (editor) editors.push(editor);
   });
+  return editors;
 }
 
 function characterSectionImageLabel(file, fallback = "图片附件") {
@@ -9670,6 +9823,7 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
       body: {
         toastPosition: $("#toast-position").value,
         pageSizes: {
+          drafts: Number($("#page-size-drafts").value),
           settings: Number($("#page-size-settings").value),
           characters: Number($("#page-size-characters").value),
           organizations: Number($("#page-size-organizations").value),
@@ -9702,6 +9856,9 @@ $("#members-dialog").addEventListener("close", () => {
   memberDialogDirectory = [];
 });
 $("#form-dialog").addEventListener("close", () => {
+  formDialogVditors.forEach(destroyVditorEditor);
+  formDialogVditors = [];
+  void discardPendingMarkdownAttachments();
   if (relationshipPresenceId && !$("#form-dialog").open) setRelationshipPresence(null);
 });
 $("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));
@@ -9898,7 +10055,7 @@ $("#module-nav").addEventListener("click", (event) => {
   }
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
-$("#module-create-button").addEventListener("click", () => ({ settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
+$("#module-create-button").addEventListener("click", () => ({ drafts: openDraftDialog, settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   scheduleAiContextUsage();

@@ -201,6 +201,16 @@ export class Database {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS drafts (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        draft_type TEXT NOT NULL CHECK(draft_type IN ('prose', 'setting')),
+        title TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS races (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
@@ -417,7 +427,7 @@ export class Database {
         auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
-        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections"]',
+        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]',
         updated_at TEXT NOT NULL
       );
 
@@ -614,6 +624,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_chapters_work ON chapters(work_id, volume_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_versions_chapter ON chapter_versions(chapter_id, version_no DESC);
       CREATE INDEX IF NOT EXISTS idx_settings_work ON settings(work_id, category);
+      CREATE INDEX IF NOT EXISTS idx_drafts_work ON drafts(work_id, draft_type, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_characters_work ON characters(work_id, name);
       CREATE INDEX IF NOT EXISTS idx_events_work ON timeline_events(work_id, time_sort);
       CREATE INDEX IF NOT EXISTS idx_timeline_tracks_work ON timeline_tracks(work_id, sort_order);
@@ -2293,6 +2304,40 @@ export class Database {
         }
         this.run("CREATE INDEX IF NOT EXISTS idx_tasks_auto_run_ready ON analysis_tasks(work_id, status, next_attempt_at, created_at)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (54, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(55)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS drafts (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          draft_type TEXT NOT NULL CHECK(draft_type IN ('prose', 'setting')),
+          title TEXT NOT NULL,
+          content TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_drafts_work ON drafts(work_id, draft_type, updated_at DESC)");
+        const aiSettings = this.all<{ work_id: string; agent_tools_json: string }>("SELECT work_id, agent_tools_json FROM work_ai_settings");
+        for (const row of aiSettings) {
+          let tools: unknown = [];
+          try {
+            tools = JSON.parse(row.agent_tools_json) as unknown;
+          } catch {
+            tools = [];
+          }
+          const next = Array.isArray(tools)
+            ? [...new Set([...tools.filter((tool): tool is string => typeof tool === "string"), "search_drafts"])]
+            : ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"];
+          this.run("UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?", JSON.stringify(next), row.work_id);
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (55, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

@@ -1,5 +1,6 @@
 export const workPermissionModules = [
   "prose",
+  "drafts",
   "settings",
   "characters",
   "races",
@@ -24,6 +25,7 @@ export const proseReplacementPermissionModules = workPermissionModules.filter(
 
 export const workPermissionModuleLabels: Record<WorkPermissionModule, string> = {
   prose: "正文",
+  drafts: "草稿",
   settings: "设定库",
   characters: "角色",
   races: "种族",
@@ -77,6 +79,13 @@ function isModuleAccess(value: unknown): value is WorkModuleAccess {
  */
 export function migrateLegacyModulePermissions(value: Record<string, unknown>): Record<string, unknown> {
   const migrated = { ...value };
+  if (!isModuleAccess(migrated.drafts)) {
+    const prose = isModuleAccess(migrated.prose) ? migrated.prose : "none";
+    const settings = isModuleAccess(migrated.settings) ? migrated.settings : "none";
+    migrated.drafts = prose === "write" && settings === "write"
+      ? "write"
+      : prose === "none" || settings === "none" ? "none" : "read";
+  }
   const legacyAi = isModuleAccess(migrated.ai) ? migrated.ai : null;
   if (!isModuleAccess(migrated["ai-chat"]) && legacyAi) migrated["ai-chat"] = legacyAi;
   if (!isModuleAccess(migrated["ai-analysis"])) {

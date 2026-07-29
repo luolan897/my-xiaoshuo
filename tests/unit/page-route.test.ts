@@ -5,6 +5,8 @@ describe("页面刷新路由", () => {
   it("往返保存作品模块与当前章节", () => {
     const moduleHash = serializePageRoute({ view: "module", workId: "work / 1", module: "races" });
     expect(parsePageRoute(moduleHash)).toEqual({ view: "module", workId: "work / 1", module: "races" });
+    const draftsHash = serializePageRoute({ view: "module", workId: "work-1", module: "drafts" });
+    expect(parsePageRoute(draftsHash)).toEqual({ view: "module", workId: "work-1", module: "drafts" });
 
     const editorHash = serializePageRoute({ view: "editor", workId: "work-1", chapterId: "chapter-18" });
     expect(parsePageRoute(editorHash)).toEqual({ view: "editor", workId: "work-1", chapterId: "chapter-18" });

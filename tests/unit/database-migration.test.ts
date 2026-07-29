@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 54 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 55 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -88,6 +88,8 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "change_note")).toBe(true);
     expect(first.all("PRAGMA table_info(audit_logs)").some((column) => column.name === "user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(entity_versions)").map((column) => column.name)).toEqual(expect.arrayContaining(["entity_type", "entity_id", "version_no", "snapshot_json"]));
+    expect(first.all("PRAGMA table_info(drafts)").map((column) => column.name)).toEqual(expect.arrayContaining(["work_id", "draft_type", "title", "content"]));
+    expect(first.all("PRAGMA index_list(drafts)").some((index) => index.name === "idx_drafts_work")).toBe(true);
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
@@ -310,6 +312,40 @@ describe("数据库版本化迁移", () => {
     ]);
     expect(second.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 40")?.count).toBe(1);
     second.close();
+  });
+
+  it("迁移 55 创建草稿表并为已有作品启用草稿搜索工具", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-drafts-"));
+    roots.push(root);
+    const filename = join(root, "drafts.db");
+    const current = new Database(filename);
+    const timestamp = "2026-07-29T00:00:00.000Z";
+    current.run(
+      `INSERT INTO works (id, title, author, description, language, tags_json, created_at, updated_at)
+       VALUES ('work-drafts', '草稿迁移', '', '', 'zh-CN', '[]', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO work_ai_settings (work_id, system_prompt, agent_tools_json, updated_at)
+       VALUES ('work-drafts', '', ?, ?)`,
+      JSON.stringify(["story_index", "grep"]),
+      timestamp
+    );
+    current.run("DELETE FROM schema_migrations WHERE version = 55");
+    current.run("DROP TABLE drafts");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'drafts'")?.name).toBe("drafts");
+    expect(JSON.parse(String(migrated.get("SELECT agent_tools_json FROM work_ai_settings WHERE work_id = 'work-drafts'")?.agent_tools_json))).toEqual([
+      "story_index",
+      "grep",
+      "search_drafts"
+    ]);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
   });
 
   it("从迁移 40 的历史调用表升级并保留任务追踪索引", () => {

@@ -1,4 +1,5 @@
 export const RESTORABLE_MODULES = Object.freeze([
+  "drafts",
   "settings",
   "characters",
   "races",

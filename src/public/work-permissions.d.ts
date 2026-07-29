@@ -1,5 +1,5 @@
-export type WorkPermissionModule = "prose" | "settings" | "characters" | "races" | "organizations" | "timeline" | "relationships" | "outlines" | "reviews" | "ai-chat" | "ai-analysis" | "ai-settings";
-export type WorkUiModule = "editor" | "settings" | "characters" | "races" | "organizations" | "timeline" | "relationships" | "outlines" | "reviews" | "tasks" | "ai-settings";
+export type WorkPermissionModule = "prose" | "drafts" | "settings" | "characters" | "races" | "organizations" | "timeline" | "relationships" | "outlines" | "reviews" | "ai-chat" | "ai-analysis" | "ai-settings";
+export type WorkUiModule = "editor" | "drafts" | "settings" | "characters" | "races" | "organizations" | "timeline" | "relationships" | "outlines" | "reviews" | "tasks" | "ai-settings";
 export type WorkModuleAccess = "none" | "read" | "write";
 export type WorkModulePermissions = Record<WorkPermissionModule, WorkModuleAccess>;
 export type WorkPermissionAware = { accessRole?: string | null; modulePermissions?: WorkModulePermissions };
