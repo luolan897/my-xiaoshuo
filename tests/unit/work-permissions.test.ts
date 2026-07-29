@@ -24,6 +24,7 @@ describe("作品模块权限", () => {
     expect(classifyWorkModulePermissions(legacySettings)).toBe("settings-editor");
     expect(storedWorkModulePermissions("viewer", "{}").prose).toBe("read");
     expect(storedWorkModulePermissions("editor", "{}").prose).toBe("write");
+    expect(legacySettings.drafts).toBe("read");
     expect(storedWorkModulePermissions("editor", "{}")["ai-chat"]).toBe("write");
     expect(storedWorkModulePermissions("editor", "{}")["ai-analysis"]).toBe("write");
   });
@@ -42,15 +43,18 @@ describe("作品模块权限", () => {
   it("前端按当前模块分别判断读取与写入", () => {
     const permissions = emptyModulePermissions();
     permissions.prose = "read";
+    permissions.drafts = "write";
     permissions.settings = "write";
     const work = { accessRole: "custom", modulePermissions: permissions };
     expect(canReadUiModule(work, "editor")).toBe(true);
     expect(canWriteUiModule(work, "editor")).toBe(false);
     expect(canReadUiModule(work, "settings")).toBe(true);
     expect(canWriteUiModule(work, "settings")).toBe(true);
+    expect(canReadUiModule(work, "drafts")).toBe(true);
+    expect(canWriteUiModule(work, "drafts")).toBe(true);
     expect(canReadUiModule(work, "characters")).toBe(false);
     expect(firstReadableUiModule(work)).toBe("editor");
-    expect(permissionSummary(permissions)).toContain("可编辑：设定库");
+    expect(permissionSummary(permissions)).toContain("可编辑：草稿、设定库");
     expect(permissionSummary(permissions)).toContain("只读：正文");
   });
 

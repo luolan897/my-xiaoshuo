@@ -84,7 +84,7 @@ const mockAi = createServer(async (incoming, outgoing) => {
     const results = toolResults(body);
     if (joined.includes("E2E_TOOL_MATRIX")) {
       if (results.size === 0) {
-        assert.deepEqual(body.tools?.map((tool) => tool.function?.name), ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
+        assert.deepEqual(body.tools?.map((tool) => tool.function?.name), ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
         toolCalls(outgoing, [
           { id: "index-default", name: "story_index", arguments: {} },
           { id: "index-boundary", name: "story_index", arguments: JSON.stringify({ offset: 1, limit: 50 }) },
