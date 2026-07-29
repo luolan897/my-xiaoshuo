@@ -140,7 +140,7 @@ try {
   assert.match(page, /id="platform-ai-view"/u);
   assert.match(page, /id="platform-ai-button"/u);
   assert.match(page, /id="ai-context-meter"/u);
-  assert.match(application, /preservedOccurrences/u);
+  assert.match(application, /readForeshadowOccurrences/u);
   assert.match(application, /openOrganizationDialog/u);
   assert.match(application, /concurrencyLimit/u);
   assert.match(application, /contextWindow/u);

@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260729-draft-filter-v1');
-    expect(page.text).toContain('/app.js?v=20260729-draft-vditor-lifecycle-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260729-draft-vditor-lifecycle-v1"></script>');
+    expect(page.text).toContain('/styles.css?v=20260729-drafts-foreshadow-v1');
+    expect(page.text).toContain('/app.js?v=20260729-drafts-foreshadow-v1');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260729-drafts-foreshadow-v1"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -139,6 +139,19 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain(".race-tree-expand-toolbar ~ .module-layout-toolbar { order: 2; }");
     expect(styles.text).toContain(".race-tree-expand-toolbar ~ #module-create-button { order: 3; }");
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "伏笔列表样式")');
+    expect(application.text).toContain("function foreshadowOccurrencesField(item, chapters)");
+    expect(application.text).toContain("function bindForeshadowOccurrenceControls(container, chapters)");
+    expect(application.text).toContain("function readForeshadowOccurrences(item)");
+    expect(application.text).toContain("function updateForeshadowOccurrenceRowSummary(row)");
+    expect(application.text).toContain('data-occurrence-role="${esc(role)}"');
+    expect(application.text).toContain('meta: "完整编辑伏笔信息、章节节点与回收结果"');
+    expect(application.text).toContain('data-foreshadow-occurrence-add');
+    expect(application.text).toContain('data-foreshadow-occurrence-remove');
+    expect(application.text).toContain('field("plannedPayoffChapterId", "计划回收章节"');
+    expect(application.text).not.toContain('const occurrence = (role) => item?.occurrences?.find');
+    expect(styles.text).toContain(".foreshadow-occurrence-grid { display: grid;");
+    expect(styles.text).toContain(".large-dialog { width: min(1120px, 94vw);");
+    expect(styles.text).toContain('.foreshadow-occurrence-row[data-occurrence-role="payoff"]');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "审核列表样式")');
     expect(page.text).toContain('id="module-header-actions"');
     expect(application.text).toContain('$("#module-header-actions").insertAdjacentHTML');

@@ -6600,6 +6600,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dynamic-form .dialog-actions [value='cancel']").classList.toggle("hidden", Boolean(options.hideCancel));
   dialog.classList.toggle("wide-dialog", Boolean(options.wide));
   dialog.classList.toggle("trace-dialog", Boolean(options.trace));
+  dialog.classList.toggle("large-dialog", Boolean(options.large));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
   formDialogVditors = bindVditorEditors($("#dialog-fields"));
@@ -8100,49 +8101,151 @@ function openOutlineDialog(item) {
     }, "章节大纲");
 }
 
+const foreshadowOccurrenceRoleOptions = [["setup", "埋设"], ["reminder", "提醒"], ["payoff", "回收"]];
+
+function foreshadowOccurrenceRow(record, chapters, index) {
+  const chapterOptions = [["", "暂不关联"], ...chapters];
+  const occurrenceId = record?.id ?? "";
+  const role = record?.role ?? "setup";
+  const chapterId = record?.chapterId ?? "";
+  const chapterLabel = chapters.find(([value]) => value === chapterId)?.[1] ?? "未关联章节";
+  return `<fieldset class="foreshadow-occurrence-row" data-foreshadow-occurrence data-occurrence-id="${esc(occurrenceId)}" data-occurrence-role="${esc(role)}">
+    <legend><span class="foreshadow-occurrence-role-badge" data-foreshadow-occurrence-role-label>${esc(occurrenceRoleLabel(role))}</span><strong data-foreshadow-occurrence-index>节点 ${index + 1}</strong><small data-foreshadow-occurrence-summary>${esc(chapterLabel)}</small></legend>
+    <button class="foreshadow-occurrence-remove" type="button" data-foreshadow-occurrence-remove aria-label="删除第 ${index + 1} 个章节节点">删除节点</button>
+    <div class="foreshadow-occurrence-grid">
+      <label>节点类型<select name="occurrenceRole" data-foreshadow-occurrence-role aria-label="第 ${index + 1} 个节点类型">${foreshadowOccurrenceRoleOptions.map(([value, label]) => `<option value="${value}" ${value === role ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      <label>关联章节<select name="occurrenceChapterId" data-foreshadow-occurrence-chapter aria-label="第 ${index + 1} 个关联章节">${chapterOptions.map(([value, label]) => `<option value="${esc(value)}" ${value === chapterId ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
+    </div>
+    <label>节点说明<textarea name="occurrenceNote" data-foreshadow-occurrence-note aria-label="第 ${index + 1} 个节点说明">${esc(record?.note ?? "")}</textarea></label>
+  </fieldset>`;
+}
+
+function foreshadowOccurrencesField(item, chapters) {
+  const occurrences = item?.occurrences?.length ? item.occurrences : [null];
+  return `<section class="form-field foreshadow-editor-section foreshadow-occurrence-field" data-foreshadow-occurrences aria-labelledby="foreshadow-occurrence-title">
+    <div class="foreshadow-occurrence-toolbar"><div><h3 id="foreshadow-occurrence-title">章节节点</h3><p>每张卡片代表一次独立的埋设、提醒或回收，类型、章节和说明始终绑定在同一组内。</p></div><button type="button" data-foreshadow-occurrence-add>添加节点</button></div>
+    <div class="foreshadow-occurrence-rows" data-foreshadow-occurrence-rows>${occurrences.map((record, index) => foreshadowOccurrenceRow(record, chapters, index)).join("")}</div>
+    <p class="foreshadow-occurrence-empty hidden" data-foreshadow-occurrence-empty>尚未添加章节节点。</p>
+  </section>`;
+}
+
+function foreshadowOverviewField(item, options, firstPayoff) {
+  return `<section class="foreshadow-editor-section foreshadow-overview-field" aria-labelledby="foreshadow-overview-title">
+    <header><h3 id="foreshadow-overview-title">伏笔信息</h3><p>维护伏笔本身的内容、状态与计划回收位置。</p></header>
+    <div class="foreshadow-overview-grid">
+      ${field("title", "伏笔名称", "text", item?.title)}
+      ${field("importance", "重要程度", "select", item?.importance ?? "medium", [["low", "低"], ["medium", "中"], ["high", "高"]])}
+      ${field("status", "状态", "select", item?.status ?? "planned", [["planned", "计划中"], ["planted", "已埋设"], ["resolved", "已回收"], ["abandoned", "已放弃"]])}
+      ${field("plannedPayoffChapterId", "计划回收章节", "select", item?.plannedPayoffChapterId ?? firstPayoff?.chapterId ?? "", options)}
+    </div>
+    <div class="foreshadow-overview-description">${field("description", "内容与预期作用", "textarea", item?.description)}</div>
+  </section>`;
+}
+
+function foreshadowResolutionField(item) {
+  return `<section class="foreshadow-editor-section foreshadow-resolution-field" aria-labelledby="foreshadow-resolution-title">
+    <header><h3 id="foreshadow-resolution-title">回收结果</h3><p>记录伏笔最终如何揭示或完成；它不属于上方任意单个章节节点。</p></header>
+    ${field("resolutionNote", "回收结论", "textarea", item?.resolutionNote)}
+  </section>`;
+}
+
+function updateForeshadowOccurrenceRowSummary(row) {
+  const role = row.querySelector("[data-foreshadow-occurrence-role]").value;
+  const chapter = row.querySelector("[data-foreshadow-occurrence-chapter]");
+  row.dataset.occurrenceRole = role;
+  row.querySelector("[data-foreshadow-occurrence-role-label]").textContent = occurrenceRoleLabel(role);
+  row.querySelector("[data-foreshadow-occurrence-summary]").textContent = chapter.value ? chapter.selectedOptions[0]?.textContent ?? "已关联章节" : "未关联章节";
+}
+
+function renumberForeshadowOccurrenceRows(section) {
+  const rows = [...section.querySelectorAll("[data-foreshadow-occurrence]")];
+  rows.forEach((row, index) => {
+    const sequence = index + 1;
+    row.querySelector("[data-foreshadow-occurrence-index]").textContent = `节点 ${sequence}`;
+    row.querySelector("[data-foreshadow-occurrence-remove]").setAttribute("aria-label", `删除第 ${sequence} 个章节节点`);
+    row.querySelector("[data-foreshadow-occurrence-role]").setAttribute("aria-label", `第 ${sequence} 个节点类型`);
+    row.querySelector("[data-foreshadow-occurrence-chapter]").setAttribute("aria-label", `第 ${sequence} 个关联章节`);
+    row.querySelector("[data-foreshadow-occurrence-note]").setAttribute("aria-label", `第 ${sequence} 个节点说明`);
+    updateForeshadowOccurrenceRowSummary(row);
+  });
+  section.querySelector("[data-foreshadow-occurrence-empty]").classList.toggle("hidden", rows.length > 0);
+}
+
+function bindForeshadowOccurrenceControls(container, chapters) {
+  const section = container.querySelector("[data-foreshadow-occurrences]");
+  if (!section) return;
+  const rows = section.querySelector("[data-foreshadow-occurrence-rows]");
+  section.addEventListener("change", (event) => {
+    const row = event.target.closest("[data-foreshadow-occurrence]");
+    if (row && event.target.matches("[data-foreshadow-occurrence-role], [data-foreshadow-occurrence-chapter]")) updateForeshadowOccurrenceRowSummary(row);
+  });
+  section.addEventListener("click", (event) => {
+    if (event.target.closest("[data-foreshadow-occurrence-add]")) {
+      const index = rows.querySelectorAll("[data-foreshadow-occurrence]").length;
+      rows.insertAdjacentHTML("beforeend", foreshadowOccurrenceRow(null, chapters, index));
+      renumberForeshadowOccurrenceRows(section);
+      rows.lastElementChild?.querySelector("[data-foreshadow-occurrence-role]")?.focus();
+      return;
+    }
+    const remove = event.target.closest("[data-foreshadow-occurrence-remove]");
+    if (!remove) return;
+    const row = remove.closest("[data-foreshadow-occurrence]");
+    const nextFocus = row.nextElementSibling?.querySelector("[data-foreshadow-occurrence-role]")
+      ?? row.previousElementSibling?.querySelector("[data-foreshadow-occurrence-role]")
+      ?? section.querySelector("[data-foreshadow-occurrence-add]");
+    row.remove();
+    renumberForeshadowOccurrenceRows(section);
+    nextFocus?.focus();
+  });
+  renumberForeshadowOccurrenceRows(section);
+}
+
+function readForeshadowOccurrences(item) {
+  const previousById = new Map((item?.occurrences ?? []).map((record) => [record.id, record]));
+  const seen = new Map();
+  return [...$("#dialog-fields").querySelectorAll("[data-foreshadow-occurrence]")].flatMap((row, index) => {
+    const role = row.querySelector("[data-foreshadow-occurrence-role]").value;
+    const chapterId = row.querySelector("[data-foreshadow-occurrence-chapter]").value;
+    const note = row.querySelector("[data-foreshadow-occurrence-note]").value;
+    if (!chapterId) {
+      if (note.trim()) throw new Error(`第 ${index + 1} 个章节节点填写了说明，请选择关联章节`);
+      return [];
+    }
+    const key = `${role}:${chapterId}`;
+    const duplicateIndex = seen.get(key);
+    if (duplicateIndex) throw new Error(`第 ${index + 1} 个章节节点与第 ${duplicateIndex} 个重复`);
+    seen.set(key, index + 1);
+    const previous = previousById.get(row.dataset.occurrenceId);
+    return [{
+      chapterId,
+      role,
+      note,
+      evidence: previous?.chapterId === chapterId && previous?.role === role ? previous.evidence : []
+    }];
+  });
+}
+
 function openForeshadowDialog(item) {
   const chapters = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
   if (!chapters.length) return toast("请先创建章节", "error");
   const options = [["", "暂不关联"], ...chapters];
-  const occurrence = (role) => item?.occurrences?.find((record) => record.role === role);
-  const editableOccurrenceIds = new Set(["setup", "reminder", "payoff"].map((role) => occurrence(role)?.id).filter(Boolean));
-  const preservedOccurrences = (item?.occurrences ?? [])
-    .filter((record) => !editableOccurrenceIds.has(record.id))
-    .map((record) => ({ chapterId: record.chapterId, role: record.role, note: record.note, evidence: record.evidence }));
+  const firstPayoff = item?.occurrences?.find((record) => record.role === "payoff");
   openDialog(item ? "编辑伏笔" : "新建伏笔",
-    field("title", "伏笔名称", "text", item?.title) +
-    field("description", "内容与预期作用", "textarea", item?.description) +
-    field("importance", "重要程度", "select", item?.importance ?? "medium", [["low", "低"], ["medium", "中"], ["high", "高"]]) +
-    field("status", "状态", "select", item?.status ?? "planned", [["planned", "计划中"], ["planted", "已埋设"], ["resolved", "已回收"], ["abandoned", "已放弃"]]) +
-    field("setupChapterId", "埋设章节", "select", occurrence("setup")?.chapterId ?? "", options) +
-    field("setupNote", "埋设说明", "textarea", occurrence("setup")?.note ?? "") +
-    field("reminderChapterId", "提醒章节", "select", occurrence("reminder")?.chapterId ?? "", options) +
-    field("reminderNote", "提醒说明", "textarea", occurrence("reminder")?.note ?? "") +
-    field("payoffChapterId", "回收章节", "select", occurrence("payoff")?.chapterId ?? item?.plannedPayoffChapterId ?? "", options) +
-    field("payoffNote", "回收说明", "textarea", occurrence("payoff")?.note ?? "") +
-    field("resolutionNote", "回收结论", "textarea", item?.resolutionNote),
+    foreshadowOverviewField(item, options, firstPayoff) +
+    foreshadowOccurrencesField(item, chapters) +
+    foreshadowResolutionField(item),
     async (form) => {
-      const editedOccurrences = ["setup", "reminder", "payoff"].flatMap((role) => {
-        const chapterId = form.get(`${role}ChapterId`);
-        if (!chapterId) return [];
-        const previous = occurrence(role);
-        return [{
-          chapterId,
-          role,
-          note: form.get(`${role}Note`),
-          evidence: previous?.chapterId === chapterId ? previous.evidence : []
-        }];
-      });
-      const occurrences = [...preservedOccurrences, ...editedOccurrences];
+      const occurrences = readForeshadowOccurrences(item);
       const body = {
         title: form.get("title"), description: form.get("description"), importance: form.get("importance"), status: form.get("status"),
-        plannedPayoffChapterId: form.get("payoffChapterId") || null, resolutionNote: form.get("resolutionNote"), occurrences,
+        plannedPayoffChapterId: form.get("plannedPayoffChapterId") || null, resolutionNote: form.get("resolutionNote"), occurrences,
         ...(item ? { expectedVersionNo: item.versionNo } : {})
       };
       await api(item ? `/api/foreshadows/${item.id}` : `/api/works/${state.work.id}/foreshadows`, { method: item ? "PATCH" : "POST", body });
       await renderOutlines();
       toast(item ? "伏笔已更新" : "伏笔已创建");
-    }, item ? "伏笔管理" : "创作线索");
+    }, item ? "伏笔管理" : "创作线索", { large: true, meta: "完整编辑伏笔信息、章节节点与回收结果" });
+  bindForeshadowOccurrenceControls($("#dialog-fields"), chapters);
 }
 
 function openTimelineSplitDialog(item) {
