@@ -141,6 +141,8 @@ let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
+let taskAutoRunEditing = false;
+let taskAutoRunEditingWorkId = null;
 let relationshipSearchIndexRefreshTimer = null;
 let backgroundTaskCenterTimer = null;
 let backgroundTaskCenterRequest = 0;
@@ -3749,6 +3751,10 @@ async function showModule(module) {
     }
     module = fallback;
   }
+  if (module !== "tasks") {
+    taskAutoRunEditing = false;
+    taskAutoRunEditingWorkId = null;
+  }
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
@@ -4771,6 +4777,7 @@ async function renderTasks(page = taskListPage) {
   const taskTotal = Number(taskPage.total ?? taskPage.stats?.total ?? tasks.length);
   mountModuleCount(taskTotal);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
+  const autoRunEditing = canConfigureAutoRun && taskAutoRunEditing && taskAutoRunEditingWorkId === state.work.id;
   const pendingCount = Number(taskPage.stats?.pendingCount ?? 0);
   const runningCount = Number(taskPage.stats?.runningCount ?? 0);
   const activeTaskCount = pendingCount + runningCount;
@@ -4800,12 +4807,13 @@ async function renderTasks(page = taskListPage) {
         <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
       </div>
       <div class="task-auto-run-controls">
-        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>持续自动执行</span></label>
-        <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
-        <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" aria-describedby="task-auto-run-daily-help"></label>
-        <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}"></label>
-        <button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button>
-        <button id="task-auto-run-toggle" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>${autoRunPaused ? "恢复自动执行" : "暂停自动执行"}</button>
+        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""} ${autoRunEditing ? "" : "disabled"}><span>持续自动执行</span></label>
+        <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-daily-help"></label>
+        <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        ${autoRunEditing
+          ? '<button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button><button id="task-auto-run-pause" class="ghost-button" type="button">暂停自动执行</button>'
+          : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
       </div>
       <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个 · ${autoRunPaused ? "已暂停" : autoRunActive ? "持续执行中" : "未开启"}</p>
@@ -4844,6 +4852,12 @@ async function renderTasks(page = taskListPage) {
     await renderTasks(Number(button.dataset.taskPage));
   }));
 
+  $("#task-auto-run-edit")?.addEventListener("click", () => {
+    taskAutoRunEditing = true;
+    taskAutoRunEditingWorkId = state.work.id;
+    void renderTasks(taskListPage).catch((error) => toast(error.message, "error"));
+  });
+
   $("#task-auto-run-save")?.addEventListener("click", async () => {
     const button = $("#task-auto-run-save");
     button.disabled = true;
@@ -4860,6 +4874,22 @@ async function renderTasks(page = taskListPage) {
       toast(updated.autoRunEnabled
         ? `持续自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个`
         : "自动执行已关闭");
+      taskAutoRunEditing = false;
+      taskAutoRunEditingWorkId = null;
+      await renderTasks();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  });
+  $("#task-auto-run-pause")?.addEventListener("click", async () => {
+    const button = $("#task-auto-run-pause");
+    button.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { autoRunEnabled: false } });
+      taskAutoRunEditing = false;
+      taskAutoRunEditingWorkId = null;
+      toast("已暂停自动执行");
       await renderTasks();
       window.setTimeout(() => $("#task-auto-run-save")?.focus(), 0);
     } catch (error) {
@@ -4867,26 +4897,6 @@ async function renderTasks(page = taskListPage) {
       button.disabled = false;
     }
   });
-  $("#task-auto-run-toggle")?.addEventListener("click", async () => {
-    const button = $("#task-auto-run-toggle");
-    button.disabled = true;
-    try {
-      if (autoRunPaused) {
-        await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
-        toast("自动执行已恢复");
-      } else {
-        await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { autoRunEnabled: false } });
-        toast("已暂停启动新的分析任务，正在运行的任务会继续完成");
-      }
-      await refreshBackgroundTaskCenter({ announce: false });
-      await renderTasks();
-      window.setTimeout(() => $(autoRunPaused ? "#task-auto-run-toggle" : "#task-auto-run-enabled")?.focus(), 0);
-    } catch (error) {
-      toast(error.message, "error");
-      button.disabled = false;
-    }
-  });
-
   $("#module-content").querySelectorAll("[data-task-detail]").forEach((button) => button.addEventListener("click", () => {
     if (button.disabled) return;
     button.disabled = true;
