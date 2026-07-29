@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-drafts-foreshadow-v1');
-    expect(page.text).toContain('/styles.css?v=20260729-drafts-foreshadow-v1');
+    expect(page.text).toContain('/app.js?v=20260729-ai-stream-typewriter-v1');
+    expect(page.text).toContain('/styles.css?v=20260729-ai-stream-typewriter-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -672,7 +672,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openTimelineTrackDialog(item)");
     expect(styles.text).toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(body)");
-    expect(application.text).toContain("content.innerHTML = renderMarkdown(streamedText)");
+    expect(application.text).toContain("createStreamTypewriter");
+    expect(application.text).toContain("content.innerHTML = renderMarkdown(text)");
     expect(application.text).toContain('class="message-body"');
     expect(styles.text).toContain(".message-body h1, .message-body h2");
     expect(styles.text).toContain(".prompt-composer-actions { position: absolute; right: 8px; bottom: 8px;");

@@ -8,6 +8,7 @@ import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
+import { createStreamTypewriter } from "/stream-typewriter.js?v=20260729-ai-stream-typewriter-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
@@ -8754,12 +8755,22 @@ async function streamChat(body) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
-  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite"></div><div class="message-meta">正在连接模型流……</div>';
+  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
   attachMessageHeading(message, "助手 · 正在生成");
   $("#ai-feed").append(message);
   scrollAiFeedToBottom();
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  const typewriter = createStreamTypewriter({
+    onRender: (text, progress) => {
+      content.innerHTML = renderMarkdown(text);
+      const receivedCharacters = progress.visibleCharacters + progress.pendingCharacters;
+      meta.textContent = progress.pendingCharacters > 0
+        ? `正在生成 · ${progress.visibleCharacters} / ${receivedCharacters} 字`
+        : `正在生成 · ${progress.visibleCharacters} 字`;
+      scrollAiFeedToBottom();
+    }
+  });
   let streamedText = "";
   let generatedMetadata = {};
   let toolCalls = [];
@@ -8781,7 +8792,7 @@ async function streamChat(body) {
     const decoder = new TextDecoder();
     let buffer = "";
     let streamError = null;
-    const consume = (eventText) => {
+    const consume = async (eventText) => {
       let eventName = "message";
       const dataLines = [];
       for (const line of eventText.split(/\r?\n/)) {
@@ -8792,12 +8803,12 @@ async function streamChat(body) {
       const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "delta") {
         const firstFinalDelta = streamedText.length === 0;
-        streamedText += payload.delta ?? "";
+        const delta = typeof payload.delta === "string" ? payload.delta : "";
+        streamedText += delta;
         if (streamedText.length > 0) finalAnswerStarted = true;
-        content.innerHTML = renderMarkdown(streamedText);
+        typewriter.append(delta);
         if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
-        meta.textContent = `已接收 ${Array.from(streamedText).length} 字`;
-        scrollAiFeedToBottom();
+        meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
         const step = { ...payload };
         const append = step.append === true;
@@ -8818,7 +8829,9 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "complete") {
+        await typewriter.finish();
         message.classList.remove("is-streaming");
+        content.setAttribute("aria-busy", "false");
         message.querySelector(".message-heading > span").textContent = "助手";
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
@@ -8837,14 +8850,17 @@ async function streamChat(body) {
       buffer += decoder.decode(chunk.value, { stream: !chunk.done });
       const events = buffer.split(/\r?\n\r?\n/);
       buffer = events.pop() ?? "";
-      events.forEach(consume);
+      for (const eventText of events) await consume(eventText);
       if (chunk.done) break;
     }
-    if (buffer.trim()) consume(buffer);
+    if (buffer.trim()) await consume(buffer);
+    await typewriter.finish();
     if (streamError) throw streamError;
     return { content: streamedText, message, metadata: generatedMetadata };
   } catch (error) {
+    typewriter.reveal();
     message.classList.remove("is-streaming");
+    content.setAttribute("aria-busy", "false");
     message.querySelector(".message-heading > span").textContent = "助手 · 生成中断";
     renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
     meta.textContent = "生成中断";
