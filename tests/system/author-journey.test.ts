@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-drafts-foreshadow-v1');
-    expect(page.text).toContain('/styles.css?v=20260729-drafts-foreshadow-v1');
+    expect(page.text).toContain('/app.js?v=20260730-table-wrap-menu-v1');
+    expect(page.text).toContain('/styles.css?v=20260730-table-wrap-menu-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -510,7 +510,7 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("renderMarkdownTable");
     expect(vditorCss.text).toContain("Vditor v3.11.2");
     expect(vditorScript.text).toContain("Vditor");
-    expect(application.text).toContain('/markdown.js?v=20260725-ordered-list');
+    expect(application.text).toContain('/markdown.js?v=20260730-table-wrap-menu-v1');
     expect(application.text).toContain('new window.Vditor');
     expect(application.text).toContain('createVditorUploadHandler');
     expect(page.text).toContain('id="character-section-editor-view"');
@@ -526,6 +526,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("请先保存当前角色");
     expect(application.text).toContain("保存成功后即可新建 Markdown 档案章节");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
+    expect(page.text).toContain('id="markdown-table-menu"');
+    expect(application.text).toContain('openMarkdownTableMenu(header, event.clientX, event.clientY)');
+    expect(styles.text).toContain(".message-body .markdown-table-scroll.is-wrapping table");
     expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table { background: var(--surface); color: var(--ink); }');
     expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }');
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
@@ -672,7 +675,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openTimelineTrackDialog(item)");
     expect(styles.text).toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(body)");
-    expect(application.text).toContain("content.innerHTML = renderMarkdown(streamedText)");
+    expect(application.text).toContain("createStreamTypewriter");
+    expect(application.text).toContain("content.innerHTML = renderMarkdown(text)");
     expect(application.text).toContain('class="message-body"');
     expect(styles.text).toContain(".message-body h1, .message-body h2");
     expect(styles.text).toContain(".prompt-composer-actions { position: absolute; right: 8px; bottom: 8px;");

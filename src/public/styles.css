@@ -2038,6 +2038,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .assistant-message > .message-heading, .user-message > .message-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; opacity: .65; font-size: 9px; }
 .message-heading > span { letter-spacing: .12em; }.message-heading time { flex: 0 0 auto; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
 .message-body { min-width: 0; overflow-wrap: anywhere; }
+.is-streaming .message-body:empty::after, .is-streaming .message-body > :last-child::after { content: ""; display: inline-block; width: 2px; height: 1.05em; margin-left: 3px; border-radius: 1px; background: var(--accent-dark); vertical-align: -.16em; animation: ai-stream-cursor 850ms steps(1, end) infinite; }
 .message-card-actions { position: absolute; right: 0; bottom: -31px; display: flex; align-items: center; gap: 12px; height: 24px; }
 .message-card-actions button { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 2px; border: 0; background: transparent; color: var(--muted); font-size: 9px; }
 .message-card-actions button:hover, .message-card-actions button:focus-visible { color: var(--accent-dark); }
@@ -2056,6 +2057,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body .markdown-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .message-body .markdown-table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; }
 .message-body .markdown-table-scroll th, .message-body .markdown-table-scroll td { padding: 7px 9px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow-wrap: normal; white-space: nowrap; }
+.message-body .markdown-table-scroll th { cursor: context-menu; }
+.message-body .markdown-table-scroll th:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.message-body .markdown-table-scroll.is-wrapping { overflow-x: hidden; scrollbar-gutter: auto; }
+.message-body .markdown-table-scroll.is-wrapping table { width: 100%; table-layout: fixed; }
+.message-body .markdown-table-scroll.is-wrapping th, .message-body .markdown-table-scroll.is-wrapping td { overflow-wrap: anywhere; white-space: normal; word-break: break-word; }
 .message-body .markdown-table-scroll th:last-child, .message-body .markdown-table-scroll td:last-child { border-right: 0; }
 .message-body .markdown-table-scroll tbody tr:last-child td { border-bottom: 0; }
 .message-body .markdown-table-scroll th { background: var(--surface-soft); font-weight: 600; }
@@ -2081,7 +2087,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-process-intermediate-step .ai-process-step-body { border-left-color: var(--muted); }
 .ai-process-tool-step { padding-top: 1px; }
 @keyframes ai-process-pulse { 0%, 100% { opacity: .45; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
-@media (prefers-reduced-motion: reduce) { .is-streaming .ai-process-details[open] > summary::before { animation: none; } }
+@keyframes ai-stream-cursor { 0%, 54% { opacity: 1; } 55%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .is-streaming .ai-process-details[open] > summary::before, .is-streaming .message-body:empty::after, .is-streaming .message-body > :last-child::after { animation: none; } }
 .ai-tool-call-list { display: grid; gap: 5px; margin-top: 10px; }
 .ai-tool-call-summary { display: flex; align-items: center; justify-content: space-between; width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--muted); font: 9px/1.4 var(--font-latin), monospace; text-align: left; }
 .ai-tool-call-summary::after { content: "查看详情"; flex: 0 0 auto; margin-left: 8px; color: var(--accent-dark); }
@@ -2242,6 +2249,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .line-citation-menu { position: fixed; z-index: 82; display: grid; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .line-citation-menu strong { padding: 5px 7px 8px; color: var(--muted); font-size: 9px; }
 .line-citation-menu button { border: 0; border-radius: 4px; padding: 8px; background: transparent; text-align: left; font-size: 11px; }.line-citation-menu button:hover { background: var(--paper-deep); color: var(--accent-dark); }
+.markdown-table-menu { position: fixed; z-index: 84; min-width: 210px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
+.markdown-table-menu button { position: relative; display: grid; width: 100%; gap: 2px; padding: 8px 9px 8px 31px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; }
+.markdown-table-menu button::before { content: ""; position: absolute; top: 12px; left: 10px; width: 11px; height: 11px; border: 1px solid var(--muted); border-radius: 2px; background: var(--surface); }
+.markdown-table-menu button[aria-checked="true"]::before { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--surface); }
+.markdown-table-menu button:hover, .markdown-table-menu button:focus-visible { background: var(--paper-deep); color: var(--accent-dark); }
+.markdown-table-menu button span { font-size: 11px; font-weight: 600; }
+.markdown-table-menu button small { color: var(--muted); font-size: 9px; }
 .chapter-annotations-dialog { width: min(820px, 94vw); }
 .chapter-annotations-list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; padding: 18px 24px; }
 .chapter-annotation-card { display: grid; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }

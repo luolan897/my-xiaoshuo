@@ -73,6 +73,25 @@ const mockAi = createServer(async (request, response) => {
     sendCompletion(response, { content: "模型已处理三个工具结果：目录、章节正文和跃迁设定均已确认。" });
     return;
   }
+  if (latestUserMessage.includes("浏览器 Markdown 表格测试")) {
+    sendCompletion(response, {
+      content: [
+        "### 航行状态",
+        "",
+        "| 舰船 | 状态 | 备注 |",
+        "| :--- | :---: | ---: |",
+        "| 远航号 | **跃迁完成** | `冷却 12h`，这是用于验证横向滚动与自动换行切换的超长备注内容 |",
+        "| 归潮号 | 检修中 | 引擎\\|护盾 |",
+        "",
+        "- 表格后列表仍然可用",
+        "",
+        "```txt",
+        "航线已锁定",
+        "```"
+      ].join("\n")
+    });
+    return;
+  }
   if (latestUserMessage.includes("浏览器思考步骤测试")) {
     if (toolMessages.length === 0) {
       sendToolCalls(response, [
