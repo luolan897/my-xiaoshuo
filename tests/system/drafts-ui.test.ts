@@ -19,7 +19,7 @@ describe("草稿模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">草稿</button>");
-    expect(page.text).toContain('/app.js?v=20260730-drafts-stream-v1');
+    expect(page.text).toContain('/app.js?v=20260730-drafts-edit-delete-v1');
     expect(application.text).toContain('drafts: ["临时想法", "创作草稿"');
     expect(application.text).toContain('[["prose", "正文草稿"], ["setting", "设定草稿"]]');
     expect(application.text).toContain('field("content", "内容", "markdown"');
@@ -37,6 +37,8 @@ describe("草稿模块界面", () => {
     expect(application.text).toContain('没有符合筛选条件的草稿');
     expect(application.text).toContain('formDialogVditors = bindVditorEditors($("#dialog-fields"))');
     expect(application.text).toContain('formDialogVditors.forEach(destroyVditorEditor)');
+    expect(application.text).toContain('data-dialog-draft-delete');
+    expect(application.text).not.toContain('data-delete-draft');
     expect(application.text).toContain('editor: true');
     expect(application.text).toContain('dialog.classList.toggle("editor-dialog", Boolean(options.editor))');
     expect(styles.text).toContain('.draft-filter-toolbar select { min-width: 180px; min-height: 38px;');
