@@ -14,6 +14,8 @@ describe("系统 Toast 图层", () => {
     expect(page).toContain('id="toast-region"');
     expect(page).toContain('popover="manual"');
     expect(application).toContain("function raiseToastRegion()");
+    expect(application).toContain('function persistentToast(message, type = "info")');
+    expect(application).toContain('element.setAttribute("role", "status")');
     expect(application).toContain('region.matches(":popover-open")');
     expect(application).toContain("region.showPopover()");
     expect(application).toContain('document.addEventListener("toggle"');
