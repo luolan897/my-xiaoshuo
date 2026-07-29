@@ -6,5 +6,7 @@ coverage/
 .env
 .DS_Store
 .ai-docs/
+.codex/
+.workbuddy/
 .tmp
 *.zip
