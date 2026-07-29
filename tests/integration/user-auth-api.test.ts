@@ -1626,12 +1626,25 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("Authorization", `Bearer ${firstKey}`)
       .expect(200);
     expect(settingVersions.body.data[0]).toMatchObject({ versionNo: 2, actor: "api_admin", changeNote: "CLI 补充航线限制" });
+    const draft = await request(runtime.app).post(`/api/works/${adminWorkId}/drafts`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .send({ draftType: "prose", title: "CLI 草稿", content: "初始草稿。" })
+      .expect(201);
+    await request(runtime.app).patch(`/api/drafts/${draft.body.data.id}`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .send({ content: "API Key 修改后的草稿。", changeNote: "CLI 补充草稿" })
+      .expect(200);
+    const draftVersions = await request(runtime.app).get(`/api/entity-versions/draft/${draft.body.data.id}`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .expect(200);
+    expect(draftVersions.body.data[0]).toMatchObject({ versionNo: 2, actor: "api_admin", changeNote: "CLI 补充草稿" });
 
     await request(runtime.app).get("/api/users").set("Authorization", `Bearer ${firstKey}`).expect(403);
     await request(runtime.app).get("/api/platform/ai/providers").set("Authorization", `Bearer ${firstKey}`).expect(403);
     await request(runtime.app).get(`/api/works/${adminWorkId}/members`).set("Authorization", `Bearer ${firstKey}`).expect(403);
     await request(runtime.app).post("/api/auth/api-key/reset").set("Authorization", `Bearer ${firstKey}`).send({}).expect(403);
     await request(runtime.app).delete(`/api/chapters/${chapter.body.data.id}`).set("Authorization", `Bearer ${firstKey}`).expect(403);
+    await request(runtime.app).delete(`/api/drafts/${draft.body.data.id}`).set("Authorization", `Bearer ${firstKey}`).expect(403);
 
     const secondReset = await admin.agent.post("/api/auth/api-key/reset")
       .set("X-CSRF-Token", admin.csrfToken)
