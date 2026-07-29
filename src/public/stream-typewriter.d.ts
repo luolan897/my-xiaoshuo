@@ -9,7 +9,7 @@ export type StreamTypewriter = {
   reveal(): string;
 };
 
-export function streamTypewriterBatchSize(pendingCharacters: number, finishingFrames?: number | null): number;
+export function streamTypewriterBatchSize(pendingCharacters: number, finishing?: boolean): number;
 
 export function createStreamTypewriter<FrameHandle = number>(options: {
   onRender: (text: string, progress: StreamTypewriterProgress) => void;

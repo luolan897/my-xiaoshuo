@@ -1,13 +1,11 @@
-const DEFAULT_FINISH_FRAMES = 36;
-const DEFAULT_BACKLOG_FRAMES = 18;
+const STREAMING_CHARACTERS_PER_FRAME = 1;
+const FINISHING_CHARACTERS_PER_FRAME = 2;
 
-export function streamTypewriterBatchSize(pendingCharacters, finishingFrames = null) {
+export function streamTypewriterBatchSize(pendingCharacters, finishing = false) {
   const pending = Math.max(0, Math.floor(Number(pendingCharacters) || 0));
   if (pending === 0) return 0;
-  const targetFrames = finishingFrames === null
-    ? DEFAULT_BACKLOG_FRAMES
-    : Math.max(1, Math.floor(Number(finishingFrames) || 1));
-  return Math.max(1, Math.ceil(pending / targetFrames));
+  const maximum = finishing ? FINISHING_CHARACTERS_PER_FRAME : STREAMING_CHARACTERS_PER_FRAME;
+  return Math.min(pending, maximum);
 }
 
 export function createStreamTypewriter({
@@ -22,7 +20,7 @@ export function createStreamTypewriter({
   const pendingCharacters = [];
   const idleResolvers = [];
   let scheduledFrame = null;
-  let finishingFrames = null;
+  let finishing = false;
 
   const snapshot = () => visibleCharacters.join("");
   const resolveIdle = () => {
@@ -42,9 +40,8 @@ export function createStreamTypewriter({
       scheduledFrame = null;
       const batchSize = reducedMotion
         ? pendingCharacters.length
-        : streamTypewriterBatchSize(pendingCharacters.length, finishingFrames);
+        : streamTypewriterBatchSize(pendingCharacters.length, finishing);
       visibleCharacters.push(...pendingCharacters.splice(0, batchSize));
-      if (finishingFrames !== null) finishingFrames = Math.max(1, finishingFrames - 1);
       render();
       if (pendingCharacters.length) schedule();
       else resolveIdle();
@@ -60,7 +57,7 @@ export function createStreamTypewriter({
     },
     finish() {
       if (!pendingCharacters.length && scheduledFrame === null) return Promise.resolve(snapshot());
-      finishingFrames = reducedMotion ? 1 : DEFAULT_FINISH_FRAMES;
+      finishing = true;
       schedule();
       return new Promise((resolve) => idleResolvers.push(resolve));
     },
@@ -70,7 +67,7 @@ export function createStreamTypewriter({
         scheduledFrame = null;
       }
       visibleCharacters.push(...pendingCharacters.splice(0));
-      finishingFrames = null;
+      finishing = false;
       render();
       resolveIdle();
       return snapshot();
