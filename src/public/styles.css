@@ -1346,6 +1346,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-auto-run-copy { display: grid; grid-column: 1; gap: 4px; }
 .task-auto-run-copy strong { font-size: 13px; }
 .task-auto-run-copy small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.task-auto-run-actions { display: flex; grid-column: 2; grid-row: 1; align-items: start; justify-content: flex-end; min-height: 32px; }
+.task-auto-run-actions:empty { display: none; }
 .task-auto-run-controls {
   display: flex;
   grid-column: 1;
@@ -2725,7 +2727,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .top-actions .ghost-button:not(.settings-button) { display: none; }
   .book-shelf { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
   .task-auto-run-panel { grid-template-columns: minmax(0, 1fr); column-gap: 0; }
-  .task-auto-run-copy, .task-auto-run-controls, .task-auto-run-help, .task-auto-run-meta, .task-auto-run-alert { grid-column: 1; }
+  .task-auto-run-copy, .task-auto-run-actions, .task-auto-run-controls, .task-auto-run-meta { grid-column: 1; }
+  .task-auto-run-actions { grid-row: auto; }
+  .task-auto-run-help, .task-auto-run-alert { grid-column: 1; }
   .task-auto-run-progress { grid-column: 1; grid-row: auto; justify-self: stretch; width: 100%; }
   .task-auto-run-progress-ring { display: none; }
   .task-auto-run-progress-bar-layout { display: grid; gap: 6px; width: 100%; }
