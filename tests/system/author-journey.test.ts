@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-analysis-rerun-vditor-ui-v1');
-    expect(page.text).toContain('/styles.css?v=20260729-analysis-rerun-vditor-ui-v1');
+    expect(page.text).toContain('/app.js?v=20260729-task-auto-run-layout-v1');
+    expect(page.text).toContain('/styles.css?v=20260729-task-auto-run-layout-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -584,6 +584,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('let taskAutoRunEditing = false;');
     expect(application.text).toContain('const autoRunEditing = canConfigureAutoRun && taskAutoRunEditing');
     expect(application.text).toContain('id="task-auto-run-edit"');
+    expect(application.text).toContain('class="task-auto-run-header"');
     expect(application.text).toContain('class="task-auto-run-actions"');
     expect(application.text).toContain('id="task-auto-run-pause"');
     expect(application.text).toContain('body: { autoRunEnabled: false }');
@@ -608,6 +609,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain("消化 pending 任务");
     expect(application.text).toContain("/tasks/auto-run");
     expect(styles.text).toContain(".task-auto-run-panel");
+    expect(styles.text).toContain(".task-auto-run-header { display: grid; grid-column: 1;");
+    expect(styles.text).toContain(".task-auto-run-actions { display: flex; align-items: start;");
+    expect(styles.text).not.toContain(".task-auto-run-actions { display: flex; grid-column: 2;");
     expect(styles.text).toContain(".task-auto-run-progress-ring-value { stroke: var(--accent);");
     expect(styles.text).toContain(".task-auto-run-progress-ring { display: none; }");
     expect(styles.text).toContain(".task-auto-run-progress-bar-layout { display: grid;");
