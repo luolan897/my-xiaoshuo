@@ -488,6 +488,7 @@ export class Database {
         content TEXT NOT NULL,
         citations_json TEXT NOT NULL DEFAULT '[]',
         metadata_json TEXT NOT NULL DEFAULT '{}',
+        request_id TEXT,
         created_at TEXT NOT NULL
       );
 
@@ -2338,6 +2339,22 @@ export class Database {
           this.run("UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?", JSON.stringify(next), row.work_id);
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (55, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(56)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_conversation_messages)").map((row) => String(row.name)));
+        if (!columns.has("request_id")) {
+          this.run("ALTER TABLE ai_conversation_messages ADD COLUMN request_id TEXT");
+        }
+        this.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_conversation_messages_request ON ai_conversation_messages(conversation_id, request_id) WHERE request_id IS NOT NULL");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (56, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

@@ -363,6 +363,7 @@ type AiConversationMessageInput = {
   role: "user" | "assistant";
   content: string;
   citations?: unknown[];
+  requestId?: string;
   metadata?: { modelDisplayName?: string; outputTokens?: number; cacheHitPercent?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
 };
 
@@ -5970,6 +5971,15 @@ export class Store {
   addAiConversationMessage(conversationId: string, input: AiConversationMessageInput): Record<string, unknown> {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
+    const requestId = input.requestId?.trim() || null;
+    if (requestId) {
+      const existing = this.db.get(
+        "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?",
+        conversationId,
+        requestId
+      );
+      if (existing) return this.mapAiConversationMessage(existing);
+    }
     const messageId = id("message");
     const timestamp = now();
     const title = requiredString(conversation, "title") === "新对话" && input.role === "user"
@@ -5977,13 +5987,14 @@ export class Store {
       : requiredString(conversation, "title");
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         messageId,
         conversationId,
         input.role,
         input.content,
         JSON.stringify(input.citations ?? []),
         JSON.stringify(input.metadata ?? {}),
+        requestId,
         timestamp,
         currentRequestActor()?.userId ?? null
       );
@@ -6024,13 +6035,14 @@ export class Store {
       );
       for (const message of messages.slice(0, targetIndex + 1)) {
         this.db.run(
-          "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           id("message"),
           forkId,
           requiredString(message, "role"),
           requiredString(message, "content"),
           requiredString(message, "citations_json"),
           requiredString(message, "metadata_json"),
+          optionalString(message, "request_id"),
           requiredString(message, "created_at"),
           currentRequestActor()?.userId ?? null
         );
@@ -6062,6 +6074,7 @@ export class Store {
       content: requiredString(row, "content"),
       citations: json(requiredString(row, "citations_json"), []),
       metadata: json(requiredString(row, "metadata_json"), {}),
+      requestId: optionalString(row, "request_id"),
       createdAt: requiredString(row, "created_at")
     };
   }

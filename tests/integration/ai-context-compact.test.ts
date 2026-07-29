@@ -101,6 +101,12 @@ describe("AI 对话上下文压缩", () => {
     expect(modelContext).toContain(recentAssistant);
     expect(modelContext).not.toContain("旧作者要求");
     expect(modelContext.match(/继续回答燃料问题。/gu)).toHaveLength(1);
+    expect(streamed.text).toMatch(/"messageId":"message_[^"]+"/u);
+    const persistedConversation = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(persistedConversation.body.data.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "已结合压缩摘要和最近对话回答。"
+    });
   });
 
   it("手动整理较长对话时优先保留最近八条原始消息", async () => {

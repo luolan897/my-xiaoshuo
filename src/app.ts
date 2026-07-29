@@ -1838,6 +1838,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       role: z.enum(["user", "assistant"]),
       content: nonEmpty.max(200_000),
       citations: z.array(z.unknown()).max(100).optional(),
+      requestId: identifier.optional(),
       metadata: z.object({
         modelDisplayName: z.string().max(200).optional(),
         outputTokens: z.number().int().min(0).max(10_000_000).optional(),
@@ -2001,6 +2002,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         onProcessStep: (step) => sendEvent("process_step", step),
         conversationId: input.conversationId,
         excludeConversationMessageId: input.currentMessageId,
+        ...(input.currentMessageId ? { assistantMessageRequestId: `assistant:${input.currentMessageId}` } : {}),
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
@@ -2013,7 +2015,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         cacheHitPercent: suggestion.cacheHitPercent,
         chapterVersion: suggestion.chapterVersion,
         toolCalls: suggestion.toolCalls,
-        processSteps: suggestion.processSteps
+        processSteps: suggestion.processSteps,
+        messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
+          ? (suggestion.conversationMessage as Record<string, unknown>).id
+          : undefined,
+        messageCreatedAt: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
+          ? (suggestion.conversationMessage as Record<string, unknown>).createdAt
+          : undefined
       });
     } catch (error) {
       if (!controller.signal.aborted) {

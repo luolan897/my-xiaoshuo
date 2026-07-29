@@ -8772,23 +8772,30 @@ async function sendAi() {
     let assistantContent = "";
     let assistantMessage;
     let assistantMetadata = {};
+    let persistedStreamMessage = null;
     let suggestion = null;
     if (taskType === "chat") {
       const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId, currentMessageId: persistedUserMessage.id });
       assistantContent = streamed.content;
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
+      persistedStreamMessage = streamed.messageId ? { id: streamed.messageId, createdAt: streamed.createdAt } : null;
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
     try {
-      const persistedAssistantMessage = await persistAiConversationMessage("assistant", assistantContent, [], assistantMetadata);
-      if (assistantMessage) {
-        updateMessageCreatedAt(assistantMessage, persistedAssistantMessage.createdAt);
-        attachMessageIdentity(assistantMessage, persistedAssistantMessage.id);
-      } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id);
+      if (persistedStreamMessage) {
+        updateMessageCreatedAt(assistantMessage, persistedStreamMessage.createdAt);
+        attachMessageIdentity(assistantMessage, persistedStreamMessage.id);
+      } else {
+        const persistedAssistantMessage = await persistAiConversationMessage("assistant", assistantContent, [], assistantMetadata);
+        if (assistantMessage) {
+          updateMessageCreatedAt(assistantMessage, persistedAssistantMessage.createdAt);
+          attachMessageIdentity(assistantMessage, persistedAssistantMessage.id);
+        } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id);
+      }
     } catch (error) {
       if (suggestion) appendSuggestion(suggestion);
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
@@ -8828,6 +8835,8 @@ async function streamChat(body) {
   let generatedMetadata = {};
   let toolCalls = [];
   let processSteps = [];
+  let persistedMessageId = null;
+  let persistedMessageCreatedAt = null;
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -8882,6 +8891,8 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "complete") {
+        persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
+        persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         await typewriter.finish();
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -8909,7 +8920,7 @@ async function streamChat(body) {
     if (buffer.trim()) await consume(buffer);
     await typewriter.finish();
     if (streamError) throw streamError;
-    return { content: streamedText, message, metadata: generatedMetadata };
+    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt };
   } catch (error) {
     typewriter.reveal();
     message.classList.remove("is-streaming");
