@@ -4335,28 +4335,42 @@ function draftTypeLabel(draftType) {
 
 async function deleteDraft(item) {
   if (!item || !canEditModule("drafts")) return;
+  const dialog = $("#form-dialog");
+  dialog.close();
   if (!await confirmToast(`确认删除草稿“${item.title}”吗？草稿将从当前列表移除。`, {
     title: "删除草稿",
     confirmLabel: "确认删除"
-  })) return;
+  })) {
+    openDraftDialog(item);
+    return;
+  }
   try {
     await api(`/api/drafts/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderDrafts(moduleListPages.drafts);
     toast("草稿已删除");
   } catch (error) {
     toast(error.message, "error");
+    try {
+      openDraftDialog(await api(`/api/drafts/${encodeURIComponent(item.id)}`));
+    } catch (reloadError) {
+      toast(reloadError.message, "error");
+    }
   }
 }
 
 function openDraftDialog(item = null, { readOnly = false } = {}) {
   const viewOnly = readOnly || !canEditModule("drafts");
+  const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="草稿操作">
+    <div><strong>草稿操作</strong><small>删除后将从草稿列表移除，版本历史仍会保留。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除草稿</button></div>
+  </section>` : "";
   const fields = `<p class="form-field-note">草稿只记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
     + field("draftType", "草稿类型", "select", item?.draftType ?? "prose", [["prose", "正文草稿"], ["setting", "设定草稿"]])
     + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
       readOnly: viewOnly
-    });
+    }) + management;
   openDialog(item ? viewOnly ? "查看草稿" : "编辑草稿" : "新建草稿", fields, async (form) => {
     if (viewOnly) return;
     const title = String(form.get("title") ?? "").trim();
@@ -4385,6 +4399,9 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       else control.readOnly = true;
     });
   }
+  $("#dialog-fields").querySelector("[data-dialog-draft-delete]")?.addEventListener("click", () => {
+    void deleteDraft(item);
+  });
 }
 
 async function renderDrafts(page = moduleListPages.drafts) {
@@ -4409,7 +4426,7 @@ async function renderDrafts(page = moduleListPages.drafts) {
     ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 篇草稿</span>`}
   </section>`;
   const actions = (item) => canEditModule("drafts")
-    ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}<button type="button" data-delete-draft="${esc(item.id)}">删除</button>${recordHistoryButton("draft", item.id, item.title)}`
+    ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
     : recordHistoryButton("draft", item.id, item.title);
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
     <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
@@ -4440,7 +4457,6 @@ async function renderDrafts(page = moduleListPages.drafts) {
   });
   bindModuleLayoutToggle(() => renderDrafts(pageResult.page));
   bindModulePagination("drafts", renderDrafts);
-  const draftById = (draftId) => drafts.find((draft) => draft.id === draftId);
   $("#module-content").querySelectorAll("[data-open-draft]").forEach((card) => {
     const open = async () => openDraftDialog(await api(`/api/drafts/${encodeURIComponent(card.dataset.openDraft)}`), { readOnly: true });
     card.addEventListener("click", (event) => { if (!event.target.closest("button, a")) void open(); });
@@ -4453,9 +4469,6 @@ async function renderDrafts(page = moduleListPages.drafts) {
   });
   $("#module-content").querySelectorAll("[data-edit-draft]").forEach((button) => button.addEventListener("click", async () => {
     openDraftDialog(await api(`/api/drafts/${encodeURIComponent(button.dataset.editDraft)}`));
-  }));
-  $("#module-content").querySelectorAll("[data-delete-draft]").forEach((button) => button.addEventListener("click", () => {
-    void deleteDraft(draftById(button.dataset.deleteDraft));
   }));
   bindEntityHistoryButtons(() => renderDrafts(pageResult.page));
 }
