@@ -4803,13 +4803,15 @@ async function renderTasks(page = taskListPage) {
     : "";
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel ${canConfigureAutoRun ? "" : "hidden"}" aria-labelledby="task-auto-run-title">
-      <div class="task-auto-run-copy">
-        <strong id="task-auto-run-title">自动执行待分析任务</strong>
-        <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
-        <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
-      </div>
-      <div class="task-auto-run-actions">
-        ${autoRunEditing ? "" : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
+      <div class="task-auto-run-header">
+        <div class="task-auto-run-copy">
+          <strong id="task-auto-run-title">自动执行待分析任务</strong>
+          <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
+          <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
+        </div>
+        <div class="task-auto-run-actions">
+          ${autoRunEditing ? "" : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
+        </div>
       </div>
       <div class="task-auto-run-controls">
         <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""} ${autoRunEditing ? "" : "disabled"}><span>持续自动执行</span></label>
