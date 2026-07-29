@@ -112,10 +112,14 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('.vditor-editor-host .vditor-toolbar { display: flex; align-items: center; flex: 0 0 auto; }');
     expect(styles.text).toContain('.markdown-word-count { display: inline-flex; align-items: center; align-self: center; min-height: 28px; margin-left: 24px;');
     expect(styles.text).toContain('.vditor-editor-host .vditor-line-numbers { display: none; position: absolute;');
-    expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-line-numbers { display: grid; align-content: start; }');
+    expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-line-numbers { display: block; }');
+    expect(styles.text).toContain('.vditor-editor-host .vditor-line-number { position: absolute;');
+    expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-sv,');
     expect(application.text).toContain('name: "line-number"');
     expect(application.text).toContain('function toggleVditorLineNumbers(editor)');
     expect(application.text).toContain('function updateVditorLineNumbers(editor, markdown)');
+    expect(application.text).toContain('function collectVditorVisualLineRects(surface)');
+    expect(application.text).toContain('buildVditorLineNumberRows');
     expect(styles.text).toContain('.chapter-stats { display: none; }');
     expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }');
     expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; height: 30px; }');
