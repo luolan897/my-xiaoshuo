@@ -230,10 +230,10 @@ async function run(): Promise<void> {
   assert.deepEqual(cliJson(["auth", "status"]), { authenticated: false, server: baseUrl, defaultServer: baseUrl, configPath });
   const schemaList = cliJson(["schema", "list"]) as { prohibited: string[]; resources: unknown[] };
   assert.ok(schemaList.prohibited.includes("用户管理"));
-  assert.equal(schemaList.resources.length, 11);
+  assert.equal(schemaList.resources.length, 12);
   assert.equal((cliJson(["schema", "show", "work"]) as { type: string }).type, "work");
   for (const type of [
-    "volume", "chapter", "setting", "character", "race", "organization",
+    "volume", "chapter", "draft", "setting", "character", "race", "organization",
     "timeline-track", "timeline-event", "relationship", "foreshadow", "chapter-outline"
   ] as CliResourceType[]) {
     assert.equal((cliJson(["schema", "show", type]) as { type: string }).type, type);
@@ -309,6 +309,17 @@ async function run(): Promise<void> {
   assert.equal(updatedChapter.versionNo, 2);
   assert.equal(updatedChapter.content, "林舟抵达北港。\n\n潮声盖过了远处的警报。");
   assert.equal(historyResource("chapter", chapterId)[0]?.changeNote, "重写开场并补充警报");
+
+  const draft = createResource("draft", workId, {
+    draftType: "prose",
+    title: "北港雨夜备选开场",
+    content: "雨水沿着舷窗向上流动。"
+  });
+  const draftId = String(draft.id);
+  assert.ok(listResource("draft", workId).some((item) => (item as Record<string, unknown>).id === draftId));
+  assert.equal(getResource("draft", draftId)?.draftType, "prose");
+  updateResource("draft", draftId, { content: "雨水沿着舷窗向上流动，港口警报却沉入海雾。" }, "强化开场悬念");
+  assert.equal(historyResource("draft", draftId)[0]?.changeNote, "强化开场悬念");
 
   const writingGoal = cliJson(["writing", "goal", workId, "--input", jsonFile("writing-goal", {
     dailyGoal: 2000,
@@ -471,7 +482,7 @@ async function run(): Promise<void> {
   assert.equal(getResource("chapter-outline", chapterId)?.goal, "进入北港议会");
   updateResource("chapter-outline", chapterId, { turningPoint: "议长私下放行并索要情报" }, "强化主动选择");
   assert.equal(historyResource("chapter-outline", chapterId)[0]?.changeNote, "强化主动选择");
-  checked("resource-editing", "all 11 resource types passed list/get/create/update and all versioned types recorded change notes");
+  checked("resource-editing", "all 12 resource types passed list/get/create/update and all versioned types recorded change notes");
 
   const manuscriptJson = cliJson(["manuscript", "get", workId, "--format", "json"]) as Record<string, unknown>;
   assert.equal(manuscriptJson.id, workId);
@@ -492,6 +503,7 @@ async function run(): Promise<void> {
 
   for (const [type, id] of [
     ["chapter", chapterId],
+    ["draft", draftId],
     ["setting", settingId],
     ["character", characterAId],
     ["race", raceId],
@@ -507,7 +519,7 @@ async function run(): Promise<void> {
     const history = historyResource(type, id);
     assert.equal(history[0]?.source, "restore");
   }
-  checked("history-restore", "chapter, character and eight generic versioned resources restored through CLI with actor attribution intact");
+  checked("history-restore", "chapter, character and nine generic versioned resources restored through CLI with actor attribution intact");
 
   const foreignWorkResponse = await e2eFetch(`${baseUrl}/api/works/${String(writerWork.id)}`, {
     headers: { Authorization: `Bearer ${adminKey}` }
@@ -555,7 +567,7 @@ async function run(): Promise<void> {
     entityVersions: Number((database.prepare("SELECT COUNT(*) AS count FROM entity_versions").get() as { count?: unknown } | undefined)?.count ?? 0)
   };
   database.close();
-  assert.deepEqual(finalCounts, { works: 2, chapters: 1, chapterVersions: 4, entityVersions: 31 });
+  assert.deepEqual(finalCounts, { works: 2, chapters: 1, chapterVersions: 4, entityVersions: 34 });
   checked("complete", `all CLI commands passed against isolated server; counts=${JSON.stringify(finalCounts)}`);
 }
 

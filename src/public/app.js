@@ -1,6 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
+import { renderMarkdown } from "/markdown.js?v=20260730-table-wrap-menu-v1";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
@@ -8,6 +8,7 @@ import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
+import { createStreamTypewriter } from "/stream-typewriter.js?v=20260729-ai-stream-typewriter-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
@@ -15,7 +16,7 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260725-unified-permissions";
-import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260725-enum-labels-zh";
+import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260729-drafts-v1";
 import {
   chapterVersionSourceLabel,
   foreshadowStatusLabel,
@@ -35,12 +36,12 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260728-hybrid-search-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260729-drafts-v1";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260729-drafts-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
@@ -59,6 +60,7 @@ import {
 } from "/avatar-crop.js?v=20260725-avatar-crop";
 
 const defaultPageSizes = Object.freeze({
+  drafts: 30,
   settings: 30,
   characters: 30,
   races: 30,
@@ -871,7 +873,9 @@ let entityEditorReadOnly = false;
 let chapterEditorReadOnly = true;
 let characterListPage = 1;
 let taskListPage = 1;
+let draftTypeFilter = "all";
 const moduleListPages = {
+  drafts: 1,
   settings: 1,
   organizations: 1,
   timeline: 1,
@@ -901,6 +905,7 @@ let characterSectionEditorDirty = false;
 let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
+let formDialogVditors = [];
 let entityHistoryContext = null;
 let moduleContentInteractionsBound = false;
 
@@ -1367,7 +1372,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   read_chapters: "读取章节",
   grep: "查询正文关键字",
   search_story_entities: "搜索作品实体",
-  read_character_sections: "读取人物 Markdown 章节"
+  read_character_sections: "读取人物 Markdown 章节",
+  search_drafts: "搜索草稿"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -1375,10 +1381,50 @@ const AI_TOOL_DESCRIPTIONS = {
   read_chapters: "读取指定章节的概要、正文或两者。",
   grep: "查询正文关键字所在的完整段落及章节信息。",
   search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
-  read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。"
+  read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。",
+  search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。"
 };
 
 let aiFeedScrollFrame = null;
+let markdownTableMenuTarget = null;
+let markdownTableMenuTrigger = null;
+
+function closeMarkdownTableMenu(restoreFocus = false) {
+  const trigger = markdownTableMenuTrigger;
+  $("#markdown-table-menu").classList.add("hidden");
+  markdownTableMenuTarget = null;
+  markdownTableMenuTrigger = null;
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
+}
+
+function setMarkdownTableWrapping(table, wrapping) {
+  table.classList.toggle("is-wrapping", wrapping);
+  table.setAttribute("aria-label", wrapping ? "Markdown 表格，内容自动换行" : "Markdown 表格，内容不换行");
+}
+
+function openMarkdownTableMenu(header, clientX, clientY) {
+  const table = header.closest(".markdown-table-scroll");
+  if (!table) return;
+  if (header.closest(".is-streaming")) {
+    toast("回复生成完成后可以设置表格换行");
+    return;
+  }
+  closeChapterTypeMenu();
+  closeLineCitationMenu();
+  markdownTableMenuTarget = table;
+  markdownTableMenuTrigger = header;
+  const menu = $("#markdown-table-menu");
+  const toggle = $("#markdown-table-wrap-toggle");
+  toggle.setAttribute("aria-checked", String(table.classList.contains("is-wrapping")));
+  menu.classList.remove("hidden");
+  const menuRect = menu.getBoundingClientRect();
+  const headerRect = header.getBoundingClientRect();
+  const anchorX = clientX > 0 ? clientX : headerRect.left;
+  const anchorY = clientY > 0 ? clientY : headerRect.bottom;
+  menu.style.left = `${Math.max(8, Math.min(anchorX, window.innerWidth - menuRect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(anchorY, window.innerHeight - menuRect.height - 8))}px`;
+  toggle.focus();
+}
 
 function scrollAiFeedToBottom() {
   const feed = $("#ai-feed");
@@ -2706,6 +2752,7 @@ function renderSettingsHub() {
   const hasWork = Boolean(state.work);
   const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
   const canReadAggregate = hasWork && canReadAggregateContent();
+  const canReadFullExport = canReadAggregate && canReadModule("drafts");
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
@@ -2715,7 +2762,7 @@ function renderSettingsHub() {
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !canReadAggregate;
-  $("#export-button").disabled = !canReadAggregate;
+  $("#export-button").disabled = !canReadFullExport;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出的 ZIP 内含 Markdown 正文，仅包含分卷、章节标题与正文。`
@@ -2796,11 +2843,15 @@ const workAuditActionLabels = {
   "chapter.deleted": "删除章节",
   "chapter.purged": "彻底删除章节",
   "chapter.restored": "恢复章节",
+  "draft.created": "创建草稿",
+  "draft.updated": "更新草稿",
+  "draft.deleted": "删除草稿",
+  "draft.restored": "恢复草稿",
   "work.imported": "导入正文"
 };
 
 function workAuditEntityLabel(type) {
-  return ({ work: "作品", volume: "分卷", chapter: "章节", user: "用户" })[type] ?? type;
+  return ({ work: "作品", volume: "分卷", chapter: "章节", draft: "草稿", user: "用户" })[type] ?? type;
 }
 
 function workAuditDetailText(detail) {
@@ -2911,6 +2962,7 @@ async function openPlatformUiSettingsDialog() {
     const settings = await api("/api/platform/ui-settings");
     $("#toast-position").value = settings.toastPosition === "top-right" ? "top-right" : "bottom-right";
     const pageSizes = normalizePageSizes(settings.pageSizes);
+    $("#page-size-drafts").value = String(pageSizes.drafts);
     $("#page-size-settings").value = String(pageSizes.settings);
     $("#page-size-characters").value = String(pageSizes.characters);
     $("#page-size-organizations").value = String(pageSizes.organizations);
@@ -3292,6 +3344,7 @@ function resetWorkScopedUiCaches() {
   state.settings = [];
   state.races = [];
   characterListPage = 1;
+  draftTypeFilter = "all";
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
@@ -3730,6 +3783,7 @@ function markActiveModule(module) {
 }
 
 const moduleMeta = {
+  drafts: ["临时想法", "创作草稿", "记录可能采用、也可能永远不会写入正文或正式设定的想法。", "新建草稿"],
   settings: ["世界事实", "世界观与设定库", "锁定的设定会成为 AI 续写与校对的硬约束。", "新建设定"],
   characters: ["人物档案", "角色与人物属性", "维护别名、属性、当前状态及不可被 AI 覆盖的字段。", "新建角色"],
   races: ["物种档案", "种族与共同设定", "先维护种族档案，再由角色选择引用；角色不能临时填写种族。", "新建种族"],
@@ -3785,6 +3839,7 @@ async function showModule(module) {
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   bindModuleContentInteractions();
   try {
+    if (module === "drafts") await renderDrafts();
     if (module === "settings") await renderSettings();
     if (module === "characters") await renderCharacters(characterListPage);
     if (module === "races") await renderRaces();
@@ -4183,6 +4238,135 @@ function settingRecordActions(item) {
   return canEditModule("settings")
     ? recordCardEditButton("edit-setting", item.id, `设定“${item.title}”`)
     : recordHistoryButton("setting", item.id, item.title);
+}
+
+function draftTypeLabel(draftType) {
+  return draftType === "setting" ? "设定草稿" : "正文草稿";
+}
+
+async function deleteDraft(item) {
+  if (!item || !canEditModule("drafts")) return;
+  if (!await confirmToast(`确认删除草稿“${item.title}”吗？草稿将从当前列表移除。`, {
+    title: "删除草稿",
+    confirmLabel: "确认删除"
+  })) return;
+  try {
+    await api(`/api/drafts/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    await renderDrafts(moduleListPages.drafts);
+    toast("草稿已删除");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function openDraftDialog(item = null, { readOnly = false } = {}) {
+  const viewOnly = readOnly || !canEditModule("drafts");
+  const fields = `<p class="form-field-note">草稿只记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
+    + field("draftType", "草稿类型", "select", item?.draftType ?? "prose", [["prose", "正文草稿"], ["setting", "设定草稿"]])
+    + field("title", "标题", "text", item?.title ?? "")
+    + field("content", "内容", "markdown", item?.content ?? "", {
+      placeholder: "记录尚未定稿的片段、方向或设定想法……",
+      readOnly: viewOnly
+    });
+  openDialog(item ? viewOnly ? "查看草稿" : "编辑草稿" : "新建草稿", fields, async (form) => {
+    if (viewOnly) return;
+    const title = String(form.get("title") ?? "").trim();
+    if (!title) throw new Error("请填写草稿标题");
+    const body = {
+      draftType: form.get("draftType"),
+      title,
+      content: String(form.get("content") ?? ""),
+      ...(item ? { expectedVersionNo: item.versionNo } : {})
+    };
+    await api(item ? `/api/drafts/${encodeURIComponent(item.id)}` : `/api/works/${encodeURIComponent(state.work.id)}/drafts`, {
+      method: item ? "PATCH" : "POST",
+      body
+    });
+    await renderDrafts(moduleListPages.drafts);
+    toast(item ? "草稿已保存" : "草稿已创建");
+  }, item ? draftTypeLabel(item.draftType) : "未确认想法", {
+    submitLabel: viewOnly ? "关闭" : "保存草稿",
+    hideCancel: viewOnly,
+    wide: true,
+    errorPrefix: "草稿保存失败："
+  });
+  if (viewOnly) {
+    $("#dialog-fields").querySelectorAll("input, select, textarea").forEach((control) => {
+      if (control instanceof HTMLSelectElement) control.disabled = true;
+      else control.readOnly = true;
+    });
+  }
+}
+
+async function renderDrafts(page = moduleListPages.drafts) {
+  const allDrafts = await apiAllPages(`/api/works/${state.work.id}/drafts`);
+  const drafts = draftTypeFilter === "all"
+    ? allDrafts
+    : allDrafts.filter((draft) => draft.draftType === draftTypeFilter);
+  mountModuleCount(drafts.length);
+  const pageResult = paginateModuleItems(drafts, page, "drafts");
+  moduleListPages.drafts = pageResult.page;
+  const layout = readModuleLayout();
+  if (drafts.length) mountModuleLayoutToggle(layout, "草稿列表样式");
+  else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+  const filterToolbar = `<section class="draft-filter-toolbar" aria-label="草稿筛选">
+    <label for="draft-type-filter">草稿类型</label>
+    <select id="draft-type-filter" aria-label="按草稿类型筛选">
+      <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部草稿</option>
+      <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文草稿</option>
+      <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定草稿</option>
+    </select>
+    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 篇草稿</span>`}
+  </section>`;
+  const actions = (item) => canEditModule("drafts")
+    ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}<button type="button" data-delete-draft="${esc(item.id)}">删除</button>${recordHistoryButton("draft", item.id, item.title)}`
+    : recordHistoryButton("draft", item.id, item.title);
+  const cards = `<div class="card-grid">${pageResult.items.map((item) => `
+    <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
+      <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
+      <h3>${esc(item.title)}</h3>
+      <div class="record-markdown-preview">${esc(item.contentPreview || "暂无内容")}</div>
+      <div class="card-actions">${actions(item)}</div>
+    </article>`).join("")}</div>`;
+  const rows = `<div class="module-row-list">${pageResult.items.map((item) => {
+    const preview = moduleRowPreview(item.contentPreview || "暂无内容");
+    return `<article class="record-card module-row preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
+      <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
+      <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
+      <div class="card-actions">${actions(item)}</div>
+    </article>`;
+  }).join("")}</div>`;
+  const emptyDrafts = allDrafts.length
+    ? emptyModule("没有符合筛选条件的草稿", "可以切换草稿类型查看其他想法。")
+    : emptyModule("还没有草稿", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
+  $("#module-content").innerHTML = filterToolbar + (drafts.length
+    ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "草稿列表")}`
+    : emptyDrafts);
+  $("#draft-type-filter").addEventListener("change", async (event) => {
+    draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
+  bindModuleLayoutToggle(() => renderDrafts(pageResult.page));
+  bindModulePagination("drafts", renderDrafts);
+  const draftById = (draftId) => drafts.find((draft) => draft.id === draftId);
+  $("#module-content").querySelectorAll("[data-open-draft]").forEach((card) => {
+    const open = async () => openDraftDialog(await api(`/api/drafts/${encodeURIComponent(card.dataset.openDraft)}`), { readOnly: true });
+    card.addEventListener("click", (event) => { if (!event.target.closest("button, a")) void open(); });
+    card.addEventListener("keydown", (event) => {
+      if ((event.key === "Enter" || event.key === " ") && !event.target.closest("button, a")) {
+        event.preventDefault();
+        void open();
+      }
+    });
+  });
+  $("#module-content").querySelectorAll("[data-edit-draft]").forEach((button) => button.addEventListener("click", async () => {
+    openDraftDialog(await api(`/api/drafts/${encodeURIComponent(button.dataset.editDraft)}`));
+  }));
+  $("#module-content").querySelectorAll("[data-delete-draft]").forEach((button) => button.addEventListener("click", () => {
+    void deleteDraft(draftById(button.dataset.deleteDraft));
+  }));
+  bindEntityHistoryButtons(() => renderDrafts(pageResult.page));
 }
 
 function renderSettingCards(records) {
@@ -4803,13 +4987,15 @@ async function renderTasks(page = taskListPage) {
     : "";
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel ${canConfigureAutoRun ? "" : "hidden"}" aria-labelledby="task-auto-run-title">
-      <div class="task-auto-run-copy">
-        <strong id="task-auto-run-title">自动执行待分析任务</strong>
-        <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
-        <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
-      </div>
-      <div class="task-auto-run-actions">
-        ${autoRunEditing ? "" : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
+      <div class="task-auto-run-header">
+        <div class="task-auto-run-copy">
+          <strong id="task-auto-run-title">自动执行待分析任务</strong>
+          <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
+          <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
+        </div>
+        <div class="task-auto-run-actions">
+          ${autoRunEditing ? "" : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
+        </div>
       </div>
       <div class="task-auto-run-controls">
         <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""} ${autoRunEditing ? "" : "disabled"}><span>持续自动执行</span></label>
@@ -5929,7 +6115,7 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
@@ -5942,6 +6128,10 @@ async function renderBookAiSettings() {
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "afterend",
     `<label><input name="agent-tool" type="checkbox" value="read_character_sections" ${agentTools.has("read_character_sections") ? "checked" : ""}><span><strong>读取人物 Markdown 章节</strong><small>根据知识查询返回的章节 ID 精读人物背景、能力与经历原文。</small></span></label>`
+  );
+  host.querySelector(".ai-agent-tools").insertAdjacentHTML(
+    "beforeend",
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索草稿</strong><small>查询正文草稿和设定草稿。草稿只是可能采用、也可能永远不会进入正文或正式设定的临时想法，Agent 不会把它当作已确认事实。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -6256,7 +6446,7 @@ async function ensureAiReferencesLoaded() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
-  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><div class="vditor-editor-host" data-vditor-editor data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="Markdown 原文">${esc(value)}</textarea></div>`;
+  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
@@ -6426,6 +6616,8 @@ function commitRelationshipKeywordInputs(container) {
 }
 
 function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
+  formDialogVditors.forEach(destroyVditorEditor);
+  formDialogVditors = [];
   void discardPendingMarkdownAttachments();
   const dialog = $("#form-dialog");
   const form = $("#dynamic-form");
@@ -6448,9 +6640,10 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dynamic-form .dialog-actions [value='cancel']").classList.toggle("hidden", Boolean(options.hideCancel));
   dialog.classList.toggle("wide-dialog", Boolean(options.wide));
   dialog.classList.toggle("trace-dialog", Boolean(options.trace));
+  dialog.classList.toggle("large-dialog", Boolean(options.large));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
-  bindVditorEditors($("#dialog-fields"));
+  formDialogVditors = bindVditorEditors($("#dialog-fields"));
   form.onclick = null;
   form.onkeydown = null;
   dialog.oncancel = (event) => {
@@ -7224,6 +7417,7 @@ function destroyVditorEditor(editor) {
 }
 
 function bindVditorEditors(container) {
+  const editors = [];
   container.querySelectorAll("[data-vditor-editor]").forEach((host) => {
     const valueField = host.parentElement?.querySelector("[data-vditor-value]");
     const editor = createVditorEditor(host, valueField?.value ?? "", {
@@ -7231,10 +7425,12 @@ function bindVditorEditors(container) {
         if (valueField) valueField.value = markdown;
         markEntityEditorDirty();
       },
-      placeholder: "",
+      placeholder: host.dataset.placeholder ?? "",
       readOnly: Boolean(valueField?.readOnly)
     });
+    if (editor) editors.push(editor);
   });
+  return editors;
 }
 
 function characterSectionImageLabel(file, fallback = "图片附件") {
@@ -7945,49 +8141,151 @@ function openOutlineDialog(item) {
     }, "章节大纲");
 }
 
+const foreshadowOccurrenceRoleOptions = [["setup", "埋设"], ["reminder", "提醒"], ["payoff", "回收"]];
+
+function foreshadowOccurrenceRow(record, chapters, index) {
+  const chapterOptions = [["", "暂不关联"], ...chapters];
+  const occurrenceId = record?.id ?? "";
+  const role = record?.role ?? "setup";
+  const chapterId = record?.chapterId ?? "";
+  const chapterLabel = chapters.find(([value]) => value === chapterId)?.[1] ?? "未关联章节";
+  return `<fieldset class="foreshadow-occurrence-row" data-foreshadow-occurrence data-occurrence-id="${esc(occurrenceId)}" data-occurrence-role="${esc(role)}">
+    <legend><span class="foreshadow-occurrence-role-badge" data-foreshadow-occurrence-role-label>${esc(occurrenceRoleLabel(role))}</span><strong data-foreshadow-occurrence-index>节点 ${index + 1}</strong><small data-foreshadow-occurrence-summary>${esc(chapterLabel)}</small></legend>
+    <button class="foreshadow-occurrence-remove" type="button" data-foreshadow-occurrence-remove aria-label="删除第 ${index + 1} 个章节节点">删除节点</button>
+    <div class="foreshadow-occurrence-grid">
+      <label>节点类型<select name="occurrenceRole" data-foreshadow-occurrence-role aria-label="第 ${index + 1} 个节点类型">${foreshadowOccurrenceRoleOptions.map(([value, label]) => `<option value="${value}" ${value === role ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      <label>关联章节<select name="occurrenceChapterId" data-foreshadow-occurrence-chapter aria-label="第 ${index + 1} 个关联章节">${chapterOptions.map(([value, label]) => `<option value="${esc(value)}" ${value === chapterId ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
+    </div>
+    <label>节点说明<textarea name="occurrenceNote" data-foreshadow-occurrence-note aria-label="第 ${index + 1} 个节点说明">${esc(record?.note ?? "")}</textarea></label>
+  </fieldset>`;
+}
+
+function foreshadowOccurrencesField(item, chapters) {
+  const occurrences = item?.occurrences?.length ? item.occurrences : [null];
+  return `<section class="form-field foreshadow-editor-section foreshadow-occurrence-field" data-foreshadow-occurrences aria-labelledby="foreshadow-occurrence-title">
+    <div class="foreshadow-occurrence-toolbar"><div><h3 id="foreshadow-occurrence-title">章节节点</h3><p>每张卡片代表一次独立的埋设、提醒或回收，类型、章节和说明始终绑定在同一组内。</p></div><button type="button" data-foreshadow-occurrence-add>添加节点</button></div>
+    <div class="foreshadow-occurrence-rows" data-foreshadow-occurrence-rows>${occurrences.map((record, index) => foreshadowOccurrenceRow(record, chapters, index)).join("")}</div>
+    <p class="foreshadow-occurrence-empty hidden" data-foreshadow-occurrence-empty>尚未添加章节节点。</p>
+  </section>`;
+}
+
+function foreshadowOverviewField(item, options, firstPayoff) {
+  return `<section class="foreshadow-editor-section foreshadow-overview-field" aria-labelledby="foreshadow-overview-title">
+    <header><h3 id="foreshadow-overview-title">伏笔信息</h3><p>维护伏笔本身的内容、状态与计划回收位置。</p></header>
+    <div class="foreshadow-overview-grid">
+      ${field("title", "伏笔名称", "text", item?.title)}
+      ${field("importance", "重要程度", "select", item?.importance ?? "medium", [["low", "低"], ["medium", "中"], ["high", "高"]])}
+      ${field("status", "状态", "select", item?.status ?? "planned", [["planned", "计划中"], ["planted", "已埋设"], ["resolved", "已回收"], ["abandoned", "已放弃"]])}
+      ${field("plannedPayoffChapterId", "计划回收章节", "select", item?.plannedPayoffChapterId ?? firstPayoff?.chapterId ?? "", options)}
+    </div>
+    <div class="foreshadow-overview-description">${field("description", "内容与预期作用", "textarea", item?.description)}</div>
+  </section>`;
+}
+
+function foreshadowResolutionField(item) {
+  return `<section class="foreshadow-editor-section foreshadow-resolution-field" aria-labelledby="foreshadow-resolution-title">
+    <header><h3 id="foreshadow-resolution-title">回收结果</h3><p>记录伏笔最终如何揭示或完成；它不属于上方任意单个章节节点。</p></header>
+    ${field("resolutionNote", "回收结论", "textarea", item?.resolutionNote)}
+  </section>`;
+}
+
+function updateForeshadowOccurrenceRowSummary(row) {
+  const role = row.querySelector("[data-foreshadow-occurrence-role]").value;
+  const chapter = row.querySelector("[data-foreshadow-occurrence-chapter]");
+  row.dataset.occurrenceRole = role;
+  row.querySelector("[data-foreshadow-occurrence-role-label]").textContent = occurrenceRoleLabel(role);
+  row.querySelector("[data-foreshadow-occurrence-summary]").textContent = chapter.value ? chapter.selectedOptions[0]?.textContent ?? "已关联章节" : "未关联章节";
+}
+
+function renumberForeshadowOccurrenceRows(section) {
+  const rows = [...section.querySelectorAll("[data-foreshadow-occurrence]")];
+  rows.forEach((row, index) => {
+    const sequence = index + 1;
+    row.querySelector("[data-foreshadow-occurrence-index]").textContent = `节点 ${sequence}`;
+    row.querySelector("[data-foreshadow-occurrence-remove]").setAttribute("aria-label", `删除第 ${sequence} 个章节节点`);
+    row.querySelector("[data-foreshadow-occurrence-role]").setAttribute("aria-label", `第 ${sequence} 个节点类型`);
+    row.querySelector("[data-foreshadow-occurrence-chapter]").setAttribute("aria-label", `第 ${sequence} 个关联章节`);
+    row.querySelector("[data-foreshadow-occurrence-note]").setAttribute("aria-label", `第 ${sequence} 个节点说明`);
+    updateForeshadowOccurrenceRowSummary(row);
+  });
+  section.querySelector("[data-foreshadow-occurrence-empty]").classList.toggle("hidden", rows.length > 0);
+}
+
+function bindForeshadowOccurrenceControls(container, chapters) {
+  const section = container.querySelector("[data-foreshadow-occurrences]");
+  if (!section) return;
+  const rows = section.querySelector("[data-foreshadow-occurrence-rows]");
+  section.addEventListener("change", (event) => {
+    const row = event.target.closest("[data-foreshadow-occurrence]");
+    if (row && event.target.matches("[data-foreshadow-occurrence-role], [data-foreshadow-occurrence-chapter]")) updateForeshadowOccurrenceRowSummary(row);
+  });
+  section.addEventListener("click", (event) => {
+    if (event.target.closest("[data-foreshadow-occurrence-add]")) {
+      const index = rows.querySelectorAll("[data-foreshadow-occurrence]").length;
+      rows.insertAdjacentHTML("beforeend", foreshadowOccurrenceRow(null, chapters, index));
+      renumberForeshadowOccurrenceRows(section);
+      rows.lastElementChild?.querySelector("[data-foreshadow-occurrence-role]")?.focus();
+      return;
+    }
+    const remove = event.target.closest("[data-foreshadow-occurrence-remove]");
+    if (!remove) return;
+    const row = remove.closest("[data-foreshadow-occurrence]");
+    const nextFocus = row.nextElementSibling?.querySelector("[data-foreshadow-occurrence-role]")
+      ?? row.previousElementSibling?.querySelector("[data-foreshadow-occurrence-role]")
+      ?? section.querySelector("[data-foreshadow-occurrence-add]");
+    row.remove();
+    renumberForeshadowOccurrenceRows(section);
+    nextFocus?.focus();
+  });
+  renumberForeshadowOccurrenceRows(section);
+}
+
+function readForeshadowOccurrences(item) {
+  const previousById = new Map((item?.occurrences ?? []).map((record) => [record.id, record]));
+  const seen = new Map();
+  return [...$("#dialog-fields").querySelectorAll("[data-foreshadow-occurrence]")].flatMap((row, index) => {
+    const role = row.querySelector("[data-foreshadow-occurrence-role]").value;
+    const chapterId = row.querySelector("[data-foreshadow-occurrence-chapter]").value;
+    const note = row.querySelector("[data-foreshadow-occurrence-note]").value;
+    if (!chapterId) {
+      if (note.trim()) throw new Error(`第 ${index + 1} 个章节节点填写了说明，请选择关联章节`);
+      return [];
+    }
+    const key = `${role}:${chapterId}`;
+    const duplicateIndex = seen.get(key);
+    if (duplicateIndex) throw new Error(`第 ${index + 1} 个章节节点与第 ${duplicateIndex} 个重复`);
+    seen.set(key, index + 1);
+    const previous = previousById.get(row.dataset.occurrenceId);
+    return [{
+      chapterId,
+      role,
+      note,
+      evidence: previous?.chapterId === chapterId && previous?.role === role ? previous.evidence : []
+    }];
+  });
+}
+
 function openForeshadowDialog(item) {
   const chapters = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
   if (!chapters.length) return toast("请先创建章节", "error");
   const options = [["", "暂不关联"], ...chapters];
-  const occurrence = (role) => item?.occurrences?.find((record) => record.role === role);
-  const editableOccurrenceIds = new Set(["setup", "reminder", "payoff"].map((role) => occurrence(role)?.id).filter(Boolean));
-  const preservedOccurrences = (item?.occurrences ?? [])
-    .filter((record) => !editableOccurrenceIds.has(record.id))
-    .map((record) => ({ chapterId: record.chapterId, role: record.role, note: record.note, evidence: record.evidence }));
+  const firstPayoff = item?.occurrences?.find((record) => record.role === "payoff");
   openDialog(item ? "编辑伏笔" : "新建伏笔",
-    field("title", "伏笔名称", "text", item?.title) +
-    field("description", "内容与预期作用", "textarea", item?.description) +
-    field("importance", "重要程度", "select", item?.importance ?? "medium", [["low", "低"], ["medium", "中"], ["high", "高"]]) +
-    field("status", "状态", "select", item?.status ?? "planned", [["planned", "计划中"], ["planted", "已埋设"], ["resolved", "已回收"], ["abandoned", "已放弃"]]) +
-    field("setupChapterId", "埋设章节", "select", occurrence("setup")?.chapterId ?? "", options) +
-    field("setupNote", "埋设说明", "textarea", occurrence("setup")?.note ?? "") +
-    field("reminderChapterId", "提醒章节", "select", occurrence("reminder")?.chapterId ?? "", options) +
-    field("reminderNote", "提醒说明", "textarea", occurrence("reminder")?.note ?? "") +
-    field("payoffChapterId", "回收章节", "select", occurrence("payoff")?.chapterId ?? item?.plannedPayoffChapterId ?? "", options) +
-    field("payoffNote", "回收说明", "textarea", occurrence("payoff")?.note ?? "") +
-    field("resolutionNote", "回收结论", "textarea", item?.resolutionNote),
+    foreshadowOverviewField(item, options, firstPayoff) +
+    foreshadowOccurrencesField(item, chapters) +
+    foreshadowResolutionField(item),
     async (form) => {
-      const editedOccurrences = ["setup", "reminder", "payoff"].flatMap((role) => {
-        const chapterId = form.get(`${role}ChapterId`);
-        if (!chapterId) return [];
-        const previous = occurrence(role);
-        return [{
-          chapterId,
-          role,
-          note: form.get(`${role}Note`),
-          evidence: previous?.chapterId === chapterId ? previous.evidence : []
-        }];
-      });
-      const occurrences = [...preservedOccurrences, ...editedOccurrences];
+      const occurrences = readForeshadowOccurrences(item);
       const body = {
         title: form.get("title"), description: form.get("description"), importance: form.get("importance"), status: form.get("status"),
-        plannedPayoffChapterId: form.get("payoffChapterId") || null, resolutionNote: form.get("resolutionNote"), occurrences,
+        plannedPayoffChapterId: form.get("plannedPayoffChapterId") || null, resolutionNote: form.get("resolutionNote"), occurrences,
         ...(item ? { expectedVersionNo: item.versionNo } : {})
       };
       await api(item ? `/api/foreshadows/${item.id}` : `/api/works/${state.work.id}/foreshadows`, { method: item ? "PATCH" : "POST", body });
       await renderOutlines();
       toast(item ? "伏笔已更新" : "伏笔已创建");
-    }, item ? "伏笔管理" : "创作线索");
+    }, item ? "伏笔管理" : "创作线索", { large: true, meta: "完整编辑伏笔信息、章节节点与回收结果" });
+  bindForeshadowOccurrenceControls($("#dialog-fields"), chapters);
 }
 
 function openTimelineSplitDialog(item) {
@@ -8496,12 +8794,22 @@ async function streamChat(body) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
-  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite"></div><div class="message-meta">正在连接模型流……</div>';
+  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
   attachMessageHeading(message, "助手 · 正在生成");
   $("#ai-feed").append(message);
   scrollAiFeedToBottom();
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  const typewriter = createStreamTypewriter({
+    onRender: (text, progress) => {
+      content.innerHTML = renderMarkdown(text);
+      const receivedCharacters = progress.visibleCharacters + progress.pendingCharacters;
+      meta.textContent = progress.pendingCharacters > 0
+        ? `正在生成 · ${progress.visibleCharacters} / ${receivedCharacters} 字`
+        : `正在生成 · ${progress.visibleCharacters} 字`;
+      scrollAiFeedToBottom();
+    }
+  });
   let streamedText = "";
   let generatedMetadata = {};
   let toolCalls = [];
@@ -8523,7 +8831,7 @@ async function streamChat(body) {
     const decoder = new TextDecoder();
     let buffer = "";
     let streamError = null;
-    const consume = (eventText) => {
+    const consume = async (eventText) => {
       let eventName = "message";
       const dataLines = [];
       for (const line of eventText.split(/\r?\n/)) {
@@ -8534,12 +8842,12 @@ async function streamChat(body) {
       const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "delta") {
         const firstFinalDelta = streamedText.length === 0;
-        streamedText += payload.delta ?? "";
+        const delta = typeof payload.delta === "string" ? payload.delta : "";
+        streamedText += delta;
         if (streamedText.length > 0) finalAnswerStarted = true;
-        content.innerHTML = renderMarkdown(streamedText);
+        typewriter.append(delta);
         if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
-        meta.textContent = `已接收 ${Array.from(streamedText).length} 字`;
-        scrollAiFeedToBottom();
+        meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
         const step = { ...payload };
         const append = step.append === true;
@@ -8560,7 +8868,9 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "complete") {
+        await typewriter.finish();
         message.classList.remove("is-streaming");
+        content.setAttribute("aria-busy", "false");
         message.querySelector(".message-heading > span").textContent = "助手";
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
@@ -8579,14 +8889,17 @@ async function streamChat(body) {
       buffer += decoder.decode(chunk.value, { stream: !chunk.done });
       const events = buffer.split(/\r?\n\r?\n/);
       buffer = events.pop() ?? "";
-      events.forEach(consume);
+      for (const eventText of events) await consume(eventText);
       if (chunk.done) break;
     }
-    if (buffer.trim()) consume(buffer);
+    if (buffer.trim()) await consume(buffer);
+    await typewriter.finish();
     if (streamError) throw streamError;
     return { content: streamedText, message, metadata: generatedMetadata };
   } catch (error) {
+    typewriter.reveal();
     message.classList.remove("is-streaming");
+    content.setAttribute("aria-busy", "false");
     message.querySelector(".message-heading > span").textContent = "助手 · 生成中断";
     renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
     meta.textContent = "生成中断";
@@ -9565,6 +9878,7 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
       body: {
         toastPosition: $("#toast-position").value,
         pageSizes: {
+          drafts: Number($("#page-size-drafts").value),
           settings: Number($("#page-size-settings").value),
           characters: Number($("#page-size-characters").value),
           organizations: Number($("#page-size-organizations").value),
@@ -9597,6 +9911,9 @@ $("#members-dialog").addEventListener("close", () => {
   memberDialogDirectory = [];
 });
 $("#form-dialog").addEventListener("close", () => {
+  formDialogVditors.forEach(destroyVditorEditor);
+  formDialogVditors = [];
+  void discardPendingMarkdownAttachments();
   if (relationshipPresenceId && !$("#form-dialog").open) setRelationshipPresence(null);
 });
 $("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));
@@ -9793,7 +10110,7 @@ $("#module-nav").addEventListener("click", (event) => {
   }
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
-$("#module-create-button").addEventListener("click", () => ({ settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
+$("#module-create-button").addEventListener("click", () => ({ drafts: openDraftDialog, settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   scheduleAiContextUsage();
@@ -9934,9 +10251,24 @@ $("#chapter-type-menu").addEventListener("click", async (event) => {
     toast(error.message, "error");
   }
 });
+$("#markdown-table-wrap-toggle").addEventListener("click", () => {
+  const table = markdownTableMenuTarget;
+  if (!table?.isConnected) return closeMarkdownTableMenu();
+  const wrapping = !table.classList.contains("is-wrapping");
+  setMarkdownTableWrapping(table, wrapping);
+  closeMarkdownTableMenu(true);
+  toast(wrapping ? "表格已启用自动换行" : "表格已恢复横向滚动");
+});
+document.addEventListener("contextmenu", (event) => {
+  const header = event.target.closest?.("[data-markdown-table-header]");
+  if (!header) return;
+  event.preventDefault();
+  openMarkdownTableMenu(header, event.clientX, event.clientY);
+});
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#chapter-type-menu")) closeChapterTypeMenu();
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
+  if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
     $("#account-menu").classList.add("hidden");
@@ -9948,9 +10280,16 @@ document.addEventListener("pointerdown", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
+  const header = event.target.closest?.("[data-markdown-table-header]");
+  if (header && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+    event.preventDefault();
+    openMarkdownTableMenu(header, 0, 0);
+    return;
+  }
   if (event.key === "Escape") {
     closeChapterTypeMenu();
     closeLineCitationMenu();
+    closeMarkdownTableMenu(true);
     hideAiMentionMenu();
   }
 });

@@ -320,12 +320,12 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-analysis-rerun-vditor-ui-v1');
-    expect(page.text).toContain('/styles.css?v=20260729-analysis-rerun-vditor-ui-v1');
+    expect(page.text).toContain('/app.js?v=20260730-table-wrap-menu-v1');
+    expect(page.text).toContain('/styles.css?v=20260730-table-wrap-menu-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
-    expect(application.text).toContain('/page-route.js?v=20260727-ai-usage');
+    expect(application.text).toContain('/page-route.js?v=20260729-drafts-v1');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
@@ -510,7 +510,7 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("renderMarkdownTable");
     expect(vditorCss.text).toContain("Vditor v3.11.2");
     expect(vditorScript.text).toContain("Vditor");
-    expect(application.text).toContain('/markdown.js?v=20260725-ordered-list');
+    expect(application.text).toContain('/markdown.js?v=20260730-table-wrap-menu-v1');
     expect(application.text).toContain('new window.Vditor');
     expect(application.text).toContain('createVditorUploadHandler');
     expect(page.text).toContain('id="character-section-editor-view"');
@@ -526,6 +526,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("请先保存当前角色");
     expect(application.text).toContain("保存成功后即可新建 Markdown 档案章节");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
+    expect(page.text).toContain('id="markdown-table-menu"');
+    expect(application.text).toContain('openMarkdownTableMenu(header, event.clientX, event.clientY)');
+    expect(styles.text).toContain(".message-body .markdown-table-scroll.is-wrapping table");
     expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table { background: var(--surface); color: var(--ink); }');
     expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }');
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
@@ -546,7 +549,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-permission-preset="read"');
     expect(application.text).toContain('data-member-permission=');
     expect(application.text).toContain('body: existing ? { permissions } : { userId, permissions }');
-    expect(application.text).toContain('/work-permissions.js?v=20260724-outline-title');
+    expect(application.text).toContain('/work-permissions.js?v=20260729-drafts-v1');
     expect(workPermissions.text).toContain('label: "AI 对话"');
     expect(workPermissions.text).toContain('label: "AI 分析"');
     expect(workPermissions.text).toContain('id: "ai-chat"');
@@ -584,6 +587,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('let taskAutoRunEditing = false;');
     expect(application.text).toContain('const autoRunEditing = canConfigureAutoRun && taskAutoRunEditing');
     expect(application.text).toContain('id="task-auto-run-edit"');
+    expect(application.text).toContain('class="task-auto-run-header"');
     expect(application.text).toContain('class="task-auto-run-actions"');
     expect(application.text).toContain('id="task-auto-run-pause"');
     expect(application.text).toContain('body: { autoRunEnabled: false }');
@@ -608,6 +612,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain("消化 pending 任务");
     expect(application.text).toContain("/tasks/auto-run");
     expect(styles.text).toContain(".task-auto-run-panel");
+    expect(styles.text).toContain(".task-auto-run-header { display: grid; grid-column: 1;");
+    expect(styles.text).toContain(".task-auto-run-actions { display: flex; align-items: start;");
+    expect(styles.text).not.toContain(".task-auto-run-actions { display: flex; grid-column: 2;");
     expect(styles.text).toContain(".task-auto-run-progress-ring-value { stroke: var(--accent);");
     expect(styles.text).toContain(".task-auto-run-progress-ring { display: none; }");
     expect(styles.text).toContain(".task-auto-run-progress-bar-layout { display: grid;");
@@ -639,7 +646,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text).toContain('<span class="nav-label">更多</span>');
     expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(4);
-    expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(13);
+    expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(14);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');
     expect(page.text).toContain(">作品设置</button>");
@@ -668,7 +675,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openTimelineTrackDialog(item)");
     expect(styles.text).toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(body)");
-    expect(application.text).toContain("content.innerHTML = renderMarkdown(streamedText)");
+    expect(application.text).toContain("createStreamTypewriter");
+    expect(application.text).toContain("content.innerHTML = renderMarkdown(text)");
     expect(application.text).toContain('class="message-body"');
     expect(styles.text).toContain(".message-body h1, .message-body h2");
     expect(styles.text).toContain(".prompt-composer-actions { position: absolute; right: 8px; bottom: 8px;");

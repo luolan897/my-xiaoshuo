@@ -62,8 +62,8 @@ describe("侧边栏 Markdown 渲染", () => {
     const html = renderMarkdown("| 章节 | 标题 | 内容摘要 |\n| :--- | :---: | ---: |\n| 第一百六十三章 | **护盾实验** | `能量 | 护盾` |\n| 第一百六十四章 | 海洋星舰 | 哥斯拉\\|机械哥斯拉 | ");
 
     expect(html).toContain('<div class="markdown-table-scroll" role="region" aria-label="Markdown 表格" tabindex="0">');
-    expect(html).toContain('<th class="markdown-align-left">章节</th>');
-    expect(html).toContain('<th class="markdown-align-center">标题</th>');
+    expect(html).toContain('<th class="markdown-align-left" data-markdown-table-header tabindex="0" aria-haspopup="menu" title="右键或按 Shift+F10 设置表格换行">章节</th>');
+    expect(html).toContain('<th class="markdown-align-center" data-markdown-table-header tabindex="0" aria-haspopup="menu" title="右键或按 Shift+F10 设置表格换行">标题</th>');
     expect(html).toContain('<td class="markdown-align-center"><strong>护盾实验</strong></td>');
     expect(html).toContain('<td class="markdown-align-right"><code>能量 | 护盾</code></td>');
     expect(html).toContain('<td class="markdown-align-right">哥斯拉|机械哥斯拉</td>');

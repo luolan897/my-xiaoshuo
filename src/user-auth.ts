@@ -176,6 +176,7 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     volumes: "volumes",
     chapters: "chapters",
     "chapter-annotations": "chapter_annotations",
+    drafts: "drafts",
     settings: "settings",
     characters: "characters",
     "character-sections": "character_profile_sections",
@@ -869,10 +870,10 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/cli\/session$/u },
   { methods: ["GET", "POST"], path: /^\/api\/works$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/works\/[^/]+$/u },
-  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|settings|characters|races|organizations|timeline-tracks|timeline|relationships|search|export|audit-logs)$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|search|export|audit-logs)$/u },
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/writing-progress$/u },
   { methods: ["PUT"], path: /^\/api\/works\/[^/]+\/writing-goal$/u },
-  { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
+  { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/chapters\/batch$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/volumes\/[^/]+$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/chapters\/[^/]+$/u },
@@ -881,7 +882,7 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["PATCH", "DELETE"], path: /^\/api\/chapter-annotations\/[^/]+$/u },
   { methods: ["POST"], path: /^\/api\/chapters\/[^/]+\/(?:restore|move)$/u },
   { methods: ["PUT"], path: /^\/api\/chapters\/[^/]+\/outline$/u },
-  { methods: ["GET", "PATCH"], path: /^\/api\/(?:settings|characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows)\/[^/]+$/u },
+  { methods: ["GET", "PATCH"], path: /^\/api\/(?:drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows)\/[^/]+$/u },
   { methods: ["GET"], path: /^\/api\/characters\/[^/]+\/versions$/u },
   { methods: ["POST"], path: /^\/api\/characters\/[^/]+\/restore$/u },
   { methods: ["GET"], path: /^\/api\/entity-versions\/[^/]+\/[^/]+$/u },
@@ -897,7 +898,7 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
   };
 }
 
-const contentPermissionModules = workPermissionModules.filter((module) => !["reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
+const contentPermissionModules = workPermissionModules.filter((module) => !["drafts", "reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
 const aiInteractionModules = ["ai-chat", "ai-analysis"] as const satisfies readonly WorkPermissionModule[];
 
 const analysisTaskDirectReadModules: Record<string, readonly WorkPermissionModule[]> = {
@@ -974,6 +975,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     const entityType = pathname.split("/")[3] ?? "";
     const moduleByEntityType: Record<string, WorkPermissionModule> = {
       volume: "prose",
+      draft: "drafts",
       setting: "settings",
       race: "races",
       organization: "organizations",
@@ -1019,6 +1021,8 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   const rules: Array<[RegExp, WorkPermissionModule]> = [
     [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters|deleted-chapters)(?:\/|$)/u, "prose"],
     [/^\/api\/(?:volumes|chapters)\/[^/]+(?:\/|$)/u, "prose"],
+    [/^\/api\/works\/[^/]+\/drafts(?:\/|$)/u, "drafts"],
+    [/^\/api\/drafts\/[^/]+(?:\/|$)/u, "drafts"],
     [/^\/api\/works\/[^/]+\/(?:settings|attachments)(?:\/|$)/u, "settings"],
     [/^\/api\/(?:settings|attachments)\/[^/]+(?:\/|$)/u, "settings"],
     [/^\/api\/character-sections\/[^/]+(?:\/|$)/u, "characters"],
@@ -1076,7 +1080,10 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
       ? { read: contextRead, anyWrite: [...aiInteractionModules] }
       : { anyRead: [...aiInteractionModules] };
   }
-  if (/^\/api\/works\/[^/]+\/(?:search|export)$/u.test(pathname)) return { read: [...contentPermissionModules] };
+  if (/^\/api\/works\/[^/]+\/search$/u.test(pathname)) return { read: [...contentPermissionModules] };
+  if (/^\/api\/works\/[^/]+\/export$/u.test(pathname)) {
+    return { read: request.query.format === "json" || request.query.format === undefined ? ["drafts", ...contentPermissionModules] : ["prose"] };
+  }
   return { ownerOnly: true };
 }
 

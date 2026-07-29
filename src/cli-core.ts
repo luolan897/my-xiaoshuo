@@ -379,6 +379,7 @@ function encoded(value: string): string {
 
 function resourceListPath(type: CliResourceType, workId: string): string {
   const suffix: Record<Exclude<CliResourceType, "volume" | "chapter" | "chapter-outline">, string> = {
+    draft: "drafts",
     setting: "settings",
     character: "characters",
     race: "races",
@@ -397,6 +398,7 @@ function resourceGetPath(type: CliResourceType, id: string): string {
   const prefix: Record<Exclude<CliResourceType, "chapter-outline">, string> = {
     volume: "volumes",
     chapter: "chapters",
+    draft: "drafts",
     setting: "settings",
     character: "characters",
     race: "races",
@@ -415,6 +417,7 @@ function resourceCreatePath(type: CliResourceType, scopeId: string): { path: str
   const suffix: Record<Exclude<CliResourceType, "chapter-outline">, string> = {
     volume: "volumes",
     chapter: "chapters",
+    draft: "drafts",
     setting: "settings",
     character: "characters",
     race: "races",

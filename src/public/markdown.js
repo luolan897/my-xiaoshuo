@@ -128,7 +128,12 @@ function tableAlignments(cells) {
 }
 
 function renderMarkdownTable(headers, alignments, rows) {
-  const renderCell = (tag, value, alignment) => `<${tag} class="markdown-align-${alignment}">${renderInlineMarkdown(value)}</${tag}>`;
+  const renderCell = (tag, value, alignment) => {
+    const interaction = tag === "th"
+      ? ' data-markdown-table-header tabindex="0" aria-haspopup="menu" title="右键或按 Shift+F10 设置表格换行"'
+      : "";
+    return `<${tag} class="markdown-align-${alignment}"${interaction}>${renderInlineMarkdown(value)}</${tag}>`;
+  };
   const header = headers.map((cell, index) => renderCell("th", cell, alignments[index])).join("");
   const body = rows.map((row) => {
     const cells = headers.map((_header, index) => renderCell("td", row[index] ?? "", alignments[index])).join("");
