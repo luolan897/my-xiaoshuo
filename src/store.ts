@@ -22,6 +22,7 @@ import {
   now,
   splitDocumentParagraphs
 } from "./utils.js";
+import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
 
 type WorkInput = {
   title: string;
@@ -7610,22 +7611,18 @@ export class Store {
     const goal = this.db.get("SELECT * FROM writing_goals WHERE work_id = ?", workId);
     const dailyGoal = goal ? numberValue(goal, "daily_goal") : 1000;
     const targetTotal = goal ? numberValue(goal, "target_total") : 100000;
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const start = new Date(today);
-    start.setUTCDate(start.getUTCDate() - days + 1);
-    const startKey = start.toISOString().slice(0, 10);
+    const calendar = buildWritingCalendar(new Date(), days);
     const versions = this.db.all(
       `SELECT chapter_id, content, source, created_at FROM chapter_versions
-       WHERE work_id = ? AND created_at <= ? ORDER BY created_at, version_no, id`,
+       WHERE work_id = ? AND created_at < ? ORDER BY created_at, version_no, id`,
       workId,
-      `${today.toISOString().slice(0, 10)}T23:59:59.999Z`
+      calendar.endExclusive
     );
     const chapterWords = new Map<string, number>();
     const events = new Map<string, Row[]>();
     for (const version of versions) {
-      const day = requiredString(version, "created_at").slice(0, 10);
-      if (day < startKey) {
+      const day = writingDateKey(new Date(requiredString(version, "created_at")), calendar.timeZone);
+      if (day < calendar.startKey) {
         chapterWords.set(requiredString(version, "chapter_id"), requiredString(version, "source") === "delete" ? 0 : countWords(requiredString(version, "content")));
       } else {
         const dayEvents = events.get(day) ?? [];
@@ -7635,10 +7632,7 @@ export class Store {
     }
     let previousTotal = [...chapterWords.values()].reduce((sum, value) => sum + value, 0);
     const trend: Record<string, unknown>[] = [];
-    for (let index = 0; index < days; index += 1) {
-      const date = new Date(start);
-      date.setUTCDate(start.getUTCDate() + index);
-      const day = date.toISOString().slice(0, 10);
+    for (const day of calendar.dateKeys) {
       for (const version of events.get(day) ?? []) {
         chapterWords.set(requiredString(version, "chapter_id"), requiredString(version, "source") === "delete" ? 0 : countWords(requiredString(version, "content")));
       }

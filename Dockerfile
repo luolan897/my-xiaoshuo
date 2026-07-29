@@ -39,6 +39,7 @@ COPY package.json package-lock.json ./
 ENV NODE_ENV=production \
     SCRIVERSE_RUNTIME=container \
     LOG_LEVEL=info \
+    TZ=Asia/Shanghai \
     HOST=0.0.0.0 \
     PORT=13210 \
     DATA_DIR=/app/.data
