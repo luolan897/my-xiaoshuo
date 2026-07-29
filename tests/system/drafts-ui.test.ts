@@ -19,7 +19,7 @@ describe("草稿模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">草稿</button>");
-    expect(page.text).toContain('/app.js?v=20260730-ai-stream-recovery-v1');
+    expect(page.text).toContain('/app.js?v=20260730-ai-stream-typewriter-v3');
     expect(application.text).toContain('drafts: ["临时想法", "创作草稿"');
     expect(application.text).toContain('[["prose", "正文草稿"], ["setting", "设定草稿"]]');
     expect(application.text).toContain('field("content", "内容", "markdown"');
