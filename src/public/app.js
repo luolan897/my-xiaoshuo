@@ -4298,7 +4298,7 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
   }, item ? draftTypeLabel(item.draftType) : "未确认想法", {
     submitLabel: viewOnly ? "关闭" : "保存草稿",
     hideCancel: viewOnly,
-    wide: true,
+    editor: true,
     errorPrefix: "草稿保存失败："
   });
   if (viewOnly) {
@@ -6654,6 +6654,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   dialog.classList.toggle("wide-dialog", Boolean(options.wide));
   dialog.classList.toggle("trace-dialog", Boolean(options.trace));
   dialog.classList.toggle("large-dialog", Boolean(options.large));
+  dialog.classList.toggle("editor-dialog", Boolean(options.editor));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
   formDialogVditors = bindVditorEditors($("#dialog-fields"));

@@ -19,7 +19,7 @@ describe("草稿模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">草稿</button>");
-    expect(page.text).toContain('/app.js?v=20260730-draft-filter-toggle-v1');
+    expect(page.text).toContain('/app.js?v=20260730-draft-editor-dialog-v3');
     expect(application.text).toContain('drafts: ["临时想法", "创作草稿"');
     expect(application.text).toContain('[["prose", "正文草稿"], ["setting", "设定草稿"]]');
     expect(application.text).toContain('field("content", "内容", "markdown"');
@@ -37,7 +37,12 @@ describe("草稿模块界面", () => {
     expect(application.text).toContain('没有符合筛选条件的草稿');
     expect(application.text).toContain('formDialogVditors = bindVditorEditors($("#dialog-fields"))');
     expect(application.text).toContain('formDialogVditors.forEach(destroyVditorEditor)');
+    expect(application.text).toContain('editor: true');
+    expect(application.text).toContain('dialog.classList.toggle("editor-dialog", Boolean(options.editor))');
     expect(styles.text).toContain('.draft-filter-toolbar select { min-width: 180px; min-height: 38px;');
     expect(styles.text).toContain('font-size: 11px; }');
+    expect(styles.text).toContain('.editor-dialog { width: min(1180px, 94vw); max-height: calc(100dvh - 16px); }');
+    expect(styles.text).toContain('.editor-dialog .dialog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 76dvh;');
+    expect(styles.text).toContain('.editor-dialog .markdown-editor-field .vditor-editor-host.vditor { min-height: clamp(420px, 56dvh, 640px) !important; }');
   });
 });
