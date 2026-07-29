@@ -1239,6 +1239,15 @@ describe("用户、作品权限与操作者追踪 API", () => {
       code: "WORK_MODULE_READ_DENIED"
     });
     expect(runtime.store.getTask(String(collaboratorTargetedTask.body.data.id)).status).toBe("pending");
+    await expect(runtime.ai.runTask(taskId)).rejects.toMatchObject({
+      code: "WORK_MODULE_READ_DENIED"
+    });
+    expect(runtime.store.getTask(taskId).status).toBe("pending");
+    const protectedBookTaskCreation = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({ taskType: "book-analysis", scope: { type: "book" } })
+      .expect(403);
+    expect(protectedBookTaskCreation.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     const protectedTaskCancellation = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/cancel`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})

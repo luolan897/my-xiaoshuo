@@ -45,7 +45,12 @@ describe("作品工作台按需加载", () => {
       application.indexOf("async function openRaceDialog(item, options)")
     );
 
-    expect(renderRacesSource).toContain('state.races = await apiAllPages(`/api/works/${state.work.id}/races`)');
+    expect(renderRacesSource).toContain('const roots = await api(`/api/works/${workId}/races?scope=roots`)');
+    expect(renderRacesSource).toContain('const dismissLoadingToast = persistentToast("正在加载子种族……")');
+    expect(renderRacesSource).toContain('api(`/api/works/${workId}/races?scope=descendants`)');
+    expect(renderRacesSource).toContain('state.races = [...roots.items, ...descendants]');
+    expect(renderRacesSource).toContain("dismissLoadingToast();");
+    expect(renderRacesSource).not.toContain("apiAllPages");
     expect(renderRacesSource).not.toContain('/characters');
     expect(openKnowledgeEditorSource).toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
   });

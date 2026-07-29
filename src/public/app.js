@@ -4,6 +4,7 @@ import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
+import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
@@ -37,7 +38,7 @@ import {
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260727-ai-usage";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
-import { eligibleRaceParents, orderRaceFilterOptions, paginateRaceForest, racePathLabel } from "/race-hierarchy.js?v=20260727-race-tree-pagination-v1";
+import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
@@ -141,6 +142,8 @@ let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
+let taskAutoRunEditing = false;
+let taskAutoRunEditingWorkId = null;
 let relationshipSearchIndexRefreshTimer = null;
 let backgroundTaskCenterTimer = null;
 let backgroundTaskCenterRequest = 0;
@@ -210,8 +213,12 @@ function renderAnalysisTaskStatus(item) {
   const status = normalizedAnalysisTaskStatus(item.status);
   const statusChanged = taskStatusSnapshots.get(taskId) !== status;
   taskStatusSnapshots.set(taskId, status);
-  const label = analysisTaskStatusLabel(item.status);
-  return `<span class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}" aria-label="任务状态：${esc(label)}">
+  const waitingToRetry = status === "pending" && Boolean(item.nextAttemptAt);
+  const label = waitingToRetry ? "等待重试" : analysisTaskStatusLabel(item.status);
+  const retryTitle = waitingToRetry
+    ? ` title="第 ${esc(String(item.attemptCount ?? 0))} 次尝试失败，将于 ${esc(formatDateTime(item.nextAttemptAt))} 重试"`
+    : "";
+  return `<span class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}" aria-label="任务状态：${esc(label)}"${retryTitle}>
     <span class="task-status-indicator" aria-hidden="true"></span>
     <span>${esc(label)}</span>
   </span>`;
@@ -362,6 +369,10 @@ let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
 let workScopedUiGeneration = 0;
+let raceHierarchyLoadPromise = null;
+let raceHierarchyLoadWorkId = null;
+let loadedRaceHierarchyWorkId = null;
+let raceListRequestId = 0;
 let importHistoryRecords = [];
 let importHistoryNextPage = null;
 let importHistoryRequestId = 0;
@@ -862,7 +873,6 @@ let characterListPage = 1;
 let taskListPage = 1;
 const moduleListPages = {
   settings: 1,
-  races: 1,
   organizations: 1,
   timeline: 1,
   outlinePlans: 1,
@@ -2290,6 +2300,22 @@ function toast(message, type = "info") {
   }, 3600);
 }
 
+function persistentToast(message, type = "info") {
+  const region = $("#toast-region");
+  const element = document.createElement("div");
+  element.className = `toast ${type}`;
+  element.setAttribute("role", "status");
+  element.textContent = message;
+  region.append(element);
+  raiseToastRegion();
+  return () => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  };
+}
+
 function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
   const region = $("#toast-region");
   const element = document.createElement("section");
@@ -2887,7 +2913,6 @@ async function openPlatformUiSettingsDialog() {
     const pageSizes = normalizePageSizes(settings.pageSizes);
     $("#page-size-settings").value = String(pageSizes.settings);
     $("#page-size-characters").value = String(pageSizes.characters);
-    $("#page-size-races").value = String(pageSizes.races);
     $("#page-size-organizations").value = String(pageSizes.organizations);
     $("#page-size-timeline").value = String(pageSizes.timeline);
     $("#page-size-outlines").value = String(pageSizes.outlines);
@@ -3258,9 +3283,14 @@ function resetWorkScopedUiCaches() {
   aiReferencesLoadWorkId = null;
   aiConversationsLoadPromise = null;
   aiConversationsLoadWorkId = null;
+  raceHierarchyLoadPromise = null;
+  raceHierarchyLoadWorkId = null;
+  loadedRaceHierarchyWorkId = null;
+  raceListRequestId += 1;
   state.models = [];
   state.characters = [];
   state.settings = [];
+  state.races = [];
   characterListPage = 1;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
@@ -3721,6 +3751,10 @@ async function showModule(module) {
       return toast("当前账户尚未获授权访问任何作品模块", "error");
     }
     module = fallback;
+  }
+  if (module !== "tasks") {
+    taskAutoRunEditing = false;
+    taskAutoRunEditingWorkId = null;
   }
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
@@ -4191,7 +4225,7 @@ async function renderCharacters(page = characterListPage) {
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
     hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page, pageSize),
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
@@ -4294,15 +4328,16 @@ async function renderCharacters(page = characterListPage) {
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(pageCharacters.find((item) => item.id === button.dataset.editCharacter))));
 }
 
-async function renderRaces(page = moduleListPages.races) {
-  state.races = await apiAllPages(`/api/works/${state.work.id}/races`);
-  mountModuleCount(state.races.length);
+function renderRaceCollection(total, descendantsLoading = false) {
+  mountModuleCount(total);
   const layout = readModuleLayout();
-  const pageResult = layout === "rows"
-    ? paginateModuleItems(state.races, page, "races")
-    : paginateRaceForest(state.races, page, pageSizeFor("races"));
-  moduleListPages.races = pageResult.page;
+  const raceItems = layout === "rows"
+    ? [...state.races].sort((left, right) => String(left.name).localeCompare(String(right.name), "zh-CN"))
+    : buildRaceForest(state.races);
   const canEditRaces = canEditModule("races");
+  const directChildCount = (item) => Number.isInteger(Number(item.childCount))
+    ? Number(item.childCount)
+    : Array.isArray(item.children) ? item.children.length : 0;
   const raceActions = (item) => canEditRaces
     ? recordCardEditButton("edit-race", item.id, `种族“${item.name}”`)
     : recordHistoryButton("race", item.id, item.name);
@@ -4310,7 +4345,7 @@ async function renderRaces(page = moduleListPages.races) {
     ? raceActions(item)
     : `<div class="card-actions">${raceActions(item)}</div>`;
   const renderRaceNode = (item) => `<details class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"} data-race-node="${esc(item.id)}">
-    <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
+    <summary><span>${esc(item.name)}</span><small>${directChildCount(item)} 个直接子种族</small></summary>
     <div class="race-tree-branch">
     <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settingsCount ?? item.settings?.length ?? 0} 条自身设定</small>
         <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
@@ -4322,9 +4357,9 @@ async function renderRaces(page = moduleListPages.races) {
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
-  const raceRows = () => `<div class="module-row-list">${pageResult.items.map((item) => {
+  const raceRows = () => `<div class="module-row-list">${raceItems.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写种族简介");
-    const meta = `${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
+    const meta = `${directChildCount(item)} 个直接子种族 · ${item.memberIds.length} 位直接角色 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写共同设定" : "暂无共同设定"}`;
     return `
     <article class="record-card module-row race-card preview-record-card" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}">
       <small>${esc(meta)}</small>
@@ -4336,15 +4371,65 @@ async function renderRaces(page = moduleListPages.races) {
   if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
   if (state.races.length && layout !== "rows") mountRaceTreeExpandToggle();
   $("#module-content").innerHTML = state.races.length
-    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${pageResult.items.map(renderRaceNode).join("")}</section>`}${renderModulePagination(pageResult, "races", "种族列表")}`
+    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级" aria-busy="${descendantsLoading}">${raceItems.map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
-  bindModuleLayoutToggle(() => renderRaces(pageResult.page));
-  bindModulePagination("races", renderRaces);
+  bindModuleLayoutToggle(() => renderRaceCollection(total, descendantsLoading));
   bindRaceTreeExpandToggle();
   bindRaceTreeNodeToggles();
   const openRace = async (id, readOnly) => openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly });
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => { void openRace(button.dataset.editRace, false); }));
-  bindEntityHistoryButtons(async () => { await renderRaces(pageResult.page); await loadAiReferences(); });
+  bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
+}
+
+async function ensureCompleteRaceList() {
+  const workId = state.work?.id;
+  if (!workId) return false;
+  const generation = workScopedUiGeneration;
+  if (loadedRaceHierarchyWorkId === workId) return true;
+  if (raceHierarchyLoadPromise && raceHierarchyLoadWorkId === workId) {
+    await raceHierarchyLoadPromise.catch(() => {});
+  }
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return false;
+  if (loadedRaceHierarchyWorkId === workId) return true;
+  const races = await api(`/api/works/${workId}/races`);
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return false;
+  state.races = races;
+  loadedRaceHierarchyWorkId = workId;
+  return true;
+}
+
+async function renderRaces() {
+  const workId = state.work.id;
+  const generation = workScopedUiGeneration;
+  const requestId = ++raceListRequestId;
+  const roots = await api(`/api/works/${workId}/races?scope=roots`);
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
+  state.races = roots.items;
+  loadedRaceHierarchyWorkId = roots.items.length === roots.total ? workId : null;
+  renderRaceCollection(roots.total, loadedRaceHierarchyWorkId !== workId);
+  if (loadedRaceHierarchyWorkId === workId) return;
+
+  const dismissLoadingToast = persistentToast("正在加载子种族……");
+  const loadPromise = api(`/api/works/${workId}/races?scope=descendants`).then((descendants) => {
+    if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
+    state.races = [...roots.items, ...descendants];
+    loadedRaceHierarchyWorkId = workId;
+    if (state.module === "races") renderRaceCollection(roots.total);
+  });
+  raceHierarchyLoadPromise = loadPromise;
+  raceHierarchyLoadWorkId = workId;
+  void loadPromise.catch((error) => {
+    if (state.work?.id === workId && generation === workScopedUiGeneration && requestId === raceListRequestId) {
+      renderRaceCollection(roots.total);
+      toast(`父种族已显示，但子种族载入失败：${error.message}`, "error");
+    }
+  }).finally(() => {
+    if (raceHierarchyLoadPromise === loadPromise) {
+      raceHierarchyLoadPromise = null;
+      raceHierarchyLoadWorkId = null;
+    }
+    dismissLoadingToast();
+  });
 }
 
 async function renderOrganizations(page = moduleListPages.organizations) {
@@ -4685,7 +4770,7 @@ async function renderTasks(page = taskListPage) {
     apiPage(`/api/works/${state.work.id}/tasks`, page, pageSize),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
-      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
+      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunPaused: false })
   ]);
   if (!taskPage.items.length && page > 1) return renderTasks(page - 1);
   taskListPage = taskPage.page;
@@ -4693,10 +4778,18 @@ async function renderTasks(page = taskListPage) {
   const taskTotal = Number(taskPage.total ?? taskPage.stats?.total ?? tasks.length);
   mountModuleCount(taskTotal);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
+  const autoRunEditing = canConfigureAutoRun && taskAutoRunEditing && taskAutoRunEditingWorkId === state.work.id;
   const pendingCount = Number(taskPage.stats?.pendingCount ?? 0);
   const runningCount = Number(taskPage.stats?.runningCount ?? 0);
   const activeTaskCount = pendingCount + runningCount;
   const runningProgress = runningCount ? analysisTaskProgressValue(taskPage.stats?.runningProgress) : 0;
+  const autoRunPaused = Boolean(settings.autoRunEnabled && settings.autoRunPaused);
+  const autoRunActive = Boolean(settings.autoRunEnabled && !autoRunPaused);
+  const autoRunPauseLabel = autoRunPaused ? "恢复自动执行" : "暂停自动执行";
+  const queueProgressLabel = runningCount
+    ? "运行中任务平均进度"
+    : autoRunPaused ? "自动执行已暂停" : autoRunActive ? "等待任务开始" : "自动执行已关闭";
+  const queueProgressClass = runningCount ? "is-running" : autoRunPaused ? "is-paused" : "is-waiting";
   const visibleTaskIds = new Set(tasks.map((item) => String(item.id)));
   for (const taskId of taskStatusSnapshots.keys()) {
     if (!visibleTaskIds.has(taskId)) taskStatusSnapshots.delete(taskId);
@@ -4713,27 +4806,34 @@ async function renderTasks(page = taskListPage) {
       <div class="task-auto-run-copy">
         <strong id="task-auto-run-title">自动执行待分析任务</strong>
         <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
-        <small>每轮最多启动「每轮任务上限」个，同时运行数量不超过「同时运行上限」；剩余任务需点击“开始下一轮”。</small>
+        <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
+      </div>
+      <div class="task-auto-run-actions">
+        ${autoRunEditing ? "" : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
       </div>
       <div class="task-auto-run-controls">
-        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>自动执行待分析任务</span></label>
-        <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
-        <label>每轮任务上限<input id="task-auto-run-batch-limit" type="number" min="1" max="200" value="${esc(String(settings.autoRunBatchLimit ?? 20))}"></label>
-        <button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button>
-        <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>开始下一轮</button>
+        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""} ${autoRunEditing ? "" : "disabled"}><span>持续自动执行</span></label>
+        <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-daily-help"></label>
+        <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        ${autoRunEditing
+          ? `<button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button><button id="task-auto-run-pause" class="ghost-button" type="button">${autoRunPauseLabel}</button>`
+          : ""}
       </div>
-      <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
+      <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
+      <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个 · ${autoRunPaused ? "已暂停" : autoRunActive ? "持续执行中" : "未开启"}</p>
+      ${autoRunPaused ? `<p class="task-auto-run-alert" role="status"><strong>自动执行已暂停</strong><span>${esc(settings.autoRunPauseReason || "需要人工确认后恢复")}</span>${settings.autoRunResumeAt ? `<small>预计 ${esc(formatDateTime(settings.autoRunResumeAt))} 自动恢复</small>` : ""}</p>` : ""}
       <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
-        <div class="task-auto-run-progress-ring ${runningCount ? "is-running" : "is-waiting"}" role="progressbar" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${runningProgress}">
+        <div class="task-auto-run-progress-ring ${queueProgressClass}" role="progressbar" aria-label="${queueProgressLabel}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${runningProgress}">
           <svg viewBox="0 0 120 120" aria-hidden="true" focusable="false">
             <circle class="task-auto-run-progress-ring-track" cx="60" cy="60" r="52"></circle>
             <circle class="task-auto-run-progress-ring-value" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="${runningProgress} 100"></circle>
           </svg>
-          <div class="task-auto-run-progress-ring-label"><strong>${runningProgress}%</strong><span>${runningCount ? "运行中平均进度" : "等待任务开始"}</span></div>
+          <div class="task-auto-run-progress-ring-label"><strong>${runningProgress}%</strong><span>${queueProgressLabel}</span></div>
         </div>
         <div class="task-auto-run-progress-bar-layout">
-          <div class="task-auto-run-progress-label"><span>${runningCount ? "运行中任务平均进度" : "等待任务开始"}</span><strong>${runningProgress}%</strong></div>
-          <progress class="task-auto-run-progress-bar ${runningCount ? "is-running" : "is-waiting"}" max="100" value="${runningProgress}" aria-label="${runningCount ? "运行中任务平均进度" : "待执行任务进度"}">${runningProgress}%</progress>
+          <div class="task-auto-run-progress-label"><span>${queueProgressLabel}</span><strong>${runningProgress}%</strong></div>
+          <progress class="task-auto-run-progress-bar ${queueProgressClass}" max="100" value="${runningProgress}" aria-label="${queueProgressLabel}">${runningProgress}%</progress>
         </div>
       </div>
     </section>
@@ -4746,7 +4846,7 @@ async function renderTasks(page = taskListPage) {
       <td class="task-progress-cell">${renderAnalysisTaskProgress(item)}</td>
       <td class="task-row-actions">
         <button class="ghost-button" type="button" data-task-detail="${esc(item.id)}">详情</button>
-        ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
+        ${item.status === "pending" && !item.nextAttemptAt ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
     </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
@@ -4757,6 +4857,12 @@ async function renderTasks(page = taskListPage) {
     await renderTasks(Number(button.dataset.taskPage));
   }));
 
+  $("#task-auto-run-edit")?.addEventListener("click", () => {
+    taskAutoRunEditing = true;
+    taskAutoRunEditingWorkId = state.work.id;
+    void renderTasks(taskListPage).catch((error) => toast(error.message, "error"));
+  });
+
   $("#task-auto-run-save")?.addEventListener("click", async () => {
     const button = $("#task-auto-run-save");
     button.disabled = true;
@@ -4766,32 +4872,42 @@ async function renderTasks(page = taskListPage) {
         body: {
           autoRunEnabled: $("#task-auto-run-enabled").checked,
           autoRunConcurrency: Number($("#task-auto-run-concurrency").value),
-          autoRunBatchLimit: Number($("#task-auto-run-batch-limit").value)
+          autoRunDailyTaskLimit: Number($("#task-auto-run-daily-limit").value),
+          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value)
         }
       });
       toast(updated.autoRunEnabled
-        ? `自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个，每轮最多 ${updated.autoRunBatchLimit} 个`
+        ? `持续自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个`
         : "自动执行已关闭");
+      taskAutoRunEditing = false;
+      taskAutoRunEditingWorkId = null;
       await renderTasks();
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
     }
   });
-  $("#task-auto-run-continue")?.addEventListener("click", async () => {
-    const button = $("#task-auto-run-continue");
+  $("#task-auto-run-pause")?.addEventListener("click", async () => {
+    const button = $("#task-auto-run-pause");
     button.disabled = true;
     try {
-      const result = await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
-      toast(`已开始下一轮，队列中还有 ${result.pendingCount} 个待执行任务`);
+      if (autoRunPaused) {
+        await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
+        toast("自动执行已恢复");
+      } else {
+        await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { autoRunEnabled: false } });
+        toast("已暂停自动执行");
+      }
+      taskAutoRunEditing = false;
+      taskAutoRunEditingWorkId = null;
       await refreshBackgroundTaskCenter({ announce: false });
       await renderTasks();
+      window.setTimeout(() => $("#task-auto-run-edit")?.focus(), 0);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
     }
   });
-
   $("#module-content").querySelectorAll("[data-task-detail]").forEach((button) => button.addEventListener("click", () => {
     if (button.disabled) return;
     button.disabled = true;
@@ -4842,7 +4958,7 @@ async function renderTasks(page = taskListPage) {
       button.disabled = false;
     }
   }));
-  scheduleTaskProgressRefresh(state.work.id, runningCount);
+  scheduleTaskProgressRefresh(state.work.id, runningCount > 0 || (pendingCount > 0 && autoRunActive) ? 1 : 0);
 }
 
 async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {
@@ -6915,6 +7031,107 @@ function toggleVditorLineNumbers(editor) {
   const enabled = host.classList.toggle("show-line-numbers");
   const button = host.querySelector(".vditor-line-number-button");
   if (button) button.setAttribute("aria-pressed", String(enabled));
+  updateVditorLineNumbers(editor, getVditorMarkdown(editor));
+}
+
+function getVditorMarkdown(editor) {
+  if (typeof editor?.getValue === "function") {
+    try {
+      return String(editor.getValue() ?? "");
+    } catch {
+      return "";
+    }
+  }
+  const host = editor?.vditor?.element;
+  const valueField = host?.closest("[data-vditor-editor-field], .setting-markdown-field, .character-markdown-editor")?.querySelector("[data-vditor-value]")
+    ?? host?.parentElement?.querySelector("[data-vditor-value]");
+  return String(valueField?.value ?? "");
+}
+
+function getVditorVisibleSurface(content) {
+  const candidates = [
+    content.querySelector(".vditor-ir .vditor-reset"),
+    content.querySelector(".vditor-wysiwyg .vditor-reset"),
+    content.querySelector(".vditor-sv textarea"),
+    content.querySelector(".vditor-sv")
+  ];
+  return candidates.find((surface) => {
+    if (!surface) return false;
+    const rect = surface.getBoundingClientRect();
+    const style = getComputedStyle(surface);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }) ?? null;
+}
+
+function getVditorLineHeight(surface) {
+  const style = getComputedStyle(surface);
+  return parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5 || 24;
+}
+
+function collectVditorVisualLineRects(surface) {
+  const rects = [];
+  const scrollTop = Number(surface.scrollTop) || 0;
+  const visit = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!node.textContent) return;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      [...range.getClientRects()].forEach((rect) => {
+        if (rect.height > 0) rects.push({ top: rect.top + scrollTop, height: rect.height });
+      });
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    if (node.tagName === "BR") {
+      const rect = node.getBoundingClientRect();
+      if (rect.height > 0) rects.push({ top: rect.top + scrollTop, height: rect.height });
+    }
+    [...node.childNodes].forEach(visit);
+  };
+  visit(surface);
+  if (rects.length === 0) {
+    const rect = surface.getBoundingClientRect();
+    const style = getComputedStyle(surface);
+    rects.push({ top: rect.top + scrollTop + (parseFloat(style.paddingTop) || 0), height: getVditorLineHeight(surface) });
+  }
+  return rects;
+}
+
+function syncVditorLineNumberScroll(editor) {
+  const surface = editor?.__vditorLineNumberSurface;
+  const gutter = editor?.vditor?.element?.querySelector(".vditor-line-numbers");
+  if (!surface || !gutter) return;
+  gutter.style.transform = `translateY(${-surface.scrollTop}px)`;
+  gutter.dataset.scrollTop = String(surface.scrollTop);
+}
+
+function scheduleVditorLineNumbers(editor) {
+  if (!editor || editor.__vditorLineNumberFrame) return;
+  editor.__vditorLineNumberFrame = requestAnimationFrame(() => {
+    editor.__vditorLineNumberFrame = null;
+    updateVditorLineNumbers(editor, getVditorMarkdown(editor));
+  });
+}
+
+function setupVditorLineNumberSync(editor, content, surface) {
+  if (editor.__vditorLineNumberSurface !== surface) {
+    editor.__vditorLineNumberSurface?.removeEventListener("scroll", editor.__vditorLineNumberScrollHandler);
+    editor.__vditorLineNumberSurface = surface;
+    editor.__vditorLineNumberScrollHandler = () => syncVditorLineNumberScroll(editor);
+    surface.addEventListener("scroll", editor.__vditorLineNumberScrollHandler, { passive: true });
+  }
+  if (!editor.__vditorLineNumberObserver) {
+    editor.__vditorLineNumberObserver = new MutationObserver((mutations) => {
+      if (mutations.some((mutation) => !(mutation.target instanceof Element) || !mutation.target.closest(".vditor-line-numbers"))) {
+        scheduleVditorLineNumbers(editor);
+      }
+    });
+    editor.__vditorLineNumberObserver.observe(content, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style"] });
+  }
+  if (!editor.__vditorLineNumberResizeObserver && typeof ResizeObserver !== "undefined") {
+    editor.__vditorLineNumberResizeObserver = new ResizeObserver(() => scheduleVditorLineNumbers(editor));
+    editor.__vditorLineNumberResizeObserver.observe(content);
+  }
 }
 
 function updateVditorLineNumbers(editor, markdown) {
@@ -6927,14 +7144,30 @@ function updateVditorLineNumbers(editor, markdown) {
     gutter.setAttribute("aria-hidden", "true");
     content.prepend(gutter);
   }
-  const lineCount = Math.max(1, String(markdown ?? "").split(/\r?\n/gu).length);
+  const surface = getVditorVisibleSurface(content);
+  if (!surface) return;
+  setupVditorLineNumberSync(editor, content, surface);
+  const contentRect = content.getBoundingClientRect();
+  const lineHeight = getVditorLineHeight(surface);
+  const normalizedMarkdown = String(markdown ?? "").replace(/\r\n?/gu, "\n");
+  const blankLineCount = normalizedMarkdown.trim() === "" ? 0 : normalizedMarkdown.split("\n").filter((line) => line.trim() === "").length;
+  const visualRows = buildVditorLineNumberRows(collectVditorVisualLineRects(surface), { lineHeight, blankLineCount });
+  gutter.style.height = `${content.clientHeight}px`;
   const fragment = document.createDocumentFragment();
-  for (let line = 1; line <= lineCount; line += 1) {
+  visualRows.forEach((row, index) => {
     const number = document.createElement("span");
-    number.textContent = String(line);
+    number.className = "vditor-line-number";
+    number.textContent = String(index + 1);
+    number.dataset.lineNumber = String(index + 1);
+    number.dataset.blank = String(row.blank);
+    number.style.top = `${row.top - contentRect.top}px`;
+    number.style.height = `${row.height}px`;
+    number.style.lineHeight = `${row.height}px`;
     fragment.append(number);
-  }
+  });
   gutter.replaceChildren(fragment);
+  gutter.dataset.lineCount = String(visualRows.length);
+  syncVditorLineNumberScroll(editor);
 }
 
 function updateVditorWordCount(editor, markdown) {
@@ -6979,6 +7212,12 @@ function ensureVditorIconScript() {
 function destroyVditorEditor(editor) {
   if (!editor) return;
   editor.__attachmentObserver?.disconnect();
+  editor.__vditorLineNumberObserver?.disconnect();
+  editor.__vditorLineNumberResizeObserver?.disconnect();
+  if (editor.__vditorLineNumberSurface && editor.__vditorLineNumberScrollHandler) {
+    editor.__vditorLineNumberSurface.removeEventListener("scroll", editor.__vditorLineNumberScrollHandler);
+  }
+  if (editor.__vditorLineNumberFrame) cancelAnimationFrame(editor.__vditorLineNumberFrame);
   const host = editor.vditor?.element;
   editor.destroy();
   if (host) delete host.__vditor;
@@ -7421,7 +7660,7 @@ async function showCharacterHistory() {
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   [state.races, state.organizations, state.characters] = await Promise.all([
-    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
@@ -7554,6 +7793,7 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
 async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   await discardPendingMarkdownAttachments();
+  if (kind === "race" && !(await ensureCompleteRaceList())) return;
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const isRace = kind === "race";
@@ -8667,18 +8907,22 @@ async function showChapterInsight() {
   if (requestId !== chapterInsightRequestId || state.chapter?.id !== chapterId || $("#editor-view").classList.contains("hidden")) return;
   const insight = insights.find((item) => item.chapterVersion === state.chapter.versionNo) ?? insights[0];
   const region = $("#toast-region");
+  const chapterTitle = state.chapter.title;
   const element = document.createElement("section");
   element.id = "chapter-insight-toast";
   element.className = "toast chapter-insight-toast";
   element.setAttribute("role", "region");
-  element.setAttribute("aria-label", "章节概览");
+  element.setAttribute("aria-label", `章节概览：${chapterTitle}`);
   const header = document.createElement("header");
   header.className = "chapter-insight-toast-header";
   const heading = document.createElement("div");
   heading.className = "chapter-insight-toast-heading";
   const title = document.createElement("strong");
   title.textContent = "章节概览";
-  heading.append(title);
+  const chapterName = document.createElement("span");
+  chapterName.className = "chapter-insight-toast-chapter-title";
+  chapterName.textContent = chapterTitle;
+  heading.append(title, chapterName);
   if (insight && insight.chapterVersion !== state.chapter.versionNo) {
     const stale = document.createElement("span");
     stale.textContent = `基于旧版本 v${insight.chapterVersion}`;
@@ -9323,7 +9567,6 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
         pageSizes: {
           settings: Number($("#page-size-settings").value),
           characters: Number($("#page-size-characters").value),
-          races: Number($("#page-size-races").value),
           organizations: Number($("#page-size-organizations").value),
           timeline: Number($("#page-size-timeline").value),
           outlines: Number($("#page-size-outlines").value),

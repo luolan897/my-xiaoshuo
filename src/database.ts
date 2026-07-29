@@ -409,6 +409,12 @@ export class Database {
         auto_run_enabled INTEGER NOT NULL DEFAULT 0,
         auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
+        auto_run_daily_task_limit INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_daily_task_limit BETWEEN 0 AND 10000),
+        auto_run_failure_threshold INTEGER NOT NULL DEFAULT 3 CHECK(auto_run_failure_threshold BETWEEN 1 AND 10),
+        auto_run_paused INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_paused IN (0, 1)),
+        auto_run_pause_reason TEXT NOT NULL DEFAULT '',
+        auto_run_resume_at TEXT,
+        auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
         agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections"]',
@@ -486,6 +492,9 @@ export class Database {
         result_json TEXT NOT NULL DEFAULT '{}',
         failure_json TEXT NOT NULL DEFAULT '[]',
         source_versions_json TEXT NOT NULL DEFAULT '{}',
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        last_attempt_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -2243,6 +2252,47 @@ export class Database {
           timestamp
         );
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (53, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(54)) {
+      this.transaction(() => {
+        const settingsColumns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!settingsColumns.has("auto_run_daily_task_limit")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_daily_task_limit INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_daily_task_limit BETWEEN 0 AND 10000)");
+        }
+        if (!settingsColumns.has("auto_run_failure_threshold")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_failure_threshold INTEGER NOT NULL DEFAULT 3 CHECK(auto_run_failure_threshold BETWEEN 1 AND 10)");
+        }
+        if (!settingsColumns.has("auto_run_paused")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_paused INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_paused IN (0, 1))");
+        }
+        if (!settingsColumns.has("auto_run_pause_reason")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_pause_reason TEXT NOT NULL DEFAULT ''");
+        }
+        if (!settingsColumns.has("auto_run_resume_at")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_resume_at TEXT");
+        }
+        if (!settingsColumns.has("auto_run_consecutive_failures")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0");
+        }
+        const taskColumns = new Set(this.all("PRAGMA table_info(analysis_tasks)").map((row) => String(row.name)));
+        if (!taskColumns.has("attempt_count")) {
+          this.run("ALTER TABLE analysis_tasks ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!taskColumns.has("next_attempt_at")) {
+          this.run("ALTER TABLE analysis_tasks ADD COLUMN next_attempt_at TEXT");
+        }
+        if (!taskColumns.has("last_attempt_at")) {
+          this.run("ALTER TABLE analysis_tasks ADD COLUMN last_attempt_at TEXT");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_tasks_auto_run_ready ON analysis_tasks(work_id, status, next_attempt_at, created_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (54, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
