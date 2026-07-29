@@ -9,8 +9,27 @@ describe("模块请求缓存", () => {
     const first = cache.request("work-1", "characters", "page:1", loader);
     const second = cache.request("work-1", "characters", "page:1", loader);
 
-    expect(second).toBe(first);
+    expect(second).not.toBe(first);
+    await expect(first).resolves.toEqual({ items: ["首次结果"] });
     await expect(second).resolves.toEqual({ items: ["首次结果"] });
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("调用方修改结果不会污染后续缓存命中", async () => {
+    const cache = createModuleRequestCache();
+    const loader = vi.fn(async () => ({
+      items: [{ id: "character-1", profile: { name: "原始名称" } }],
+      page: 1
+    }));
+
+    const first = await cache.request("work-1", "characters", "page:1", loader);
+    first.items[0]!.profile.name = "被调用方修改";
+    first.items.push({ id: "character-2", profile: { name: "额外角色" } });
+
+    await expect(cache.request("work-1", "characters", "page:1", loader)).resolves.toEqual({
+      items: [{ id: "character-1", profile: { name: "原始名称" } }],
+      page: 1
+    });
     expect(loader).toHaveBeenCalledTimes(1);
   });
 
