@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260730-table-wrap-menu-v1');
-    expect(page.text).toContain('/app.js?v=20260730-table-wrap-menu-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260730-table-wrap-menu-v1"></script>');
+    expect(page.text).toContain('/styles.css?v=20260730-drafts-stream-v1');
+    expect(page.text).toContain('/app.js?v=20260730-volume-lazy-module-cache-v1');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260730-volume-lazy-module-cache-v1"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -36,6 +36,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
     expect(styles.text).toContain('input[type="checkbox"] {');
     expect(styles.text).toContain('input[type="checkbox"]:checked::before');
+    expect(styles.text).toContain('.character-editor-section-fields .member-chip input[type="checkbox"] { position: absolute; width: 1px !important; min-width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; }');
     expect(styles.text).toContain('.setting-editor-lock span { display: inline-flex; align-items: center; min-height: 16px; line-height: 16px; }');
     expect(application.text).toContain('data-module-layout="cards"');
     expect(application.text).toContain('data-module-layout="rows"');
@@ -102,7 +103,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain("pageCharacters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
     expect(application.text).toContain('const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;');
-    expect(application.text).toContain('hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`)');
+    expect(application.text).toContain('moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)');
     expect(application.text).toContain('filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)');
     expect(application.text).toContain('filterOptionList(organizations, selectedOrganizationIds, "id")');
     expect(application.text).toContain('/relationship-filters.js?v=20260726-relationship-filters');

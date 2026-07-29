@@ -38,5 +38,7 @@ describe("AI 工具调用记录界面", () => {
     expect(styles).toContain(".ai-process-step-body");
     expect(styles).toContain(".ai-tool-call-detail { display: grid; grid-template-columns: minmax(0, 1fr);");
     expect(styles).toContain(".ai-tool-call-info { display: grid;");
+    expect(styles).not.toContain("ai-stream-cursor");
+    expect(styles).not.toContain(".is-streaming .message-body:empty::after");
   });
 });

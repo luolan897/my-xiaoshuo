@@ -8,7 +8,7 @@ import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
-import { createStreamTypewriter } from "/stream-typewriter.js?v=20260729-ai-stream-typewriter-v1";
+import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
@@ -48,6 +48,7 @@ import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-s
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
+import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -116,6 +117,21 @@ const state = {
   collapsedRaceIds: new Set(),
   contextChapterId: null
 };
+
+const moduleRequestCache = createModuleRequestCache();
+const cachedWorkModules = new Set([
+  "drafts",
+  "settings",
+  "characters",
+  "races",
+  "organizations",
+  "timeline",
+  "outlines",
+  "relationships",
+  "reviews",
+  "tasks",
+  "ai-settings"
+]);
 
 function createPresenceClientId() {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -371,6 +387,9 @@ let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
 let workScopedUiGeneration = 0;
+const loadedVolumeChapterIds = new Set();
+const volumeChapterLoadingIds = new Set();
+const volumeChapterRequests = new Map();
 let raceHierarchyLoadPromise = null;
 let raceHierarchyLoadWorkId = null;
 let loadedRaceHierarchyWorkId = null;
@@ -874,6 +893,7 @@ let chapterEditorReadOnly = true;
 let characterListPage = 1;
 let taskListPage = 1;
 let draftTypeFilter = "all";
+let draftFiltersPanelOpen = false;
 const moduleListPages = {
   drafts: 1,
   settings: 1,
@@ -2126,14 +2146,19 @@ async function api(path, options = {}) {
     if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
       state.user = null;
       state.csrfToken = null;
+      moduleRequestCache.clear();
       showAuth(false);
     }
     const error = new Error(payload.error?.message ?? `请求失败：${response.status}`);
     error.code = payload.error?.code;
     throw error;
   }
-  if (response.status === 204) return null;
+  if (response.status === 204) {
+    invalidateModuleRequestsAfterMutation(path, method);
+    return null;
+  }
   const payload = await response.json();
+  invalidateModuleRequestsAfterMutation(path, method);
   return payload.data;
 }
 
@@ -2153,6 +2178,63 @@ async function apiAllPages(path, limit = 100) {
     if (!result.hasMore || !result.nextPage) return items;
     page = result.nextPage;
   }
+}
+
+function cachedModuleRequest(module, requestKey, loader, options = {}) {
+  const workId = state.work?.id;
+  if (!workId) return Promise.resolve().then(loader);
+  return moduleRequestCache.request(workId, module, requestKey, loader, options);
+}
+
+function moduleApi(module, path, options = {}) {
+  return cachedModuleRequest(module, `api:${path}`, () => api(path), options);
+}
+
+function moduleApiPage(module, path, page = 1, limit = 30, options = {}) {
+  return cachedModuleRequest(module, `page:${path}:${page}:${limit}`, () => apiPage(path, page, limit), options);
+}
+
+function moduleApiAllPages(module, path, limit = 100, options = {}) {
+  return cachedModuleRequest(module, `all:${path}:${limit}`, () => apiAllPages(path, limit), options);
+}
+
+function invalidateModuleRequestsAfterMutation(path, method) {
+  if (["GET", "HEAD", "OPTIONS"].includes(method) || !state.work) return;
+  if (
+    path.startsWith("/api/auth/")
+    || path.includes("/presence")
+    || path.includes("/context/prepare")
+    || path.includes("/ai-context-usage")
+    || path.includes("/chat/stream")
+  ) return;
+
+  const affected = new Set();
+  if (path.includes("/ai-settings") || path.includes("/task-defaults") || path.includes("/providers") || path.includes("/models")) {
+    affected.add("ai-settings");
+  }
+  if (path.includes("/tasks")) affected.add("tasks");
+  if (path.includes("/drafts")) affected.add("drafts");
+  if (path.includes("/settings") && !path.includes("/ai-settings")) affected.add("settings");
+  if (path.includes("/characters") || path.includes("/character-sections")) affected.add("characters");
+  if (path.includes("/races")) affected.add("races");
+  if (path.includes("/organizations")) affected.add("organizations");
+  if (path.includes("/timeline")) affected.add("timeline");
+  if (path.includes("/outlines") || path.includes("/foreshadows")) affected.add("outlines");
+  if (path.includes("/relationships")) affected.add("relationships");
+  if (path.includes("/reviews")) affected.add("reviews");
+  if (path.includes("/entity-versions/")) {
+    if (path.includes("/draft/")) affected.add("drafts");
+    if (path.includes("/setting/")) affected.add("settings");
+    if (path.includes("/character/")) affected.add("characters");
+    if (path.includes("/race/")) affected.add("races");
+    if (path.includes("/organization/")) affected.add("organizations");
+    if (path.includes("/timeline-event/") || path.includes("/timeline-track/")) affected.add("timeline");
+    if (path.includes("/chapter-outline/") || path.includes("/foreshadow/")) affected.add("outlines");
+    if (path.includes("/relationship/")) affected.add("relationships");
+    if (path.includes("/review/")) affected.add("reviews");
+  }
+  if (cachedWorkModules.has(state.module)) affected.add(state.module);
+  affected.forEach((module) => moduleRequestCache.invalidate(state.work.id, module));
 }
 
 async function initializeProductFooters() {
@@ -3345,11 +3427,15 @@ function resetWorkScopedUiCaches() {
   state.races = [];
   characterListPage = 1;
   draftTypeFilter = "all";
+  draftFiltersPanelOpen = false;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
   taskListPage = 1;
   state.collapsedVolumeIds.clear();
+  loadedVolumeChapterIds.clear();
+  volumeChapterLoadingIds.clear();
+  volumeChapterRequests.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
   if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
@@ -3373,7 +3459,13 @@ function resetWorkScopedUiCaches() {
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
-  const nextWork = await api(`/api/works/${workId}`);
+  if (state.work?.id === workId) {
+    workScopedUiGeneration += 1;
+    loadedVolumeChapterIds.clear();
+    volumeChapterLoadingIds.clear();
+    volumeChapterRequests.clear();
+  }
+  const nextWork = await api(`/api/works/${workId}?directory=volumes`);
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
@@ -3384,6 +3476,8 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#settings-button").removeAttribute("aria-current");
   settingsReturnContext = null;
   state.work = nextWork;
+  state.work.volumes = state.work.volumes.map((volume) => ({ ...volume, chapters: Array.isArray(volume.chapters) ? volume.chapters : [] }));
+  state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));
   state.chapter = null;
   chapterEditorReadOnly = true;
   if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
@@ -3393,40 +3487,121 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   $("#top-search-button").disabled = !canReadAggregateContent();
   renderTree();
-  const chapters = state.work.volumes.flatMap((volume) => volume.chapters);
-  const targetChapter = chapters.find((chapter) => chapter.id === preferredChapterId) ?? chapters[0];
+  void loadAllVolumeChapters(nextWork.id);
   if (state.module === "editor" && preferredChapterId) await selectChapter(preferredChapterId);
-  else if (state.module === "editor" && targetChapter) await selectChapter(targetChapter.id);
   else if (state.module === "editor" && canReadModule("editor")) showWelcome(true);
   else if (!canReadModule(state.module)) showWelcome(true);
   else await showModule(state.module);
   return true;
 }
 
+async function loadVolumeChapters(volumeId) {
+  if (!state.work || loadedVolumeChapterIds.has(volumeId)) return;
+  const existingRequest = volumeChapterRequests.get(volumeId);
+  if (existingRequest) return existingRequest;
+  const workId = state.work.id;
+  const generation = workScopedUiGeneration;
+  volumeChapterLoadingIds.add(volumeId);
+  renderTree();
+  const request = (async () => {
+    try {
+      const chapters = await apiAllPages(`/api/volumes/${encodeURIComponent(volumeId)}/chapters`, 100);
+      if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
+      const volume = state.work.volumes.find((item) => item.id === volumeId);
+      if (!volume) return;
+      volume.chapters = chapters;
+      volume.chapterCount = chapters.length;
+      loadedVolumeChapterIds.add(volumeId);
+      renderTree();
+    } catch (error) {
+      if (state.work?.id === workId && generation === workScopedUiGeneration) {
+        toast(`加载分卷章节失败：${error.message}`, "error");
+        renderTree();
+      }
+    } finally {
+      volumeChapterLoadingIds.delete(volumeId);
+      volumeChapterRequests.delete(volumeId);
+      if (state.work?.id === workId && generation === workScopedUiGeneration) renderTree();
+    }
+  })();
+  volumeChapterRequests.set(volumeId, request);
+  return request;
+}
+
+async function loadAllVolumeChapters(workId) {
+  const volumeIds = state.work?.id === workId ? state.work.volumes.map((volume) => volume.id) : [];
+  for (const volumeId of volumeIds) {
+    if (state.work?.id !== workId) return;
+    await loadVolumeChapters(volumeId);
+  }
+}
+
+function mergeChapterDirectoryEntry(chapter) {
+  if (!state.work || !chapter?.volumeId) return;
+  const volume = state.work.volumes.find((item) => item.id === chapter.volumeId);
+  if (!volume) return;
+  const directoryEntry = {
+    id: chapter.id,
+    workId: chapter.workId,
+    volumeId: chapter.volumeId,
+    title: chapter.title,
+    chapterType: chapter.chapterType,
+    sortOrder: chapter.sortOrder,
+    wordCount: chapter.wordCount,
+    versionNo: chapter.versionNo,
+    analysisStatus: chapter.analysisStatus,
+    excludedFromAnalysis: chapter.excludedFromAnalysis,
+    createdAt: chapter.createdAt,
+    updatedAt: chapter.updatedAt
+  };
+  const chapters = Array.isArray(volume.chapters) ? volume.chapters : [];
+  const existingIndex = chapters.findIndex((item) => item.id === chapter.id);
+  if (existingIndex >= 0) chapters[existingIndex] = directoryEntry;
+  else chapters.push(directoryEntry);
+  chapters.sort((left, right) => Number(left.sortOrder) - Number(right.sortOrder));
+  volume.chapters = chapters;
+  volume.chapterCount = Math.max(Number(volume.chapterCount ?? 0), chapters.length);
+}
+
 function renderTree() {
   if (!state.work) return;
-  const count = state.work.volumes.reduce((total, volume) => total + volume.chapters.length, 0);
+  const count = state.work.volumes.reduce((total, volume) => total + Number(volume.chapterCount ?? volume.chapters?.length ?? 0), 0);
   const proseEditable = canEditProse();
   $("#chapter-count").textContent = `${count} 章`;
   $("#novel-tree").classList.remove("empty-copy");
-  $("#novel-tree").innerHTML = state.work.volumes.map((volume) => `
-    <div class="volume-node ${state.collapsedVolumeIds.has(volume.id) ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
+  $("#novel-tree").innerHTML = state.work.volumes.map((volume) => {
+    const collapsed = state.collapsedVolumeIds.has(volume.id);
+    const chapters = Array.isArray(volume.chapters) ? volume.chapters : [];
+    const chapterContent = collapsed
+      ? ""
+      : volumeChapterLoadingIds.has(volume.id)
+        ? '<p class="entity-history-empty">正在加载章节……</p>'
+        : !loadedVolumeChapterIds.has(volume.id)
+          ? '<p class="entity-history-empty">展开后加载章节。</p>'
+          : chapters.length
+            ? chapters.map((chapter) => `
+        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}" draggable="${proseEditable ? "true" : "false"}" title="${proseEditable ? "拖拽排序；Alt+方向键排序，Alt+Shift+方向键跨卷" : ""}">
+          <span>${esc(chapter.title)}</span><span class="chapter-node-meta">${chapter.chapterType && chapter.chapterType !== "正文" ? `<em class="chapter-type-badge">${esc(chapter.chapterType)}</em>` : ""}<small>${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small></span>
+        </button>`).join("")
+            : '<p class="entity-history-empty">本卷还没有章节。</p>';
+    return `
+    <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
-        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
-      ${volume.chapters.map((chapter) => `
-        <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}" draggable="${proseEditable ? "true" : "false"}" title="${proseEditable ? "拖拽排序；Alt+方向键排序，Alt+Shift+方向键跨卷" : ""}">
-          <span>${esc(chapter.title)}</span><span class="chapter-node-meta">${chapter.chapterType && chapter.chapterType !== "正文" ? `<em class="chapter-type-badge">${esc(chapter.chapterType)}</em>` : ""}<small>${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small></span>
-        </button>`).join("")}
+      ${chapterContent}
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   $("#novel-tree").querySelectorAll("[data-volume-toggle]").forEach((button) => {
     button.addEventListener("click", () => {
       const volumeId = button.dataset.volumeToggle;
-      if (state.collapsedVolumeIds.has(volumeId)) state.collapsedVolumeIds.delete(volumeId);
-      else state.collapsedVolumeIds.add(volumeId);
+      if (state.collapsedVolumeIds.has(volumeId)) {
+        state.collapsedVolumeIds.delete(volumeId);
+        void loadVolumeChapters(volumeId);
+      } else state.collapsedVolumeIds.add(volumeId);
       renderTree();
     });
     button.addEventListener("contextmenu", (event) => {
@@ -3446,7 +3621,7 @@ function renderTree() {
         button.closest(".volume-node")?.classList.remove("is-drag-target");
         const chapterId = event.dataTransfer?.getData("text/plain");
         const volume = state.work?.volumes.find((item) => item.id === button.dataset.volumeToggle);
-        if (chapterId && volume) await moveChapterInTree(chapterId, volume.id, volume.chapters.length);
+        if (chapterId && volume) await moveChapterInTree(chapterId, volume.id, Number(volume.chapterCount ?? volume.chapters.length));
       });
     }
   });
@@ -3715,7 +3890,11 @@ async function deleteChapter(chapterId) {
 async function selectChapter(chapterId, { editMode = false } = {}) {
   if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) return;
   cancelChapterAutoSave();
-  state.chapter = await api(`/api/chapters/${chapterId}`);
+  if (state.chapter?.id !== chapterId) {
+    state.chapter = await api(`/api/chapters/${chapterId}`);
+    mergeChapterDirectoryEntry(state.chapter);
+  }
+  state.collapsedVolumeIds.delete(state.chapter.volumeId);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
   chapterEditorReadOnly = !canEditProse() || !editMode;
   state.module = "editor";
@@ -4152,6 +4331,15 @@ function mountRelationshipFilterToggle() {
   });
 }
 
+function mountDraftFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="draft-filter-toggle" aria-label="筛选草稿" aria-controls="draft-filter-panel" aria-expanded="${draftFiltersPanelOpen}" title="筛选草稿"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.addEventListener("click", async () => {
+    draftFiltersPanelOpen = !draftFiltersPanelOpen;
+    await renderDrafts(moduleListPages.drafts);
+  });
+}
+
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
     const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization ?? card.dataset.openReview;
@@ -4246,28 +4434,42 @@ function draftTypeLabel(draftType) {
 
 async function deleteDraft(item) {
   if (!item || !canEditModule("drafts")) return;
+  const dialog = $("#form-dialog");
+  dialog.close();
   if (!await confirmToast(`确认删除草稿“${item.title}”吗？草稿将从当前列表移除。`, {
     title: "删除草稿",
     confirmLabel: "确认删除"
-  })) return;
+  })) {
+    openDraftDialog(item);
+    return;
+  }
   try {
     await api(`/api/drafts/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderDrafts(moduleListPages.drafts);
     toast("草稿已删除");
   } catch (error) {
     toast(error.message, "error");
+    try {
+      openDraftDialog(await api(`/api/drafts/${encodeURIComponent(item.id)}`));
+    } catch (reloadError) {
+      toast(reloadError.message, "error");
+    }
   }
 }
 
 function openDraftDialog(item = null, { readOnly = false } = {}) {
   const viewOnly = readOnly || !canEditModule("drafts");
+  const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="草稿操作">
+    <div><strong>草稿操作</strong><small>删除后将从草稿列表移除，版本历史仍会保留。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除草稿</button></div>
+  </section>` : "";
   const fields = `<p class="form-field-note">草稿只记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
     + field("draftType", "草稿类型", "select", item?.draftType ?? "prose", [["prose", "正文草稿"], ["setting", "设定草稿"]])
     + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
       readOnly: viewOnly
-    });
+    }) + management;
   openDialog(item ? viewOnly ? "查看草稿" : "编辑草稿" : "新建草稿", fields, async (form) => {
     if (viewOnly) return;
     const title = String(form.get("title") ?? "").trim();
@@ -4287,7 +4489,7 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
   }, item ? draftTypeLabel(item.draftType) : "未确认想法", {
     submitLabel: viewOnly ? "关闭" : "保存草稿",
     hideCancel: viewOnly,
-    wide: true,
+    editor: true,
     errorPrefix: "草稿保存失败："
   });
   if (viewOnly) {
@@ -4296,10 +4498,13 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       else control.readOnly = true;
     });
   }
+  $("#dialog-fields").querySelector("[data-dialog-draft-delete]")?.addEventListener("click", () => {
+    void deleteDraft(item);
+  });
 }
 
 async function renderDrafts(page = moduleListPages.drafts) {
-  const allDrafts = await apiAllPages(`/api/works/${state.work.id}/drafts`);
+  const allDrafts = await moduleApiAllPages("drafts", `/api/works/${state.work.id}/drafts`);
   const drafts = draftTypeFilter === "all"
     ? allDrafts
     : allDrafts.filter((draft) => draft.draftType === draftTypeFilter);
@@ -4309,7 +4514,8 @@ async function renderDrafts(page = moduleListPages.drafts) {
   const layout = readModuleLayout();
   if (drafts.length) mountModuleLayoutToggle(layout, "草稿列表样式");
   else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
-  const filterToolbar = `<section class="draft-filter-toolbar" aria-label="草稿筛选">
+  mountDraftFilterToggle();
+  const filterToolbar = `<section id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="草稿筛选">
     <label for="draft-type-filter">草稿类型</label>
     <select id="draft-type-filter" aria-label="按草稿类型筛选">
       <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部草稿</option>
@@ -4319,7 +4525,7 @@ async function renderDrafts(page = moduleListPages.drafts) {
     ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 篇草稿</span>`}
   </section>`;
   const actions = (item) => canEditModule("drafts")
-    ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}<button type="button" data-delete-draft="${esc(item.id)}">删除</button>${recordHistoryButton("draft", item.id, item.title)}`
+    ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
     : recordHistoryButton("draft", item.id, item.title);
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
     <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
@@ -4344,12 +4550,12 @@ async function renderDrafts(page = moduleListPages.drafts) {
     : emptyDrafts);
   $("#draft-type-filter").addEventListener("change", async (event) => {
     draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    draftFiltersPanelOpen = true;
     moduleListPages.drafts = 1;
     await renderDrafts(1);
   });
   bindModuleLayoutToggle(() => renderDrafts(pageResult.page));
   bindModulePagination("drafts", renderDrafts);
-  const draftById = (draftId) => drafts.find((draft) => draft.id === draftId);
   $("#module-content").querySelectorAll("[data-open-draft]").forEach((card) => {
     const open = async () => openDraftDialog(await api(`/api/drafts/${encodeURIComponent(card.dataset.openDraft)}`), { readOnly: true });
     card.addEventListener("click", (event) => { if (!event.target.closest("button, a")) void open(); });
@@ -4362,9 +4568,6 @@ async function renderDrafts(page = moduleListPages.drafts) {
   });
   $("#module-content").querySelectorAll("[data-edit-draft]").forEach((button) => button.addEventListener("click", async () => {
     openDraftDialog(await api(`/api/drafts/${encodeURIComponent(button.dataset.editDraft)}`));
-  }));
-  $("#module-content").querySelectorAll("[data-delete-draft]").forEach((button) => button.addEventListener("click", () => {
-    void deleteDraft(draftById(button.dataset.deleteDraft));
   }));
   bindEntityHistoryButtons(() => renderDrafts(pageResult.page));
 }
@@ -4387,7 +4590,7 @@ function renderSettingRows(records) {
 }
 
 async function renderSettings(page = moduleListPages.settings) {
-  const records = await apiAllPages(`/api/works/${state.work.id}/settings`);
+  const records = await moduleApiAllPages("settings", `/api/works/${state.work.id}/settings`);
   state.settings = records;
   mountModuleCount(records.length);
   const pageResult = paginateModuleItems(records, page, "settings");
@@ -4408,9 +4611,11 @@ async function renderCharacters(page = characterListPage) {
   const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
-    hasCharacterFilters ? apiAllPages(`/api/works/${state.work.id}/characters`) : apiPage(`/api/works/${state.work.id}/characters`, page, pageSize),
-    canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
+    hasCharacterFilters
+      ? moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)
+      : moduleApiPage("characters", `/api/works/${state.work.id}/characters`, page, pageSize),
+    canReadModule("races") ? moduleApi("characters", `/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("organizations") ? moduleApiAllPages("characters", `/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   const characterPage = hasCharacterFilters
     ? paginateCharacters(filterCharacters(characterSource, characterFilters), page, pageSize)
@@ -4586,7 +4791,7 @@ async function renderRaces() {
   const workId = state.work.id;
   const generation = workScopedUiGeneration;
   const requestId = ++raceListRequestId;
-  const roots = await api(`/api/works/${workId}/races?scope=roots`);
+  const roots = await moduleApi("races", `/api/works/${workId}/races?scope=roots`);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
   state.races = roots.items;
   loadedRaceHierarchyWorkId = roots.items.length === roots.total ? workId : null;
@@ -4594,7 +4799,7 @@ async function renderRaces() {
   if (loadedRaceHierarchyWorkId === workId) return;
 
   const dismissLoadingToast = persistentToast("正在加载子种族……");
-  const loadPromise = api(`/api/works/${workId}/races?scope=descendants`).then((descendants) => {
+  const loadPromise = moduleApi("races", `/api/works/${workId}/races?scope=descendants`).then((descendants) => {
     if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== raceListRequestId) return;
     state.races = [...roots.items, ...descendants];
     loadedRaceHierarchyWorkId = workId;
@@ -4618,8 +4823,8 @@ async function renderRaces() {
 
 async function renderOrganizations(page = moduleListPages.organizations) {
   [state.organizations, state.characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/organizations`),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+    moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`),
+    canReadModule("characters") ? moduleApiAllPages("organizations", `/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   mountModuleCount(state.organizations.length);
   const pageResult = paginateModuleItems(state.organizations, page, "organizations");
@@ -4685,8 +4890,8 @@ function setTimelineMultiSelectMode(enabled) {
 
 async function renderTimeline(page = moduleListPages.timeline) {
   const [events, tracks] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/timeline`),
-    apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
+    moduleApiAllPages("timeline", `/api/works/${state.work.id}/timeline`),
+    moduleApiAllPages("timeline", `/api/works/${state.work.id}/timeline-tracks`)
   ]);
   mountModuleCount(events.length);
   const pageResult = paginateModuleItems(events, page, "timeline");
@@ -4729,8 +4934,8 @@ async function renderTimeline(page = moduleListPages.timeline) {
 async function renderOutlines(outlinePage = moduleListPages.outlinePlans, foreshadowPage = moduleListPages.foreshadows) {
   const currentChapterId = state.chapter?.id;
   const [outlines, foreshadows] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/outlines`),
-    apiAllPages(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
+    moduleApiAllPages("outlines", `/api/works/${state.work.id}/outlines`),
+    moduleApiAllPages("outlines", `/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
   ]);
   mountModuleCount(outlines.length + foreshadows.length);
   const outlinePageResult = paginateModuleItems(outlines, outlinePage, "outlines");
@@ -4783,8 +4988,8 @@ async function renderOutlines(outlinePage = moduleListPages.outlinePlans, foresh
 }
 
 async function renderRelationships(page = moduleListPages.relationships) {
-  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const relationships = await apiAllPages(`/api/works/${state.work.id}/relationships`);
+  state.characters = canReadModule("characters") ? await moduleApiAllPages("relationships", `/api/works/${state.work.id}/characters`) : [];
+  const relationships = await moduleApiAllPages("relationships", `/api/works/${state.work.id}/relationships`);
   const filteredRelationships = filterRelationships(relationships, relationshipFilters);
   const pageResult = paginateModuleItems(filteredRelationships, page, "relationships");
   moduleListPages.relationships = pageResult.page;
@@ -4858,8 +5063,8 @@ async function renderReviews(page = moduleListPages.reviews) {
   const canMergeCharacters = canResolveReview
     && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
   const [reviews, characters] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/reviews`),
-    canReadCharacters ? apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
+    moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`),
+    canReadCharacters ? moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
   ]);
   mountModuleCount(reviews.length);
   const pageResult = paginateModuleItems(reviews, page, "reviews");
@@ -4947,16 +5152,16 @@ async function renderReviews(page = moduleListPages.reviews) {
   }));
 }
 
-async function renderTasks(page = taskListPage) {
+async function renderTasks(page = taskListPage, { refresh = false } = {}) {
   stopTaskProgressRefresh();
   const pageSize = pageSizeFor("analysisTasks");
   const [taskPage, settings] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/tasks`, page, pageSize),
+    moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh }),
     canReadModule("ai-settings")
-      ? api(`/api/works/${state.work.id}/ai-settings`)
+      ? moduleApi("tasks", `/api/works/${state.work.id}/ai-settings`, { refresh })
       : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunPaused: false })
   ]);
-  if (!taskPage.items.length && page > 1) return renderTasks(page - 1);
+  if (!taskPage.items.length && page > 1) return renderTasks(page - 1, { refresh });
   taskListPage = taskPage.page;
   const tasks = taskPage.items;
   const taskTotal = Number(taskPage.total ?? taskPage.stats?.total ?? tasks.length);
@@ -5067,7 +5272,7 @@ async function renderTasks(page = taskListPage) {
         : "自动执行已关闭");
       taskAutoRunEditing = false;
       taskAutoRunEditingWorkId = null;
-      await renderTasks();
+      await renderTasks(taskListPage, { refresh: true });
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
@@ -5226,7 +5431,7 @@ function scheduleTaskProgressRefresh(workId, runningCount) {
       return;
     }
     try {
-      await renderTasks();
+      await renderTasks(taskListPage, { refresh: true });
     } catch (error) {
       console.error("Failed to refresh task progress", error);
       scheduleTaskProgressRefresh(workId, runningCount);
@@ -6106,12 +6311,12 @@ async function renderBookAiSettings() {
     relationshipSearchIndexRefreshTimer = null;
   }
   const [settings, providers, models, taskDefaults, relationshipIndex, usage] = await Promise.all([
-    api(`/api/works/${state.work.id}/ai-settings`),
-    api("/api/platform/ai/providers"),
-    api(`/api/works/${state.work.id}/models`),
-    api(`/api/works/${state.work.id}/task-defaults`),
-    api(`/api/works/${state.work.id}/ai-settings/relationship-search-index`),
-    api(`/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`)
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings`),
+    moduleApi("ai-settings", "/api/platform/ai/providers"),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/models`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/task-defaults`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/relationship-search-index`),
+    moduleApi("ai-settings", `/api/works/${state.work.id}/ai-settings/usage?timezoneOffset=${-new Date().getTimezoneOffset()}`)
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
@@ -6641,6 +6846,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   dialog.classList.toggle("wide-dialog", Boolean(options.wide));
   dialog.classList.toggle("trace-dialog", Boolean(options.trace));
   dialog.classList.toggle("large-dialog", Boolean(options.large));
+  dialog.classList.toggle("editor-dialog", Boolean(options.editor));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
   formDialogVditors = bindVditorEditors($("#dialog-fields"));
@@ -8758,23 +8964,30 @@ async function sendAi() {
     let assistantContent = "";
     let assistantMessage;
     let assistantMetadata = {};
+    let persistedStreamMessage = null;
     let suggestion = null;
     if (taskType === "chat") {
       const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId, currentMessageId: persistedUserMessage.id });
       assistantContent = streamed.content;
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
+      persistedStreamMessage = streamed.messageId ? { id: streamed.messageId, createdAt: streamed.createdAt } : null;
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
     try {
-      const persistedAssistantMessage = await persistAiConversationMessage("assistant", assistantContent, [], assistantMetadata);
-      if (assistantMessage) {
-        updateMessageCreatedAt(assistantMessage, persistedAssistantMessage.createdAt);
-        attachMessageIdentity(assistantMessage, persistedAssistantMessage.id);
-      } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id);
+      if (persistedStreamMessage) {
+        updateMessageCreatedAt(assistantMessage, persistedStreamMessage.createdAt);
+        attachMessageIdentity(assistantMessage, persistedStreamMessage.id);
+      } else {
+        const persistedAssistantMessage = await persistAiConversationMessage("assistant", assistantContent, [], assistantMetadata);
+        if (assistantMessage) {
+          updateMessageCreatedAt(assistantMessage, persistedAssistantMessage.createdAt);
+          attachMessageIdentity(assistantMessage, persistedAssistantMessage.id);
+        } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id);
+      }
     } catch (error) {
       if (suggestion) appendSuggestion(suggestion);
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
@@ -8814,6 +9027,8 @@ async function streamChat(body) {
   let generatedMetadata = {};
   let toolCalls = [];
   let processSteps = [];
+  let persistedMessageId = null;
+  let persistedMessageCreatedAt = null;
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -8868,6 +9083,8 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "complete") {
+        persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
+        persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         await typewriter.finish();
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -8895,7 +9112,7 @@ async function streamChat(body) {
     if (buffer.trim()) await consume(buffer);
     await typewriter.finish();
     if (streamError) throw streamError;
-    return { content: streamedText, message, metadata: generatedMetadata };
+    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt };
   } catch (error) {
     typewriter.reveal();
     message.classList.remove("is-streaming");

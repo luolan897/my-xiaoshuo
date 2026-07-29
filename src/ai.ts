@@ -158,6 +158,7 @@ type GenerateInput = {
   onProcessStep?: (step: AiProcessStep & { append?: boolean }) => void;
   conversationId?: string;
   excludeConversationMessageId?: string;
+  assistantMessageRequestId?: string;
   disableTools?: boolean;
   agentToolIds?: AgentToolId[];
   agentToolCallLimit?: number;
@@ -2419,7 +2420,29 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }), toolCalls: generated.toolCalls, processSteps: generated.processSteps };
+    const modelDisplayName = typeof generated.model.displayName === "string" ? generated.model.displayName : undefined;
+    const conversationMessage = input.conversationId && input.assistantMessageRequestId
+      ? this.store.addAiConversationMessage(input.conversationId, {
+        role: "assistant",
+        content: generated.content,
+        requestId: input.assistantMessageRequestId,
+        metadata: {
+          ...(modelDisplayName ? { modelDisplayName } : {}),
+          outputTokens: generated.outputTokens,
+          ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
+          toolCalls: generated.toolCalls,
+          processSteps: generated.processSteps
+        }
+      })
+      : null;
+    return {
+      ...this.getSuggestion(suggestionId),
+      outputTokens: generated.outputTokens,
+      ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
+      toolCalls: generated.toolCalls,
+      processSteps: generated.processSteps,
+      ...(conversationMessage ? { conversationMessage } : {})
+    };
   }
 
   async runSuggestionGuard(suggestionId: string, candidateContent?: string): Promise<Record<string, unknown>> {

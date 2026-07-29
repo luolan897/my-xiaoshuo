@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260730-table-wrap-menu-v1');
-    expect(page.text).toContain('/styles.css?v=20260730-table-wrap-menu-v1');
+    expect(page.text).toContain('/app.js?v=20260730-volume-lazy-module-cache-v1');
+    expect(page.text).toContain('/styles.css?v=20260730-drafts-stream-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -375,10 +375,10 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain('statuses.push("待确认")');
     expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
     expect(application.text).toContain('/race-hierarchy.js?v=20260729-race-tree-all-v1');
-    expect(application.text).toContain('const roots = await api(`/api/works/${workId}/races?scope=roots`);');
+    expect(application.text).toContain('const roots = await moduleApi("races", `/api/works/${workId}/races?scope=roots`);');
     expect(application.text).toContain('renderRaceCollection(roots.total, loadedRaceHierarchyWorkId !== workId);');
     expect(application.text).toContain('const dismissLoadingToast = persistentToast("正在加载子种族……");');
-    expect(application.text).toContain('api(`/api/works/${workId}/races?scope=descendants`)');
+    expect(application.text).toContain('moduleApi("races", `/api/works/${workId}/races?scope=descendants`)');
     expect(application.text).toContain('state.races = [...roots.items, ...descendants];');
     expect(application.text).toContain('aria-busy="${descendantsLoading}"');
     expect(application.text).not.toContain("paginateRaceForest");
@@ -567,7 +567,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("body.work-viewer-mode [data-edit-setting]");
     expect(styles.text).toContain("body.work-viewer-mode [data-merge-review]");
     expect(application.text).toContain('item.status === "pending" && canResolveReview');
-    expect(application.text).toContain('canReadCharacters ? apiAllPages');
+    expect(application.text).toContain('canReadCharacters ? moduleApiAllPages("reviews"');
     expect(application.text).toContain('const canReadAggregate = hasWork && canReadAggregateContent()');
     expect(styles.text).not.toContain(".app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button");
     expect(styles.text).toContain(".add-button { width: 24px; height: 24px;");
@@ -657,6 +657,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('selector: "[data-module=\\"tasks\\"]"');
     expect(styles.text).toContain(".module-nav .ai-analysis-entry");
     expect(styles.text).toContain(".module-nav .ai-analysis-entry,\n.module-nav .ai-analysis-entry:hover,\n.module-nav .ai-analysis-entry.active { background: transparent;");
+    expect(styles.text).toContain("#module-more-button { grid-column: 2;");
     expect(styles.text).toContain('.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: calc(100% + 6px); padding: 9px 8px 9px 20px;');
     expect(styles.text).toContain('.record-markdown-preview { display: -webkit-box;');
     expect(styles.text).toContain('-webkit-line-clamp: 12;');
@@ -733,7 +734,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
     expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");
-    expect(application.text).toContain('title="左键折叠，右键设置分卷；可将章节拖到这里追加"');
+    expect(application.text).toContain('title="左键展开或折叠；右键设置分卷；可将章节拖到这里追加"');
     expect(application.text).toContain("const proseEditable = canEditProse();");
     expect(application.text).toContain("${proseEditable ? `<button class=\"add-button chapter-add-button\"");
     expect(application.text).toContain('class="add-button chapter-add-button"');
@@ -764,7 +765,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")');
     expect(application.text).toContain('Number(work.wordCount ?? 0).toLocaleString("zh-CN")');
-    expect(application.text).toContain('<span>${volume.chapters.length} 章</span>');
+    expect(application.text).toContain('<span>${Number(volume.chapterCount ?? chapters.length)} 章</span>');
     expect(application.text).toContain("function renderKnowledgeMarkdownSections()");
     expect(application.text).toContain("data-knowledge-section-create");
     expect(application.text).toContain("function openKnowledgeSectionEditor");
