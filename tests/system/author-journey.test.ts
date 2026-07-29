@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260730-drafts-edit-delete-v1');
-    expect(page.text).toContain('/styles.css?v=20260730-drafts-edit-delete-v1');
+    expect(page.text).toContain('/app.js?v=20260730-module-request-cache-v1');
+    expect(page.text).toContain('/styles.css?v=20260730-drafts-stream-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -375,10 +375,10 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain('statuses.push("待确认")');
     expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
     expect(application.text).toContain('/race-hierarchy.js?v=20260729-race-tree-all-v1');
-    expect(application.text).toContain('const roots = await api(`/api/works/${workId}/races?scope=roots`);');
+    expect(application.text).toContain('const roots = await moduleApi("races", `/api/works/${workId}/races?scope=roots`);');
     expect(application.text).toContain('renderRaceCollection(roots.total, loadedRaceHierarchyWorkId !== workId);');
     expect(application.text).toContain('const dismissLoadingToast = persistentToast("正在加载子种族……");');
-    expect(application.text).toContain('api(`/api/works/${workId}/races?scope=descendants`)');
+    expect(application.text).toContain('moduleApi("races", `/api/works/${workId}/races?scope=descendants`)');
     expect(application.text).toContain('state.races = [...roots.items, ...descendants];');
     expect(application.text).toContain('aria-busy="${descendantsLoading}"');
     expect(application.text).not.toContain("paginateRaceForest");
@@ -567,7 +567,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("body.work-viewer-mode [data-edit-setting]");
     expect(styles.text).toContain("body.work-viewer-mode [data-merge-review]");
     expect(application.text).toContain('item.status === "pending" && canResolveReview');
-    expect(application.text).toContain('canReadCharacters ? apiAllPages');
+    expect(application.text).toContain('canReadCharacters ? moduleApiAllPages("reviews"');
     expect(application.text).toContain('const canReadAggregate = hasWork && canReadAggregateContent()');
     expect(styles.text).not.toContain(".app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button");
     expect(styles.text).toContain(".add-button { width: 24px; height: 24px;");

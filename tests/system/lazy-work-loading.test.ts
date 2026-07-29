@@ -34,6 +34,20 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain("await ensureAiConversationsLoaded();");
   });
 
+  it("作品模块按模块和请求参数复用页面生命周期缓存", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+
+    expect(application).toContain('createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1"');
+    expect(application).toContain('moduleApiAllPages("drafts", `/api/works/${state.work.id}/drafts`)');
+    expect(application).toContain('moduleApiAllPages("settings", `/api/works/${state.work.id}/settings`)');
+    expect(application).toContain('moduleApiPage("characters", `/api/works/${state.work.id}/characters`, page, pageSize)');
+    expect(application).toContain('moduleApiAllPages("relationships", `/api/works/${state.work.id}/relationships`)');
+    expect(application).toContain('moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh })');
+    expect(application).toContain('if (state.chapter?.id !== chapterId) state.chapter = await api(`/api/chapters/${chapterId}`)');
+    expect(application).toContain('await renderTasks(taskListPage, { refresh: true });');
+    expect(application).toContain("invalidateModuleRequestsAfterMutation(path, method);");
+  });
+
   it("种族列表不预加载角色，编辑器按需加载成员选项", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
     const renderRacesSource = application.slice(
@@ -45,9 +59,9 @@ describe("作品工作台按需加载", () => {
       application.indexOf("async function openRaceDialog(item, options)")
     );
 
-    expect(renderRacesSource).toContain('const roots = await api(`/api/works/${workId}/races?scope=roots`)');
+    expect(renderRacesSource).toContain('const roots = await moduleApi("races", `/api/works/${workId}/races?scope=roots`)');
     expect(renderRacesSource).toContain('const dismissLoadingToast = persistentToast("正在加载子种族……")');
-    expect(renderRacesSource).toContain('api(`/api/works/${workId}/races?scope=descendants`)');
+    expect(renderRacesSource).toContain('moduleApi("races", `/api/works/${workId}/races?scope=descendants`)');
     expect(renderRacesSource).toContain('state.races = [...roots.items, ...descendants]');
     expect(renderRacesSource).toContain("dismissLoadingToast();");
     expect(renderRacesSource).not.toContain("apiAllPages");
