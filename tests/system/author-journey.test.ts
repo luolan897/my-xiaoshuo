@@ -317,8 +317,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-auto-run-edit-mode-rebase-v1');
-    expect(page.text).toContain('/styles.css?v=20260729-continuous-analysis-queue-merge-v1');
+    expect(page.text).toContain('/app.js?v=20260729-auto-run-edit-position-rebase-v1');
+    expect(page.text).toContain('/styles.css?v=20260729-auto-run-edit-position-rebase-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -581,6 +581,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('let taskAutoRunEditing = false;');
     expect(application.text).toContain('const autoRunEditing = canConfigureAutoRun && taskAutoRunEditing');
     expect(application.text).toContain('id="task-auto-run-edit"');
+    expect(application.text).toContain('class="task-auto-run-actions"');
     expect(application.text).toContain('id="task-auto-run-pause"');
     expect(application.text).toContain('body: { autoRunEnabled: false }');
     expect(application.text).toContain("自动执行待分析任务");
