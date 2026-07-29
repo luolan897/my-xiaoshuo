@@ -1687,7 +1687,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ));
   });
   app.post("/api/tasks/:taskId/rerun", (request, response) => {
-    parse(z.object({}).strict(), request.body ?? {});
+    const input = parse(z.object({ modelId: identifier.optional() }).strict(), request.body ?? {});
     const task = store.getTask(request.params.taskId);
     const permissions = requestPermissions(request, String(task.workId));
     const deniedModules = analysisTaskReadModules(task.taskType, task.scope).filter((module) => permissions[module] === "none");
@@ -1697,7 +1697,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       });
     }
     data(response, redactTaskCharacterNames(
-      ai.rerunTask(request.params.taskId),
+      ai.rerunTask(request.params.taskId, input.modelId),
       requestPermissions(request)
     ), 201);
   });

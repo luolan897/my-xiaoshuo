@@ -4,6 +4,7 @@ import { renderMarkdown } from "/markdown.js?v=20260725-ordered-list";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
+import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
@@ -141,6 +142,8 @@ let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
 let taskProgressRefreshTimer = null;
+let taskAutoRunEditing = false;
+let taskAutoRunEditingWorkId = null;
 let relationshipSearchIndexRefreshTimer = null;
 let backgroundTaskCenterTimer = null;
 let backgroundTaskCenterRequest = 0;
@@ -3749,6 +3752,10 @@ async function showModule(module) {
     }
     module = fallback;
   }
+  if (module !== "tasks") {
+    taskAutoRunEditing = false;
+    taskAutoRunEditingWorkId = null;
+  }
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
@@ -4771,12 +4778,14 @@ async function renderTasks(page = taskListPage) {
   const taskTotal = Number(taskPage.total ?? taskPage.stats?.total ?? tasks.length);
   mountModuleCount(taskTotal);
   const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
+  const autoRunEditing = canConfigureAutoRun && taskAutoRunEditing && taskAutoRunEditingWorkId === state.work.id;
   const pendingCount = Number(taskPage.stats?.pendingCount ?? 0);
   const runningCount = Number(taskPage.stats?.runningCount ?? 0);
   const activeTaskCount = pendingCount + runningCount;
   const runningProgress = runningCount ? analysisTaskProgressValue(taskPage.stats?.runningProgress) : 0;
   const autoRunPaused = Boolean(settings.autoRunEnabled && settings.autoRunPaused);
   const autoRunActive = Boolean(settings.autoRunEnabled && !autoRunPaused);
+  const autoRunPauseLabel = autoRunPaused ? "恢复自动执行" : "暂停自动执行";
   const queueProgressLabel = runningCount
     ? "运行中任务平均进度"
     : autoRunPaused ? "自动执行已暂停" : autoRunActive ? "等待任务开始" : "自动执行已关闭";
@@ -4799,13 +4808,17 @@ async function renderTasks(page = taskListPage) {
         <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
         <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
       </div>
+      <div class="task-auto-run-actions">
+        ${autoRunEditing ? "" : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
+      </div>
       <div class="task-auto-run-controls">
-        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>持续自动执行</span></label>
-        <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
-        <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" aria-describedby="task-auto-run-daily-help"></label>
-        <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}"></label>
-        <button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button>
-        <button id="task-auto-run-toggle" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>${autoRunPaused ? "恢复自动执行" : "暂停自动执行"}</button>
+        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""} ${autoRunEditing ? "" : "disabled"}><span>持续自动执行</span></label>
+        <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-daily-help"></label>
+        <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        ${autoRunEditing
+          ? `<button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button><button id="task-auto-run-pause" class="ghost-button" type="button">${autoRunPauseLabel}</button>`
+          : ""}
       </div>
       <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个 · ${autoRunPaused ? "已暂停" : autoRunActive ? "持续执行中" : "未开启"}</p>
@@ -4844,6 +4857,12 @@ async function renderTasks(page = taskListPage) {
     await renderTasks(Number(button.dataset.taskPage));
   }));
 
+  $("#task-auto-run-edit")?.addEventListener("click", () => {
+    taskAutoRunEditing = true;
+    taskAutoRunEditingWorkId = state.work.id;
+    void renderTasks(taskListPage).catch((error) => toast(error.message, "error"));
+  });
+
   $("#task-auto-run-save")?.addEventListener("click", async () => {
     const button = $("#task-auto-run-save");
     button.disabled = true;
@@ -4860,15 +4879,16 @@ async function renderTasks(page = taskListPage) {
       toast(updated.autoRunEnabled
         ? `持续自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个`
         : "自动执行已关闭");
+      taskAutoRunEditing = false;
+      taskAutoRunEditingWorkId = null;
       await renderTasks();
-      window.setTimeout(() => $("#task-auto-run-save")?.focus(), 0);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
     }
   });
-  $("#task-auto-run-toggle")?.addEventListener("click", async () => {
-    const button = $("#task-auto-run-toggle");
+  $("#task-auto-run-pause")?.addEventListener("click", async () => {
+    const button = $("#task-auto-run-pause");
     button.disabled = true;
     try {
       if (autoRunPaused) {
@@ -4876,17 +4896,18 @@ async function renderTasks(page = taskListPage) {
         toast("自动执行已恢复");
       } else {
         await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { autoRunEnabled: false } });
-        toast("已暂停启动新的分析任务，正在运行的任务会继续完成");
+        toast("已暂停自动执行");
       }
+      taskAutoRunEditing = false;
+      taskAutoRunEditingWorkId = null;
       await refreshBackgroundTaskCenter({ announce: false });
       await renderTasks();
-      window.setTimeout(() => $(autoRunPaused ? "#task-auto-run-toggle" : "#task-auto-run-enabled")?.focus(), 0);
+      window.setTimeout(() => $("#task-auto-run-edit")?.focus(), 0);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
     }
   });
-
   $("#module-content").querySelectorAll("[data-task-detail]").forEach((button) => button.addEventListener("click", () => {
     if (button.disabled) return;
     button.disabled = true;
@@ -4950,6 +4971,51 @@ async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {
     if (closeDetail) $("#form-dialog").close();
     toast(`已按原配置创建新任务 ${rerun.id}`);
     if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+async function rerunAnalysisTaskWithModel(task, button) {
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "加载模型";
+  try {
+    const models = await api(`/api/works/${encodeURIComponent(task.workId)}/models`);
+    const currentModelId = String(task.model?.id ?? "");
+    const availableModels = models.filter((model) =>
+      model.id !== currentModelId
+      && model.enabled
+      && model.providerStatus === "enabled"
+      && model.providerConnectionStatus === "success"
+    );
+    if (!availableModels.length) throw new Error("当前没有其他可用模型，请先配置并测试模型");
+    $("#form-dialog").close();
+    const currentModelLabel = task.model?.displayName || "运行时默认模型";
+    openDialog("选择重试模型",
+      `<p class="task-rerun-model-intro">当前模型：${esc(currentModelLabel)}。选择其他模型后，将按原任务范围和最新资料创建新任务。</p><label>重试模型<select name="modelId" required aria-label="重试模型">
+        ${availableModels.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")}
+      </select></label>`,
+      async (form) => {
+        const modelId = String(form.get("modelId") ?? "").trim();
+        const selectedModel = availableModels.find((model) => model.id === modelId);
+        const rerun = await api(`/api/tasks/${encodeURIComponent(task.id)}/rerun`, {
+          method: "POST",
+          body: { modelId }
+        });
+        toast(`已使用${selectedModel ? `“${modelOptionLabel(selectedModel)}”` : "新模型"}创建重试任务 ${rerun.id}`);
+        await refreshBackgroundTaskCenter({ announce: false });
+        if (state.module === "tasks" && state.work?.id === task.workId) await renderTasks();
+      },
+      "AI 分析重试",
+      {
+        submitLabel: "换模型重试",
+        pendingLabel: "创建中…",
+        pendingMessage: "正在使用新模型创建重试任务，请稍候",
+        errorPrefix: "换模型重试失败："
+      });
   } catch (error) {
     toast(error.message, "error");
     button.disabled = false;
@@ -5407,7 +5473,7 @@ function openTaskDetailDialog(task, trace) {
         <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
         <div><strong>失败信息</strong>${failureHtml}${identityRepairHtml}</div>
         <div><strong>结果摘要</strong>${resultPreview}</div>
-        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重新执行</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
+        ${canRerunAnalysisTask(task) ? `<div class="task-detail-actions"><button class="primary-button" type="button" data-rerun-task-detail="${esc(task.id)}">按原配置重新执行</button><button class="ghost-button" type="button" data-rerun-task-model="${esc(task.id)}">换模型重试</button><small>新任务会重新读取当前正文、设定和人物资料，旧任务记录保持不变。</small></div>` : ""}
       </section>
       ${renderTaskTraceVisualization(trace, task.id)}
     </div>`,
@@ -5418,6 +5484,9 @@ function openTaskDetailDialog(task, trace) {
   bindTaskResultActions($("#dialog-fields"));
   $("#dialog-fields").querySelector("[data-rerun-task-detail]")?.addEventListener("click", async (event) => {
     await rerunAnalysisTask(event.currentTarget.dataset.rerunTaskDetail, event.currentTarget, { closeDetail: true });
+  });
+  $("#dialog-fields").querySelector("[data-rerun-task-model]")?.addEventListener("click", async (event) => {
+    await rerunAnalysisTaskWithModel(task, event.currentTarget);
   });
   $("#dialog-fields").querySelector("[data-task-identity-repair]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
@@ -6962,6 +7031,107 @@ function toggleVditorLineNumbers(editor) {
   const enabled = host.classList.toggle("show-line-numbers");
   const button = host.querySelector(".vditor-line-number-button");
   if (button) button.setAttribute("aria-pressed", String(enabled));
+  updateVditorLineNumbers(editor, getVditorMarkdown(editor));
+}
+
+function getVditorMarkdown(editor) {
+  if (typeof editor?.getValue === "function") {
+    try {
+      return String(editor.getValue() ?? "");
+    } catch {
+      return "";
+    }
+  }
+  const host = editor?.vditor?.element;
+  const valueField = host?.closest("[data-vditor-editor-field], .setting-markdown-field, .character-markdown-editor")?.querySelector("[data-vditor-value]")
+    ?? host?.parentElement?.querySelector("[data-vditor-value]");
+  return String(valueField?.value ?? "");
+}
+
+function getVditorVisibleSurface(content) {
+  const candidates = [
+    content.querySelector(".vditor-ir .vditor-reset"),
+    content.querySelector(".vditor-wysiwyg .vditor-reset"),
+    content.querySelector(".vditor-sv textarea"),
+    content.querySelector(".vditor-sv")
+  ];
+  return candidates.find((surface) => {
+    if (!surface) return false;
+    const rect = surface.getBoundingClientRect();
+    const style = getComputedStyle(surface);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }) ?? null;
+}
+
+function getVditorLineHeight(surface) {
+  const style = getComputedStyle(surface);
+  return parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5 || 24;
+}
+
+function collectVditorVisualLineRects(surface) {
+  const rects = [];
+  const scrollTop = Number(surface.scrollTop) || 0;
+  const visit = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!node.textContent) return;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      [...range.getClientRects()].forEach((rect) => {
+        if (rect.height > 0) rects.push({ top: rect.top + scrollTop, height: rect.height });
+      });
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    if (node.tagName === "BR") {
+      const rect = node.getBoundingClientRect();
+      if (rect.height > 0) rects.push({ top: rect.top + scrollTop, height: rect.height });
+    }
+    [...node.childNodes].forEach(visit);
+  };
+  visit(surface);
+  if (rects.length === 0) {
+    const rect = surface.getBoundingClientRect();
+    const style = getComputedStyle(surface);
+    rects.push({ top: rect.top + scrollTop + (parseFloat(style.paddingTop) || 0), height: getVditorLineHeight(surface) });
+  }
+  return rects;
+}
+
+function syncVditorLineNumberScroll(editor) {
+  const surface = editor?.__vditorLineNumberSurface;
+  const gutter = editor?.vditor?.element?.querySelector(".vditor-line-numbers");
+  if (!surface || !gutter) return;
+  gutter.style.transform = `translateY(${-surface.scrollTop}px)`;
+  gutter.dataset.scrollTop = String(surface.scrollTop);
+}
+
+function scheduleVditorLineNumbers(editor) {
+  if (!editor || editor.__vditorLineNumberFrame) return;
+  editor.__vditorLineNumberFrame = requestAnimationFrame(() => {
+    editor.__vditorLineNumberFrame = null;
+    updateVditorLineNumbers(editor, getVditorMarkdown(editor));
+  });
+}
+
+function setupVditorLineNumberSync(editor, content, surface) {
+  if (editor.__vditorLineNumberSurface !== surface) {
+    editor.__vditorLineNumberSurface?.removeEventListener("scroll", editor.__vditorLineNumberScrollHandler);
+    editor.__vditorLineNumberSurface = surface;
+    editor.__vditorLineNumberScrollHandler = () => syncVditorLineNumberScroll(editor);
+    surface.addEventListener("scroll", editor.__vditorLineNumberScrollHandler, { passive: true });
+  }
+  if (!editor.__vditorLineNumberObserver) {
+    editor.__vditorLineNumberObserver = new MutationObserver((mutations) => {
+      if (mutations.some((mutation) => !(mutation.target instanceof Element) || !mutation.target.closest(".vditor-line-numbers"))) {
+        scheduleVditorLineNumbers(editor);
+      }
+    });
+    editor.__vditorLineNumberObserver.observe(content, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style"] });
+  }
+  if (!editor.__vditorLineNumberResizeObserver && typeof ResizeObserver !== "undefined") {
+    editor.__vditorLineNumberResizeObserver = new ResizeObserver(() => scheduleVditorLineNumbers(editor));
+    editor.__vditorLineNumberResizeObserver.observe(content);
+  }
 }
 
 function updateVditorLineNumbers(editor, markdown) {
@@ -6974,14 +7144,30 @@ function updateVditorLineNumbers(editor, markdown) {
     gutter.setAttribute("aria-hidden", "true");
     content.prepend(gutter);
   }
-  const lineCount = Math.max(1, String(markdown ?? "").split(/\r?\n/gu).length);
+  const surface = getVditorVisibleSurface(content);
+  if (!surface) return;
+  setupVditorLineNumberSync(editor, content, surface);
+  const contentRect = content.getBoundingClientRect();
+  const lineHeight = getVditorLineHeight(surface);
+  const normalizedMarkdown = String(markdown ?? "").replace(/\r\n?/gu, "\n");
+  const blankLineCount = normalizedMarkdown.trim() === "" ? 0 : normalizedMarkdown.split("\n").filter((line) => line.trim() === "").length;
+  const visualRows = buildVditorLineNumberRows(collectVditorVisualLineRects(surface), { lineHeight, blankLineCount });
+  gutter.style.height = `${content.clientHeight}px`;
   const fragment = document.createDocumentFragment();
-  for (let line = 1; line <= lineCount; line += 1) {
+  visualRows.forEach((row, index) => {
     const number = document.createElement("span");
-    number.textContent = String(line);
+    number.className = "vditor-line-number";
+    number.textContent = String(index + 1);
+    number.dataset.lineNumber = String(index + 1);
+    number.dataset.blank = String(row.blank);
+    number.style.top = `${row.top - contentRect.top}px`;
+    number.style.height = `${row.height}px`;
+    number.style.lineHeight = `${row.height}px`;
     fragment.append(number);
-  }
+  });
   gutter.replaceChildren(fragment);
+  gutter.dataset.lineCount = String(visualRows.length);
+  syncVditorLineNumberScroll(editor);
 }
 
 function updateVditorWordCount(editor, markdown) {
@@ -7026,6 +7212,12 @@ function ensureVditorIconScript() {
 function destroyVditorEditor(editor) {
   if (!editor) return;
   editor.__attachmentObserver?.disconnect();
+  editor.__vditorLineNumberObserver?.disconnect();
+  editor.__vditorLineNumberResizeObserver?.disconnect();
+  if (editor.__vditorLineNumberSurface && editor.__vditorLineNumberScrollHandler) {
+    editor.__vditorLineNumberSurface.removeEventListener("scroll", editor.__vditorLineNumberScrollHandler);
+  }
+  if (editor.__vditorLineNumberFrame) cancelAnimationFrame(editor.__vditorLineNumberFrame);
   const host = editor.vditor?.element;
   editor.destroy();
   if (host) delete host.__vditor;
@@ -8715,18 +8907,22 @@ async function showChapterInsight() {
   if (requestId !== chapterInsightRequestId || state.chapter?.id !== chapterId || $("#editor-view").classList.contains("hidden")) return;
   const insight = insights.find((item) => item.chapterVersion === state.chapter.versionNo) ?? insights[0];
   const region = $("#toast-region");
+  const chapterTitle = state.chapter.title;
   const element = document.createElement("section");
   element.id = "chapter-insight-toast";
   element.className = "toast chapter-insight-toast";
   element.setAttribute("role", "region");
-  element.setAttribute("aria-label", "章节概览");
+  element.setAttribute("aria-label", `章节概览：${chapterTitle}`);
   const header = document.createElement("header");
   header.className = "chapter-insight-toast-header";
   const heading = document.createElement("div");
   heading.className = "chapter-insight-toast-heading";
   const title = document.createElement("strong");
   title.textContent = "章节概览";
-  heading.append(title);
+  const chapterName = document.createElement("span");
+  chapterName.className = "chapter-insight-toast-chapter-title";
+  chapterName.textContent = chapterTitle;
+  heading.append(title, chapterName);
   if (insight && insight.chapterVersion !== state.chapter.versionNo) {
     const stale = document.createElement("span");
     stale.textContent = `基于旧版本 v${insight.chapterVersion}`;

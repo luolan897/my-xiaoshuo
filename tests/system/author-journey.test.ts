@@ -98,8 +98,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
     expect(application.text).toContain('element.className = "toast chapter-insight-toast"');
     expect(application.text).toContain('element.id = "chapter-insight-toast"');
+    expect(application.text).toContain('chapterName.className = "chapter-insight-toast-chapter-title"');
+    expect(application.text).toContain('chapterName.textContent = chapterTitle');
     expect(application.text).toContain("function dismissChapterInsightToast()");
     expect(styles.text).toContain(".chapter-insight-toast {");
+    expect(styles.text).toContain(".chapter-insight-toast-heading .chapter-insight-toast-chapter-title");
     expect(application.text).toContain('data-toggle-whitespace');
     expect(application.text).toContain('document.querySelectorAll("[data-toggle-whitespace]")');
     expect(page.text).toContain('id="toggle-whitespace-appearance"');
@@ -317,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260729-continuous-analysis-queue-merge-v1');
-    expect(page.text).toContain('/styles.css?v=20260729-continuous-analysis-queue-merge-v1');
+    expect(page.text).toContain('/app.js?v=20260729-analysis-rerun-vditor-ui-v1');
+    expect(page.text).toContain('/styles.css?v=20260729-analysis-rerun-vditor-ui-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -578,6 +581,12 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openTaskDetailDialog(task, trace)");
     expect(application.text).toContain('$("#dialog-fields").scrollTop = 0;');
     expect(application.text).toContain('id="task-auto-run-enabled"');
+    expect(application.text).toContain('let taskAutoRunEditing = false;');
+    expect(application.text).toContain('const autoRunEditing = canConfigureAutoRun && taskAutoRunEditing');
+    expect(application.text).toContain('id="task-auto-run-edit"');
+    expect(application.text).toContain('class="task-auto-run-actions"');
+    expect(application.text).toContain('id="task-auto-run-pause"');
+    expect(application.text).toContain('body: { autoRunEnabled: false }');
     expect(application.text).toContain("自动执行待分析任务");
     expect(application.text).toContain("不会自动创建人物关系、世界观或其他分析");
     expect(application.text).toContain("开启后会持续执行直到队列清空");
@@ -697,7 +706,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".book-card-settings {");
     expect(styles.text).toContain("padding: 2px 6px;");
     expect(styles.text).toContain(".left-panel { display: flex; flex-direction: column; border-right: 1px solid var(--line); padding: 0; overflow: hidden; }");
-    expect(styles.text).toContain(".left-panel-body { flex: 1 1 auto; min-height: 0; padding: 18px 14px 16px; overflow-y: auto; }");
+    expect(styles.text).toContain(".left-panel-body { flex: 1 1 auto; min-height: 0; padding: 18px 28px 16px 14px; overflow-y: auto; scrollbar-gutter: stable; }");
+    expect(styles.text).toContain(".left-panel-body { padding-inline: 10px 24px; }");
     expect(page.text).toContain('class="left-panel-body"');
     expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
     expect(styles.text).toContain(".file-button { min-height: 30px; font-size: 11px;");
