@@ -904,6 +904,7 @@ let characterSectionEditorDirty = false;
 let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
+let formDialogVditors = [];
 let entityHistoryContext = null;
 let moduleContentInteractionsBound = false;
 
@@ -6575,6 +6576,8 @@ function commitRelationshipKeywordInputs(container) {
 }
 
 function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
+  formDialogVditors.forEach(destroyVditorEditor);
+  formDialogVditors = [];
   void discardPendingMarkdownAttachments();
   const dialog = $("#form-dialog");
   const form = $("#dynamic-form");
@@ -6599,7 +6602,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   dialog.classList.toggle("trace-dialog", Boolean(options.trace));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
-  bindVditorEditors($("#dialog-fields"));
+  formDialogVditors = bindVditorEditors($("#dialog-fields"));
   form.onclick = null;
   form.onkeydown = null;
   dialog.oncancel = (event) => {
@@ -7373,6 +7376,7 @@ function destroyVditorEditor(editor) {
 }
 
 function bindVditorEditors(container) {
+  const editors = [];
   container.querySelectorAll("[data-vditor-editor]").forEach((host) => {
     const valueField = host.parentElement?.querySelector("[data-vditor-value]");
     const editor = createVditorEditor(host, valueField?.value ?? "", {
@@ -7383,7 +7387,9 @@ function bindVditorEditors(container) {
       placeholder: host.dataset.placeholder ?? "",
       readOnly: Boolean(valueField?.readOnly)
     });
+    if (editor) editors.push(editor);
   });
+  return editors;
 }
 
 function characterSectionImageLabel(file, fallback = "图片附件") {
@@ -9747,6 +9753,9 @@ $("#members-dialog").addEventListener("close", () => {
   memberDialogDirectory = [];
 });
 $("#form-dialog").addEventListener("close", () => {
+  formDialogVditors.forEach(destroyVditorEditor);
+  formDialogVditors = [];
+  void discardPendingMarkdownAttachments();
   if (relationshipPresenceId && !$("#form-dialog").open) setRelationshipPresence(null);
 });
 $("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));

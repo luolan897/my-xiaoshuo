@@ -18,7 +18,7 @@ describe("草稿模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">草稿</button>");
-    expect(page.text).toContain('/app.js?v=20260729-draft-filter-v1');
+    expect(page.text).toContain('/app.js?v=20260729-draft-vditor-lifecycle-v1');
     expect(application.text).toContain('drafts: ["临时想法", "创作草稿"');
     expect(application.text).toContain('[["prose", "正文草稿"], ["setting", "设定草稿"]]');
     expect(application.text).toContain('field("content", "内容", "markdown"');
@@ -31,5 +31,7 @@ describe("草稿模块界面", () => {
     expect(application.text).toContain('>设定草稿</option>');
     expect(application.text).toContain('draft.draftType === draftTypeFilter');
     expect(application.text).toContain('没有符合筛选条件的草稿');
+    expect(application.text).toContain('formDialogVditors = bindVditorEditors($("#dialog-fields"))');
+    expect(application.text).toContain('formDialogVditors.forEach(destroyVditorEditor)');
   });
 });
