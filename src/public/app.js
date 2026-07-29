@@ -872,6 +872,7 @@ let entityEditorReadOnly = false;
 let chapterEditorReadOnly = true;
 let characterListPage = 1;
 let taskListPage = 1;
+let draftTypeFilter = "all";
 const moduleListPages = {
   drafts: 1,
   settings: 1,
@@ -3302,6 +3303,7 @@ function resetWorkScopedUiCaches() {
   state.settings = [];
   state.races = [];
   characterListPage = 1;
+  draftTypeFilter = "all";
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
@@ -4256,12 +4258,25 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
 }
 
 async function renderDrafts(page = moduleListPages.drafts) {
-  const drafts = await apiAllPages(`/api/works/${state.work.id}/drafts`);
+  const allDrafts = await apiAllPages(`/api/works/${state.work.id}/drafts`);
+  const drafts = draftTypeFilter === "all"
+    ? allDrafts
+    : allDrafts.filter((draft) => draft.draftType === draftTypeFilter);
   mountModuleCount(drafts.length);
   const pageResult = paginateModuleItems(drafts, page, "drafts");
   moduleListPages.drafts = pageResult.page;
   const layout = readModuleLayout();
   if (drafts.length) mountModuleLayoutToggle(layout, "草稿列表样式");
+  else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+  const filterToolbar = `<section class="draft-filter-toolbar" aria-label="草稿筛选">
+    <label for="draft-type-filter">草稿类型</label>
+    <select id="draft-type-filter" aria-label="按草稿类型筛选">
+      <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部草稿</option>
+      <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文草稿</option>
+      <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定草稿</option>
+    </select>
+    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 篇草稿</span>`}
+  </section>`;
   const actions = (item) => canEditModule("drafts")
     ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}<button type="button" data-delete-draft="${esc(item.id)}">删除</button>${recordHistoryButton("draft", item.id, item.title)}`
     : recordHistoryButton("draft", item.id, item.title);
@@ -4280,9 +4295,17 @@ async function renderDrafts(page = moduleListPages.drafts) {
       <div class="card-actions">${actions(item)}</div>
     </article>`;
   }).join("")}</div>`;
-  $("#module-content").innerHTML = drafts.length
-    ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "草稿列表")}`
+  const emptyDrafts = allDrafts.length
+    ? emptyModule("没有符合筛选条件的草稿", "可以切换草稿类型查看其他想法。")
     : emptyModule("还没有草稿", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
+  $("#module-content").innerHTML = filterToolbar + (drafts.length
+    ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "草稿列表")}`
+    : emptyDrafts);
+  $("#draft-type-filter").addEventListener("change", async (event) => {
+    draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
   bindModuleLayoutToggle(() => renderDrafts(pageResult.page));
   bindModulePagination("drafts", renderDrafts);
   const draftById = (draftId) => drafts.find((draft) => draft.id === draftId);
