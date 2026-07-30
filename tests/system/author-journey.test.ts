@@ -320,7 +320,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260731-comments-develop-merge-v1');
+    expect(page.text).toContain('/app.js?v=20260731-presence-count-v1');
     expect(page.text).toContain('/styles.css?v=20260731-left-scroll-gap-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -334,6 +334,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
     expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
     expect(page.text).toContain('id="presence-button"');
+    expect(page.text).toContain('<span id="presence-count">1 人</span>');
+    expect(page.text).not.toContain('id="presence-count">1 人在线</span>');
     expect(page.text).toContain('id="presence-list"');
     expect(application.text).toContain("function handleRelationshipCollaborativeChanges(recentChanges)");
     expect(application.text).toContain("人物关系已更新");
@@ -501,6 +503,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
+    expect(application.text).toContain('description.textContent = item.key === "skills" ? "待加入" : "用户和 agent 的交互";');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
     expect(application.text).toContain("多人协作，自动保存已关闭");
     expect(application.text).toContain("if (automatic) {");

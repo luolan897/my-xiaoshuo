@@ -11,7 +11,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260730-token-distribution-v4";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260731-skills-description-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -667,7 +667,7 @@ function renderPresence() {
   const localKey = presencePageKey(presencePageForRoute());
   syncChapterAutoSaveWithPresence();
   control.classList.remove("hidden");
-  $("#presence-count").textContent = `${groups.length} 人在线`;
+  $("#presence-count").textContent = `${groups.length} 人`;
   $("#presence-list").innerHTML = groups.map((participant) => {
     const isCurrent = participant.userId === state.user?.userId;
     const samePage = !isCurrent && participant.pages.some((page) => page.key === localKey);
@@ -6763,9 +6763,9 @@ function renderAiContextDistribution(usage) {
     label.className = "ai-context-distribution-label";
     const title = document.createElement("span");
     title.textContent = item.label;
-    if (item.key === "context") {
+    if (item.key === "skills" || item.key === "context") {
       const description = document.createElement("small");
-      description.textContent = "用户和 agent 的交互";
+      description.textContent = item.key === "skills" ? "待加入" : "用户和 agent 的交互";
       title.append(" ", description);
     }
     const value = document.createElement("strong");

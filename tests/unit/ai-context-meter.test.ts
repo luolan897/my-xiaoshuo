@@ -34,7 +34,7 @@ describe("AI 上下文用量提示", () => {
       items: [
         { key: "system-prompt", label: "system prompt", tokens: 120, percent: 12 },
         { key: "function", label: "function", tokens: 80, percent: 8 },
-        { key: "skills", label: "skills 待加入", tokens: 0, percent: 0 },
+        { key: "skills", label: "skills", tokens: 0, percent: 0 },
         { key: "context", label: "context", tokens: 300, percent: 30 },
         { key: "left", label: "left", tokens: 500, percent: 50 }
       ]
