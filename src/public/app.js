@@ -11,7 +11,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260730-token-distribution-v2";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260730-token-distribution-v4";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -6622,7 +6622,7 @@ function renderAiContextDistribution(usage) {
   const distribution = normalizeAiContextTokenDistribution(usage);
   const contextWindow = distribution.contextWindow.toLocaleString("zh-CN");
   $("#ai-context-popover-description").textContent = usage
-    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok`
+    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok · ${formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow)}`
     : "选择可用模型后显示当前上下文用量";
   host.replaceChildren(...distribution.items.map((item) => {
     const row = document.createElement("div");

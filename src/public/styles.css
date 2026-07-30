@@ -2163,7 +2163,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-context-meter b { position: relative; z-index: 1; font-size: 9px; font-weight: 600; }.ai-context-meter.is-warning { --context-meter-color: #bf6a35; }.ai-context-meter.is-danger { --context-meter-color: #ad463c; }.ai-context-meter.is-empty { opacity: .62; }
 .ai-context-popover { position: absolute; right: 0; bottom: calc(100% + 10px); z-index: 40; display: grid; width: min(320px, calc(100vw - 32px)); gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); box-shadow: 0 14px 38px rgba(36, 30, 24, .18); }
 .ai-context-popover.hidden { display: none; }
-.ai-context-popover::after { position: absolute; right: 12px; bottom: -6px; width: 10px; height: 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--paper); content: ""; transform: rotate(45deg); }
+.ai-context-popover::after { position: absolute; right: 71px; bottom: -6px; width: 10px; height: 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--paper); content: ""; transform: rotate(45deg); }
 .ai-context-popover-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .ai-context-popover-header > div { display: grid; gap: 3px; min-width: 0; }
 .ai-context-popover-header strong { font-size: 12px; }
