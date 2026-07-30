@@ -116,15 +116,15 @@ export const cliResourceDefinitions = {
     notes: ["标题或正文变化会生成新章节版本；restore 也会生成新版本。"]
   },
   draft: {
-    description: "正文草稿或设定草稿",
+    description: "正文想法或设定想法",
     scopeArgument: "workId",
     actions: ["list", "get", "create", "update", "history", "restore"],
     create: {
       required: ["draftType", "title"],
       properties: {
         draftType: "prose | setting",
-        title: "草稿标题，最多 200 字",
-        content: "草稿正文，最多 20 万字符"
+        title: "想法标题，最多 200 字",
+        content: "想法内容，最多 20 万字符"
       },
       example: { draftType: "prose", title: "北港雨夜备选开场", content: "雨水沿着舷窗向上流动。" }
     },
@@ -132,12 +132,12 @@ export const cliResourceDefinitions = {
       properties: {
         draftType: "prose | setting",
         title: "新标题",
-        content: "完整替换草稿正文；长文本推荐使用 --field-file content=draft.md",
+        content: "完整替换想法内容；长文本推荐使用 --field-file content=draft.md",
         changeNote
       },
       example: { content: "雨水沿着舷窗向上流动，港口警报却沉入海雾。", changeNote: "强化开场悬念" }
     },
-    notes: ["草稿修改会生成版本历史；restore 会生成新版本，删除不通过 CLI 开放。"]
+    notes: ["想法修改会生成版本历史；restore 会生成新版本，删除不通过 CLI 开放。"]
   },
   setting: {
     description: "世界观设定",

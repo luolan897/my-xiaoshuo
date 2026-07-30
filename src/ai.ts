@@ -574,7 +574,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "search_drafts",
-      description: "搜索当前作品的作者草稿。草稿只是用于记录可能采用、也可能永远不会写入正文或正式设定的临时想法，不是已确认的故事事实，不能当作正文或设定依据。可按关键词和“正文草稿/设定草稿”类型筛选；query 为空时返回最近更新的草稿。",
+      description: "搜索当前作品的作者想法。想法用于记录可能采用、也可能永远不会写入正文或正式设定的临时方向，不是已确认的故事事实，不能当作正文或设定依据。可按关键词和“正文想法/设定想法”类型筛选；query 为空时返回最近更新的想法。",
       parameters: { type: "object", properties: { query: { type: "string", maxLength: 200, default: "" }, draftType: { type: "string", enum: ["all", "prose", "setting"], default: "all" }, limit: { type: "integer", minimum: 1, maximum: 30, default: 20 } }, additionalProperties: false }
     }
   }
@@ -3189,7 +3189,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到草稿时调用 search_drafts。草稿可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -3466,7 +3466,7 @@ export class AiManager {
         return {
           id: draft.id,
           draftType: draft.draftType,
-          draftTypeLabel: draft.draftType === "prose" ? "正文草稿" : "设定草稿",
+          draftTypeLabel: draft.draftType === "prose" ? "正文想法" : "设定想法",
           title: draft.title,
           content: excerpt,
           contentTruncated: excerpt.length < content.length,
