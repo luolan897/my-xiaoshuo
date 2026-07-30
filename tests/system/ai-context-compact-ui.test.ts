@@ -29,7 +29,9 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('prepared.action === "warn"');
     expect(application).toContain('prepared.action === "compacted"');
     expect(application).toContain("normalizeAiContextTokenDistribution");
+    expect(application).toContain("formatAiContextUsagePercent");
     expect(application).toContain("setAiContextDistributionVisible");
+    expect(styles).toContain(".ai-context-popover::after { position: absolute; right: 71px;");
     expect(styles).toContain(".ai-context-popover.hidden { display: none; }");
     expect(styles).toContain(".ai-context-warning.hidden { display: none; }");
   });
