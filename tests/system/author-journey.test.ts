@@ -320,7 +320,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260731-context-usage-popover-drafts-to-ideas-model-test-dialog-v1');
+    expect(page.text).toContain('/app.js?v=20260731-ai-request-consolidation-v1');
     expect(page.text).toContain('/styles.css?v=20260731-context-usage-popover-drafts-to-ideas-model-test-dialog-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -798,7 +798,8 @@ describe("作者完整创作流程", () => {
     expect(modelConfig.text).toContain("maxTokens: model?.preset?.max_tokens ?? 32000");
     expect(application.text).toContain('async function renderPlatformAiConfig()');
     expect(application.text).toContain('async function renderBookAiSettings()');
-    expect(application.text).toContain('function scheduleAiContextUsage()');
+    expect(application.text).not.toContain("ai-context-usage");
+    expect(application.text).toContain("setAiContextMeter(payload.contextUsage)");
     expect(application.text).toContain('addEventListener("contextmenu"');
     expect(application.text).toContain("collapsedVolumeIds");
     expect(application.text).toContain('data-testid="continuation-guard"');

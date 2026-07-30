@@ -1244,7 +1244,7 @@ function renderAiCitations() {
     card.append(main, remove, fullText);
     host.append(card);
   }
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 function aiReferenceKey(reference) {
@@ -1288,7 +1288,7 @@ function renderAiReferences() {
     if (rendered.has(aiReferenceKey(reference))) continue;
     prompt.append(createAiReferenceChip(reference), document.createTextNode(" "));
   }
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 function renderAiQuickActions() {
@@ -2242,7 +2242,6 @@ function invalidateModuleRequestsAfterMutation(path, method) {
     path.startsWith("/api/auth/")
     || path.includes("/presence")
     || path.includes("/context/prepare")
-    || path.includes("/ai-context-usage")
     || path.includes("/chat/stream")
   ) return;
 
@@ -3476,9 +3475,6 @@ function resetWorkScopedUiCaches() {
   volumeChapterRequests.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
-  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-  aiContextUsageTimer = null;
-  aiContextUsageRequest += 1;
   state.aiCitations = [];
   state.aiReferences = [];
   state.aiPromptSent = false;
@@ -6439,7 +6435,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { systemPrompt: $("#work-system-prompt").value } });
       toast("本书系统提示词已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6492,7 +6488,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { bookSummaryContextPercent: Number($("#book-summary-context-percent").value) } });
       toast("全书概要引用配额已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6505,7 +6501,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { contextCompactThreshold: Number($("#context-compact-threshold").value) } });
       toast("对话上下文 compact 阈值已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6562,7 +6558,7 @@ async function loadModels() {
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 async function ensureAiModelsLoaded() {
@@ -6585,9 +6581,6 @@ async function ensureAiModelsLoaded() {
     }
   }
 }
-
-let aiContextUsageTimer = null;
-let aiContextUsageRequest = 0;
 
 function currentAiRequestScope() {
   if (!state.work) return null;
@@ -6707,41 +6700,6 @@ async function prepareAiConversationContext({ instruction, scope, modelId, citat
   hideAiContextWarning();
   if (prepared.action === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
   return true;
-}
-
-function scheduleAiContextUsage() {
-  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-  aiContextUsageTimer = setTimeout(() => {
-    aiContextUsageTimer = null;
-    void refreshAiContextUsage();
-  }, 260);
-}
-
-async function refreshAiContextUsage() {
-  const requestScope = currentAiRequestScope();
-  const modelId = $("#ai-model").value;
-  if (!requestScope || !modelId || (requestScope.taskType === "polish" && !requestScope.selection)) {
-    setAiContextMeter(null);
-    return;
-  }
-  const requestId = ++aiContextUsageRequest;
-  try {
-    const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
-    const usage = await api(`/api/works/${state.work.id}/ai-context-usage`, {
-      method: "POST",
-      body: {
-        modelId,
-        taskType: requestScope.taskType,
-        scope: requestScope.scope,
-        instruction: aiPromptText(),
-        citations,
-        conversationId: state.aiConversationId || undefined
-      }
-    });
-    if (requestId === aiContextUsageRequest) setAiContextMeter(usage);
-  } catch {
-    if (requestId === aiContextUsageRequest) setAiContextMeter(null);
-  }
 }
 
 async function loadAiReferences() {
@@ -9118,6 +9076,7 @@ async function sendAi() {
       applyAiConversationTitle(streamed.conversationTitle);
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
+      setAiContextMeter(suggestion.contextUsage);
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
@@ -9231,6 +9190,7 @@ async function streamChat(body) {
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
+        setAiContextMeter(payload.contextUsage);
         await typewriter.finish();
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -10397,9 +10357,9 @@ $("#chapter-content").addEventListener("input", (event) => {
   scheduleChapterAutoSave();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 });
-$("#chapter-content").addEventListener("select", scheduleAiContextUsage);
+$("#chapter-content").addEventListener("select", () => setAiContextMeter(null));
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
@@ -10480,7 +10440,7 @@ $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!m
 $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftDialog, settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
   if (!findAiMention(aiPromptTextBeforeCursor())) return;
   try {
     await ensureAiReferencesLoaded();
@@ -10495,9 +10455,9 @@ $("#ai-prompt").addEventListener("focus", () => {
 $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
-$("#ai-model").addEventListener("change", scheduleAiContextUsage);
-$("#ai-task").addEventListener("change", scheduleAiContextUsage);
-$("#ai-scope").addEventListener("change", scheduleAiContextUsage);
+$("#ai-model").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-task").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-scope").addEventListener("change", () => setAiContextMeter(null));
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
@@ -10700,7 +10660,7 @@ $("#ai-context-compact").addEventListener("click", async () => {
     });
     hideAiContextWarning();
     toast(result.changed ? `已整理 ${result.compactedMessageCount} 条较早消息为长期记忆` : "当前没有需要整理的较早消息");
-    await refreshAiContextUsage();
+    setAiContextMeter(result.usage);
   } catch (error) {
     toast(`上下文压缩失败：${error.message}`, "error");
   } finally {

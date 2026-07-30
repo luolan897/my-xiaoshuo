@@ -2524,7 +2524,14 @@ export class AiManager {
       currentRequestActor()?.userId ?? null
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }), toolCalls: generated.toolCalls, processSteps: generated.processSteps };
+    return {
+      ...this.getSuggestion(suggestionId),
+      outputTokens: generated.outputTokens,
+      ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
+      toolCalls: generated.toolCalls,
+      processSteps: generated.processSteps,
+      contextUsage: this.getContextUsage(effectiveInput)
+    };
   }
 
   async createStreamingChat(

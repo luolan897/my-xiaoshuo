@@ -68,22 +68,20 @@ describe("AI 对话上下文压缩", () => {
     }
     const requestBody = { modelId, scope: { type: "chapter", chapterId }, instruction: "继续回答燃料问题。" };
 
-    const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({ ...requestBody, taskType: "chat", conversationId }).expect(200);
-    expect(usage.body.data).toMatchObject({ compactThreshold: 50, compactRecommended: true, contextWarningPending: false });
-    expect(usage.body.data.usagePercent).toBeGreaterThanOrEqual(50);
-    expect(usage.body.data.tokenDistribution).toEqual(expect.objectContaining({
+    const warned = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
+    const usage = warned.body.data.usage;
+    expect(warned.body.data).toMatchObject({ action: "warn", usage: { compactThreshold: 50, compactRecommended: true, contextWarningPending: true } });
+    expect(usage.usagePercent).toBeGreaterThanOrEqual(50);
+    expect(usage.tokenDistribution).toEqual(expect.objectContaining({
       systemPromptTokens: expect.any(Number),
       functionTokens: expect.any(Number),
       skillsTokens: 0,
       contextTokens: expect.any(Number),
       leftTokens: expect.any(Number)
     }));
-    expect(usage.body.data.tokenDistribution.systemPromptTokens + usage.body.data.tokenDistribution.functionTokens
-      + usage.body.data.tokenDistribution.skillsTokens + usage.body.data.tokenDistribution.contextTokens
-      + usage.body.data.tokenDistribution.leftTokens).toBe(usage.body.data.contextWindow);
-
-    const warned = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
-    expect(warned.body.data).toMatchObject({ action: "warn", usage: { contextWarningPending: true } });
+    expect(usage.tokenDistribution.systemPromptTokens + usage.tokenDistribution.functionTokens
+      + usage.tokenDistribution.skillsTokens + usage.tokenDistribution.contextTokens
+      + usage.tokenDistribution.leftTokens).toBe(usage.contextWindow);
     expect(fetchMock).not.toHaveBeenCalled();
 
     const compacted = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
@@ -156,30 +154,27 @@ describe("AI 对话上下文压缩", () => {
       await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
     }
 
-    const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({
+    const prepared = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send({
       modelId,
-      taskType: "chat",
       scope: { type: "chapter", chapterId },
-      instruction: "概括当前章节。",
-      conversationId
+      instruction: "概括当前章节。"
     }).expect(200);
+    const usage = prepared.body.data.usage;
 
-    expect(usage.body.data.compactRecommended).toBe(false);
-    expect(usage.body.data.degradedContextBlocks).toBeGreaterThan(0);
-    expect(usage.body.data.inputTokens).toBeLessThan(usage.body.data.contextWindow);
-    expect(usage.body.data).toMatchObject({ conversationTokens: expect.any(Number), conversationBudgetTokens: expect.any(Number) });
+    expect(usage.compactRecommended).toBe(false);
+    expect(usage.degradedContextBlocks).toBeGreaterThan(0);
+    expect(usage.inputTokens).toBeLessThan(usage.contextWindow);
+    expect(usage).toMatchObject({ conversationTokens: expect.any(Number), conversationBudgetTokens: expect.any(Number) });
   });
 
-  it("拒绝把其他作品的对话混入当前模型上下文", async () => {
+  it("拒绝把其他作品的章节混入当前对话上下文", async () => {
     const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
     const conversation = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/ai-conversations`).send({}).expect(201);
-    const response = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({
+    const response = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/context/prepare`).send({
       modelId,
-      taskType: "chat",
       scope: { type: "chapter", chapterId },
-      instruction: "越权读取",
-      conversationId: conversation.body.data.id
+      instruction: "越权读取"
     }).expect(400);
-    expect(response.body.error.code).toBe("CONVERSATION_WORK_MISMATCH");
+    expect(response.body.error.code).toBe("CHAPTER_WORK_MISMATCH");
   });
 });

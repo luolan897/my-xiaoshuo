@@ -282,15 +282,6 @@ describe("AI 供应商、模型与建议 API", () => {
     const updatedModel = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 4096 }).expect(200);
     expect(updatedModel.body.data.contextWindow).toBe(4096);
 
-    const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({
-      modelId,
-      taskType: "chat",
-      scope: { type: "chapter", chapterId },
-      instruction: "概述本章"
-    }).expect(200);
-    expect(usage.body.data).toMatchObject({ modelId, contextWindow: 4096 });
-    expect(usage.body.data.inputTokens).toBeGreaterThan(0);
-
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
@@ -299,12 +290,14 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(body.messages[0]?.content).toContain("本书追加：哥斯拉不得离开地球。");
       return new Response(JSON.stringify({ choices: [{ message: { content: "提示词已生效。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
-    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+    const measured = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
       instruction: "检查提示词",
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(201);
+    expect(measured.body.data.contextUsage).toMatchObject({ modelId, contextWindow: 4096 });
+    expect(measured.body.data.contextUsage.inputTokens).toBeGreaterThan(0);
     await request(runtime.app).put(`/api/works/${secondWork.body.data.id}/task-defaults/chat`).send({ modelId }).expect(200);
     expect(secondChapter.body.data.title).toBe("第二章");
   });
