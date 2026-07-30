@@ -2052,10 +2052,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-feed { flex: 1; min-height: 0; overflow-y: auto; margin: 10px -5px 12px; padding: 0 5px; }
 .assistant-message, .user-message { position: relative; margin-bottom: 12px; padding: 12px 13px; border-radius: 5px; font-size: 12px; line-height: 1.55; }
 .assistant-message { background: var(--paper-deep); }
+.assistant-message.is-error { border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--paper-deep)); }
 .assistant-message.has-message-actions, .user-message.has-message-actions { margin-bottom: 42px; }
 .user-message { margin-left: 24px; background: var(--accent); color: #fff; }
 .assistant-message > .message-heading, .user-message > .message-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; opacity: .65; font-size: 9px; }
 .message-heading > span { letter-spacing: .12em; }.message-heading time { flex: 0 0 auto; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
+.assistant-message.is-error > .message-heading { color: var(--accent-dark); opacity: 1; }
+.assistant-message.is-error > .message-heading > span { display: inline-flex; align-items: center; gap: 7px; }
+.ai-message-status { display: inline-flex; align-items: center; min-height: 20px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 9px; font-weight: 700; line-height: 1; letter-spacing: .08em; }
+.ai-message-status.is-error { border-color: var(--accent); background: var(--accent); color: #fff; }
 .message-body { min-width: 0; overflow-wrap: anywhere; }
 .assistant-message.is-error .message-body { font-family: inherit; font-size: inherit; line-height: inherit; }
 .assistant-message.is-error .ai-error-text { margin: 0; white-space: pre-wrap; font: inherit; }

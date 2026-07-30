@@ -2286,6 +2286,10 @@ function createClientError(payload, fallbackMessage, fallbackStatus = null) {
   error.details = source.details;
   error.failure = typeof source.failure === "string" ? source.failure : undefined;
   error.callId = typeof source.callId === "string" ? source.callId : undefined;
+  error.providerName = typeof source.providerName === "string" ? source.providerName : undefined;
+  error.providerId = typeof source.providerId === "string" ? source.providerId : undefined;
+  error.modelId = typeof source.modelId === "string" ? source.modelId : undefined;
+  error.modelRecordId = typeof source.modelRecordId === "string" ? source.modelRecordId : undefined;
   return error;
 }
 
@@ -2297,8 +2301,13 @@ function formatAiFailureMessage(error) {
   const details = error?.details && typeof error.details === "object" && !Array.isArray(error.details) ? error.details : {};
   const failure = typeof error?.failure === "string" ? error.failure : typeof details.failure === "string" ? details.failure : "";
   const callId = typeof error?.callId === "string" ? error.callId : typeof details.callId === "string" ? details.callId : "";
+  const providerName = typeof error?.providerName === "string" ? error.providerName : typeof details.providerName === "string" ? details.providerName : "";
+  const providerId = typeof error?.providerId === "string" ? error.providerId : typeof details.providerId === "string" ? details.providerId : "";
+  const modelId = typeof error?.modelId === "string" ? error.modelId : typeof details.modelId === "string" ? details.modelId : "";
   if (code) lines.push(`错误码：${code}`);
   if (status) lines.push(`服务端状态：HTTP ${status}`);
+  if (providerName || providerId) lines.push(`模型供应商：${providerName || providerId}`);
+  if (modelId) lines.push(`模型 ID：${modelId}`);
   if (failure && failure !== message) lines.push(`详细原因：${failure}`);
   if (callId) lines.push(`调用 ID：${callId}`);
   return lines.join("\n\n");
@@ -9398,7 +9407,15 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     ? `<p class="ai-error-text">${esc(text)}</p>`
     : renderMarkdown(text);
   message.innerHTML = `<div class="message-body">${messageBody}</div>`;
-  attachMessageHeading(message, role === "user" ? "作者" : "助手", createdAt ?? undefined);
+  const heading = attachMessageHeading(message, role === "user" ? "作者" : "助手", createdAt ?? undefined);
+  if (isFailure) {
+    message.dataset.status = "failed";
+    const failureBadge = document.createElement("strong");
+    failureBadge.className = "ai-message-status is-error";
+    failureBadge.textContent = "失败";
+    failureBadge.setAttribute("aria-label", "消息状态：失败");
+    heading.firstElementChild?.append(failureBadge);
+  }
   if (citations.length) {
     const references = document.createElement("div");
     references.className = "message-citations";

@@ -2089,7 +2089,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           message: error instanceof Error ? error.message : "AI 流式调用失败",
           ...(error instanceof AppError ? { status: error.status } : {}),
           ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
-          ...(typeof details?.callId === "string" ? { callId: details.callId } : {})
+          ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
+          ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
+          ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
+          ...(typeof details?.modelId === "string" ? { modelId: details.modelId } : {}),
+          ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {})
         });
       }
     } finally {

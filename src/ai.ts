@@ -827,6 +827,15 @@ function stringValue(row: Row, key: string): string {
   return String(row[key] ?? "");
 }
 
+function aiFailureTargetDetails(provider: Row, model: Row): Record<string, string> {
+  return {
+    providerName: stringValue(provider, "name"),
+    providerId: stringValue(provider, "id"),
+    modelId: stringValue(model, "model_id"),
+    modelRecordId: stringValue(model, "id")
+  };
+}
+
 function numberValue(row: Row, key: string): number {
   return Number(row[key] ?? 0);
 }
@@ -3916,6 +3925,7 @@ export class AiManager {
       };
     } catch (error) {
       const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 调用失败";
+      const failureTarget = aiFailureTargetDetails(provider, model);
       this.store.db.run(
         `UPDATE ai_calls
          SET status = 'failed', failure = ?, input_tokens = ?, output_tokens = ?,
@@ -3941,9 +3951,13 @@ export class AiManager {
         error: aiErrorForLog(error)
       });
       if (error instanceof AppError && error.code === "CONTEXT_WINDOW_EXCEEDED") {
-        throw new AppError(error.status, error.code, error.message, { callId, ...(error.details && typeof error.details === "object" ? error.details : {}) });
+        throw new AppError(error.status, error.code, error.message, {
+          callId,
+          ...(error.details && typeof error.details === "object" ? error.details : {}),
+          ...failureTarget
+        });
       }
-      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message });
+      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message, ...failureTarget });
     }
   }
 
@@ -4118,6 +4132,7 @@ export class AiManager {
       };
     } catch (error) {
       const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 流式调用失败";
+      const failureTarget = aiFailureTargetDetails(provider, model);
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
       logger.error("ai.call.failed", {
         callId,
@@ -4127,7 +4142,7 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         error: aiErrorForLog(error)
       });
-      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message });
+      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message, ...failureTarget });
     }
   }
 
