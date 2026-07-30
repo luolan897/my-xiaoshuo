@@ -90,7 +90,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(409);
   });
 
-  it("连接测试必须用 max_tokens=10 收到真实助手回复", async () => {
+  it("连接测试必须用 max_tokens=10 收到正文或 thinking", async () => {
     const { providerId } = await configureAi();
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) {
@@ -107,6 +107,30 @@ describe("AI 供应商、模型与建议 API", () => {
     const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     expect(tested.body.data).toMatchObject({ ok: false, provider: { connectionStatus: "failed" } });
     expect(tested.body.data.error).toContain("响应缺少可用回复");
+  });
+
+  it("连接测试在只有 thinking 时也视为成功", async () => {
+    const { providerId } = await configureAi();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { max_tokens?: number };
+      expect(body.max_tokens).toBe(10);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "", reasoning_content: "正在确认连接。" } }]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({
+      ok: true,
+      availableModels: ["mock-novel-model"],
+      provider: { connectionStatus: "success" }
+    });
   });
 
   it("可以单独测试指定模型并使用该模型标识符", async () => {

@@ -1827,7 +1827,8 @@ export class AiManager {
     } catch {
       throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 返回了无效 JSON`);
     }
-    if (!payload.choices?.[0]?.message?.content?.trim()) {
+    const message = payload.choices?.[0]?.message;
+    if (!message?.content?.trim() && !message?.reasoning_content?.trim()) {
       throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用回复`);
     }
   }
