@@ -320,7 +320,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260730-ai-error-model-availability-token-distribution-v1');
+    expect(page.text).toContain('/app.js?v=20260730-ai-error-model-availability-token-distribution-conversation-title-v1');
     expect(page.text).toContain('/styles.css?v=20260730-ai-error-drafts-filter-align-model-availability-token-distribution-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
