@@ -45,6 +45,7 @@ type PlatformPageSizes = {
   timeline: number;
   outlines: number;
   relationships: number;
+  comments: number;
   reviews: number;
   analysisTasks: number;
   fileVersions: number;
@@ -59,6 +60,7 @@ const defaultPlatformPageSizes: PlatformPageSizes = {
   timeline: 30,
   outlines: 30,
   relationships: 30,
+  comments: 30,
   reviews: 30,
   analysisTasks: 30,
   fileVersions: 30
@@ -83,6 +85,7 @@ function platformPageSizes(value: unknown): PlatformPageSizes {
     timeline: pageSize("timeline"),
     outlines: pageSize("outlines"),
     relationships: pageSize("relationships"),
+    comments: pageSize("comments"),
     reviews: pageSize("reviews"),
     analysisTasks: pageSize("analysisTasks"),
     fileVersions: pageSize("fileVersions")
@@ -2318,6 +2321,58 @@ export class Store {
        ORDER BY CASE annotation.status WHEN 'open' THEN 0 ELSE 1 END, annotation.start_line, annotation.created_at`,
       chapterId
     ).map((row) => this.mapChapterAnnotation(row));
+  }
+
+  listWorkChapterAnnotations(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT annotation.*, user.display_name AS actor_display_name, user.username AS actor_username,
+        chapter.title AS chapter_title, volume.title AS volume_title
+       FROM chapter_annotations annotation
+       JOIN chapters chapter ON chapter.id = annotation.chapter_id
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       LEFT JOIN users user ON user.id = annotation.updated_by_user_id
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL
+       ORDER BY CASE annotation.status WHEN 'open' THEN 0 ELSE 1 END,
+         volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at,
+         annotation.start_line, annotation.created_at`,
+      workId
+    ).map((row) => ({
+      ...this.mapChapterAnnotation(row),
+      volumeTitle: requiredString(row, "volume_title"),
+      chapterTitle: requiredString(row, "chapter_title")
+    }));
+  }
+
+  listWorkChapterAnnotationsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT annotation.*, user.display_name AS actor_display_name, user.username AS actor_username,
+        chapter.title AS chapter_title, volume.title AS volume_title
+       FROM chapter_annotations annotation
+       JOIN chapters chapter ON chapter.id = annotation.chapter_id
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       LEFT JOIN users user ON user.id = annotation.updated_by_user_id
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL
+       ORDER BY CASE annotation.status WHEN 'open' THEN 0 ELSE 1 END,
+         volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at,
+         annotation.start_line, annotation.created_at${page.sql}`,
+      workId,
+      ...page.params
+    );
+    const total = numberValue(this.db.get(
+      `SELECT COUNT(*) AS count
+       FROM chapter_annotations annotation
+       JOIN chapters chapter ON chapter.id = annotation.chapter_id
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL`,
+      workId
+    ) ?? {}, "count");
+    return paginated(rows.map((row) => ({
+      ...this.mapChapterAnnotation(row),
+      volumeTitle: requiredString(row, "volume_title"),
+      chapterTitle: requiredString(row, "chapter_title")
+    })), pagination, total);
   }
 
   createChapterAnnotation(chapterId: string, input: { kind: "note" | "todo"; startLine: number; endLine: number; note: string }): Record<string, unknown> {

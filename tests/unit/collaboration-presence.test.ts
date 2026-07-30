@@ -85,5 +85,6 @@ describe("作品协作者在线状态", () => {
     expect(pageLabelForKey("entity-editor:race:race-1")).toBe("种族编辑");
     expect(pageLabelForKey("entity-editor:relationship:relationship-1")).toBe("人物关系编辑");
     expect(pageLabelForKey("module:outlines")).toBe("大纲与伏笔");
+    expect(pageLabelForKey("module:comments")).toBe("正文评论");
   });
 });

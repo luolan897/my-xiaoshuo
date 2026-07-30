@@ -2299,14 +2299,17 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .markdown-table-menu button small { color: var(--muted); font-size: 9px; }
 .chapter-annotations-dialog { width: min(820px, 94vw); }
 .chapter-annotations-list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; padding: 18px 24px; }
+.chapter-comment-module-list { display: grid; gap: 10px; }
 .chapter-annotation-card { display: grid; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .chapter-annotation-card.is-resolved { opacity: .65; }
 .chapter-annotation-card header { display: flex; align-items: center; gap: 8px; }
 .chapter-annotation-card header strong { font-size: 11px; }
+.chapter-annotation-card header .chapter-annotation-source { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-annotation-line { flex: none; color: var(--muted); font-family: var(--font-latin), monospace; font-size: 9px; }
 .chapter-annotation-card header em { margin-left: auto; color: var(--muted); font-size: 9px; font-style: normal; }
 .chapter-annotation-kind { padding: 2px 6px; border: 1px solid var(--accent); border-radius: 10px; color: var(--accent-dark); font-size: 8px; }
-.chapter-annotation-card blockquote { max-height: 100px; overflow: auto; margin: 0; padding: 8px 10px; border-left: 3px solid var(--line); background: var(--surface); color: var(--muted); font: 10px/1.6 var(--font-mono), monospace; white-space: pre-wrap; }
-.chapter-annotation-card p { margin: 0; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.chapter-annotation-card blockquote { max-height: 100px; overflow: auto; margin: 0; padding: 8px 10px; border-left: 3px solid var(--line); background: var(--surface); color: var(--muted); font-family: var(--font-mono), monospace; font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
+.chapter-annotation-card p { margin: 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
 .chapter-annotation-card > small { color: var(--muted); font-size: 9px; }
 .chapter-annotation-card footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .chapter-annotation-card footer button { min-height: 30px; padding: 5px 9px; font-size: 9px; }
@@ -2937,9 +2940,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .brand-block .brand-mark { width: 30px; height: 30px; }
   .brand-block strong { font-size: 14px; }
   .brand-block small { display: none; }
-  .mobile-module-tab { position: fixed; z-index: 32; top: 132px; right: 0; display: grid; width: 34px; height: 42px; padding: 0; place-items: center; border: 1px solid var(--line); border-right: 0; border-radius: 5px 0 0 5px; background: var(--surface-soft); color: var(--accent-dark); font-size: 10px; writing-mode: vertical-rl; }
+  .mobile-module-tab { position: fixed; z-index: 38; top: 132px; right: 0; display: grid; width: 34px; height: 42px; padding: 0; place-items: center; border: 1px solid var(--line); border-right: 0; border-radius: 5px 0 0 5px; background: var(--surface-soft); color: var(--accent-dark); font-size: 10px; writing-mode: vertical-rl; }
   .app-shell.shelf-mode .mobile-module-tab { display: none; }
-  .mobile-panel-backdrop { position: fixed; z-index: 30; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(20, 17, 14, .28); }
+  .mobile-panel-backdrop { position: fixed; z-index: 36; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(20, 17, 14, .28); }
   .app-shell:not(.shelf-mode):not(.left-panel-collapsed) .mobile-panel-backdrop { display: block; }
   .work-meta {
     grid-column: 1 / -1;
@@ -2964,7 +2967,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
   .left-panel {
     position: fixed;
-    z-index: 31;
+    z-index: 37;
     top: 0;
     bottom: 0;
     right: 0;
@@ -3087,7 +3090,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .dialog-header { padding: 14px 16px 12px; }
   .dialog-header h2 { font-size: 20px; }
   .settings-dialog-header-actions { gap: 6px; }
-  .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list { padding-inline: 16px; }
+  .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list, .chapter-annotations-list { padding-inline: 16px; }
   .task-detail-overview { grid-template-columns: minmax(0, 1fr); padding: 12px; }
   .task-detail-overview > * { grid-column: 1 !important; }
   .task-result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -942,6 +942,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/search?q=边界`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/file-versions`).expect(403);
+    const commentReadDenied = await collaborator.agent.get(`/api/works/${workId}/chapter-annotations`).expect(403);
+    expect(commentReadDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     await collaborator.agent
       .post(`/api/works/${workId}/file-versions/file_missing/restore`)
       .set("X-CSRF-Token", collaborator.csrfToken)
@@ -1051,6 +1053,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(201);
 
     await chatOnly.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
+    await chatOnly.agent.get(`/api/works/${workId}/chapter-annotations`).expect(200);
     await chatOnly.agent.post(`/api/works/${workId}/ai-conversations`)
       .set("X-CSRF-Token", chatOnly.csrfToken)
       .send({})
@@ -1380,6 +1383,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         timeline: 30,
         outlines: 30,
         relationships: 30,
+        comments: 30,
         reviews: 30,
         analysisTasks: 30,
         fileVersions: 30
@@ -1420,6 +1424,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
           timeline: 23,
           outlines: 24,
           relationships: 25,
+          comments: 27,
           reviews: 26,
           analysisTasks: 40,
           fileVersions: 15
@@ -1436,6 +1441,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         timeline: 23,
         outlines: 24,
         relationships: 25,
+        comments: 27,
         reviews: 26,
         analysisTasks: 40,
         fileVersions: 15
@@ -1447,12 +1453,12 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     expect(partialUpdate.body.data).toMatchObject({
       toastPosition: "top-right",
-      pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, reviews: 26, analysisTasks: 40, fileVersions: 15 }
+      pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, comments: 27, reviews: 26, analysisTasks: 40, fileVersions: 15 }
     });
     const visibleToWriter = await writer.agent.get("/api/ui-settings").expect(200);
     expect(visibleToWriter.body.data).toMatchObject({
       toastPosition: "top-right",
-      pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, reviews: 26, analysisTasks: 40, fileVersions: 15 }
+      pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, comments: 27, reviews: 26, analysisTasks: 40, fileVersions: 15 }
     });
     expect(runtime.database.get(
       "SELECT action, user_id FROM audit_logs WHERE action = 'platform.ui-settings.updated'"
