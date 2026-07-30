@@ -641,6 +641,90 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "completed")).toBe(true);
   });
 
+  it("长工具结果按完整结构限制在一万字符内并通过游标续读", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 30_000 }).expect(200);
+    const content = "长正文。".repeat(3_000);
+    runtime.store.saveChapter(chapterId, { content });
+    const fragments: string[] = [];
+    const maxTokens: number[] = [];
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { max_tokens: number; messages: Array<{ role: string; tool_call_id?: string; content?: string }> };
+      maxTokens.push(body.max_tokens);
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "long-chapter-first",
+          type: "function",
+          function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
+        }] } }] }), { status: 200 });
+      }
+      const latest = body.messages.filter((message) => message.role === "tool").at(-1);
+      const result = JSON.parse(latest?.content ?? "{}") as {
+        data: { chapters: Array<{ content?: string; _fragment?: { index: number; total: number; path: string | null } }> };
+        pagination: { cursor: number; nextCursor: number | null; maxChars: number };
+      };
+      expect((latest?.content ?? "").length).toBeLessThanOrEqual(10_000);
+      expect(result.pagination.maxChars).toBe(10_000);
+      expect(result.data.chapters.every((chapter) => chapter._fragment)).toBe(true);
+      fragments.push(...result.data.chapters.map((chapter) => chapter.content ?? ""));
+      if (result.pagination.nextCursor !== null) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: `long-chapter-${result.pagination.nextCursor}`,
+          type: "function",
+          function: {
+            name: "read_chapters",
+            arguments: { chapterIds: [chapterId], include: "content", cursor: result.pagination.nextCursor }
+          }
+        }] } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取全部分页正文。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "分页读取当前章节。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("已读取全部分页正文。");
+    expect(response.body.data.toolCalls.length).toBeGreaterThan(1);
+    expect(response.body.data.toolCalls[1].arguments).toMatchObject({ cursor: expect.any(Number) });
+    expect(fragments.join("")).toBe(content);
+    expect(maxTokens.slice(1).every((value, index) => value < (maxTokens[index] ?? 0))).toBe(true);
+  });
+
+  it("工具结果让下一轮超过模型上下文时在本地阻止请求", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 6_000 }).expect(200);
+    runtime.store.saveChapter(chapterId, { content: "上下文保护正文。".repeat(2_000) });
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+        id: "context-guard-tool",
+        type: "function",
+        function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
+      }] } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "读取章节后回答。",
+      scope: { type: "none" },
+      modelId
+    }).expect(400);
+
+    expect(response.body.error.code).toBe("CONTEXT_WINDOW_EXCEEDED");
+    expect(completionCount).toBe(1);
+  });
+
   it("把无效工具参数和未知工具作为英文错误结果反馈给模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

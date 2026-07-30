@@ -11,6 +11,10 @@ import {
   type CompletionPayload,
   type CompletionToolCall
 } from "./ai-protocol.js";
+import {
+  paginateToolResultRecords,
+  structuralToolResultRecords
+} from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
@@ -503,31 +507,46 @@ export type AiProcessStep = {
 const MAX_AGENT_TOOL_ROUNDS = 6;
 const MAX_AGENT_TOOL_CALLS = 12;
 const MAX_CONFIGURED_AGENT_TOOL_CALLS = 48;
+const agentToolCursor = z.number().int().min(0).max(100_000).default(0);
 const storyIndexArguments = z.object({
   offset: z.number().int().min(0).max(10_000).default(0),
-  limit: z.number().int().min(1).max(50).default(20)
+  limit: z.number().int().min(1).max(50).default(20),
+  cursor: agentToolCursor
 }).strict();
 const readChaptersArguments = z.object({
   chapterIds: z.array(z.string().min(1).max(200)).min(1).max(3),
-  include: z.enum(["summary", "content", "both"]).default("both")
+  include: z.enum(["summary", "content", "both"]).default("both"),
+  cursor: agentToolCursor
 }).strict();
 const grepArguments = z.object({
   keyword: z.string().trim().min(1).max(200),
-  limit: z.number().int().min(1).max(100).default(20)
+  limit: z.number().int().min(1).max(100).default(20),
+  cursor: agentToolCursor
 }).strict();
 const searchStoryEntitiesArguments = z.object({
   query: z.string().trim().min(1).max(200),
-  categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([])
+  categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([]),
+  limit: z.number().int().min(1).max(30).default(30),
+  cursor: agentToolCursor
 }).strict();
 const readCharacterSectionsArguments = z.object({
   sectionIds: z.array(z.string().min(1).max(300)).min(1).max(3),
-  include: z.enum(["summary", "content", "both"]).default("both")
+  include: z.enum(["summary", "content", "both"]).default("both"),
+  cursor: agentToolCursor
 }).strict();
 const searchDraftsArguments = z.object({
   query: z.string().trim().max(200).default(""),
   draftType: z.enum(["all", "prose", "setting"]).default("all"),
-  limit: z.number().int().min(1).max(30).default(20)
+  limit: z.number().int().min(1).max(30).default(20),
+  cursor: agentToolCursor
 }).strict();
+const agentToolCursorParameter = {
+  type: "integer",
+  minimum: 0,
+  maximum: 100_000,
+  default: 0,
+  description: "续页游标，取 pagination.nextCursor。"
+};
 
 const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
   story_index: {
@@ -535,7 +554,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     function: {
       name: "story_index",
       description: "读取当前作品的基本信息，并按分页列出卷章目录和章节概要。回答作品简介、整体结构或定位章节时优先使用；不会返回正文。",
-      parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 50 } }, additionalProperties: false }
+      parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 50 }, cursor: agentToolCursorParameter }, additionalProperties: false }
     }
   },
   read_chapters: {
@@ -543,15 +562,15 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     function: {
       name: "read_chapters",
       description: "读取指定章节的当前正文与章节概要。仅在需要原文证据或精确措辞时使用；每次最多 3 章。",
-      parameters: { type: "object", properties: { chapterIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] } }, required: ["chapterIds"], additionalProperties: false }
+      parameters: { type: "object", properties: { chapterIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] }, cursor: agentToolCursorParameter }, required: ["chapterIds"], additionalProperties: false }
     }
   },
   grep: {
     type: "function",
     function: {
       name: "grep",
-      description: "在当前作品的章节正文索引中查询关键字，返回关键字所在的完整段落及章节标题和 ID。默认返回前 20 条，可按需调整 limit。",
-      parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 } }, required: ["keyword"], additionalProperties: false }
+      description: "在当前作品的章节正文索引中查询关键字，返回关键字所在的完整段落及章节标题和 ID。默认查询前 20 条，可按需调整 limit。",
+      parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }, cursor: agentToolCursorParameter }, required: ["keyword"], additionalProperties: false }
     }
   },
   search_story_entities: {
@@ -559,7 +578,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     function: {
       name: "search_story_entities",
       description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
-      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 } }, required: ["query"], additionalProperties: false }
+      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
     }
   },
   read_character_sections: {
@@ -567,7 +586,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     function: {
       name: "read_character_sections",
       description: "读取指定人物 Markdown 档案章节的摘要或原文。先通过 search_story_entities 获取 sectionId；每次最多读取 3 个章节。",
-      parameters: { type: "object", properties: { sectionIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] } }, required: ["sectionIds"], additionalProperties: false }
+      parameters: { type: "object", properties: { sectionIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] }, cursor: agentToolCursorParameter }, required: ["sectionIds"], additionalProperties: false }
     }
   },
   search_drafts: {
@@ -575,7 +594,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     function: {
       name: "search_drafts",
       description: "搜索当前作品的作者想法。想法用于记录可能采用、也可能永远不会写入正文或正式设定的临时方向，不是已确认的故事事实，不能当作正文或设定依据。可按关键词和“正文想法/设定想法”类型筛选；query 为空时返回最近更新的想法。",
-      parameters: { type: "object", properties: { query: { type: "string", maxLength: 200, default: "" }, draftType: { type: "string", enum: ["all", "prose", "setting"], default: "all" }, limit: { type: "integer", minimum: 1, maximum: 30, default: 20 } }, additionalProperties: false }
+      parameters: { type: "object", properties: { query: { type: "string", maxLength: 200, default: "" }, draftType: { type: "string", enum: ["all", "prose", "setting"], default: "all" }, limit: { type: "integer", minimum: 1, maximum: 30, default: 20 }, cursor: agentToolCursorParameter }, additionalProperties: false }
     }
   }
 };
@@ -3197,7 +3216,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -3337,72 +3356,99 @@ export class AiManager {
     }
     const args = parsed.data;
     if (name === "story_index") {
-      const { offset, limit } = args as z.infer<typeof storyIndexArguments>;
+      const { offset, limit, cursor } = args as z.infer<typeof storyIndexArguments>;
       const work = this.store.getWork(workId);
       const tree = this.store.getWorkTree(workId);
       const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
       const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
         id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
       })));
+      const workRecords = structuralToolResultRecords([{
+        id: work.id,
+        title: work.title,
+        author: work.author,
+        description: work.description,
+        language: work.language,
+        tags: work.tags,
+        chapterCount: work.chapterCount,
+        wordCount: work.wordCount
+      }]).map((record) => ({ ...record, _toolResultSection: "work" }));
+      const chapterRecords = structuralToolResultRecords(chapters.slice(offset, offset + limit))
+        .map((record) => ({ ...record, _toolResultSection: "chapter" }));
+      const result = paginateToolResultRecords([...workRecords, ...chapterRecords], cursor, (page, pagination) => {
+        const pageWork = page.flatMap((record) => {
+          if (record._toolResultSection !== "work") return [];
+          const { _toolResultSection: _section, ...value } = record;
+          return [value];
+        });
+        const pageChapters = page.flatMap((record) => {
+          if (record._toolResultSection !== "chapter") return [];
+          const { _toolResultSection: _section, ...value } = record;
+          return [value];
+        });
+        return {
+          ok: true,
+          data: {
+            ...(pageWork[0] ? { work: pageWork[0] } : {}),
+            ...(pageWork.length > 1 ? { workFragments: pageWork } : {}),
+            totalChapters: chapters.length,
+            offset,
+            chapters: pageChapters,
+            nextOffset: pagination.nextCursor === null && offset + limit < chapters.length ? offset + limit : null
+          },
+          pagination
+        };
+      });
       return {
         id: toolCall.id,
         name,
         calledAt,
-        arguments: { offset, limit },
+        arguments: { offset, limit, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
-        result: {
-          ok: true,
-          data: {
-            work: {
-              id: work.id,
-              title: work.title,
-              author: work.author,
-              description: work.description,
-              language: work.language,
-              tags: work.tags,
-              chapterCount: work.chapterCount,
-              wordCount: work.wordCount
-            },
-            totalChapters: chapters.length,
-            offset,
-            chapters: chapters.slice(offset, offset + limit),
-            nextOffset: offset + limit < chapters.length ? offset + limit : null
-          }
-        }
+        result
       };
     }
     if (name === "read_chapters") {
-      const { chapterIds, include } = args as z.infer<typeof readChaptersArguments>;
+      const { chapterIds, include, cursor } = args as z.infer<typeof readChaptersArguments>;
       const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
-      let remainingChars = 36_000;
       const chapters = chapterIds.map((chapterId) => {
         try {
           const chapter = this.store.getChapter(chapterId);
           if (chapter.workId !== workId) return { chapterId, error: { code: "CHAPTER_WORK_MISMATCH", message: "The requested chapter belongs to a different work." } };
           const content = collapseAiBlankLines(String(chapter.content));
-          const excerpt = content.slice(0, Math.max(0, remainingChars));
-          remainingChars -= excerpt.length;
-          return { chapterId, title: chapter.title, versionNo: chapter.versionNo, ...(include !== "content" ? { summary: summaries.get(chapterId) ?? "" } : {}), ...(include !== "summary" ? { content: excerpt, contentTruncated: excerpt.length < content.length } : {}) };
+          return { chapterId, title: chapter.title, versionNo: chapter.versionNo, ...(include !== "content" ? { summary: summaries.get(chapterId) ?? "" } : {}), ...(include !== "summary" ? { content } : {}) };
         } catch {
           return { chapterId, error: { code: "CHAPTER_NOT_FOUND", message: "The requested chapter was not found." } };
         }
       });
-      return { id: toolCall.id, name, calledAt, arguments: { chapterIds, include }, status: "completed", result: { ok: true, data: { chapters, contentLimitChars: 36_000 } } };
+      const records = structuralToolResultRecords(chapters);
+      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        ok: true,
+        data: { chapters: page },
+        pagination
+      }));
+      return { id: toolCall.id, name, calledAt, arguments: { chapterIds, include, ...(cursor > 0 ? { cursor } : {}) }, status: "completed", result };
     }
     if (name === "grep") {
-      const { keyword, limit } = args as z.infer<typeof grepArguments>;
+      const { keyword, limit, cursor } = args as z.infer<typeof grepArguments>;
       const matches = this.store.searchChapterParagraphs(workId, keyword, limit);
+      const records = structuralToolResultRecords(matches);
+      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        ok: true,
+        data: { keyword, limit, matches: page },
+        pagination
+      }));
       return {
         id: toolCall.id,
         name,
         calledAt,
-        arguments: { keyword, limit },
+        arguments: { keyword, limit, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
-        result: { ok: true, data: { keyword, limit, matches } }
+        result
       };
     }
     if (name === "search_story_entities") {
-      const { query, categories: categoryList } = args as z.infer<typeof searchStoryEntitiesArguments>;
+      const { query, categories: categoryList, limit, cursor } = args as z.infer<typeof searchStoryEntitiesArguments>;
       const categories = new Set<string>(categoryList);
       const allowed = new Set(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"]);
       const combined = (await this.searchWork(workId, query, { limit: 100 })).flatMap((item) => {
@@ -3417,36 +3463,35 @@ export class AiManager {
           type,
           sourceType
         }];
-      }).slice(0, 30);
+      }).slice(0, limit);
+      const records = structuralToolResultRecords(combined);
+      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        ok: true,
+        data: {
+          query,
+          matchMode: "hybrid_exact_phonetic",
+          matches: page,
+          ...(combined.length === 0
+            ? { hint: "没有找到精确或拼音相关结果。请改用更短的实体名、别名或标题，也可使用 story_index 浏览目录，或用 grep 搜索正文关键字。" }
+            : {})
+        },
+        pagination
+      }));
       return {
         id: toolCall.id,
         name,
         calledAt,
-        arguments: { query, categories: categoryList },
+        arguments: { query, categories: categoryList, limit, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
-        result: {
-          ok: true,
-          data: {
-            query,
-            matchMode: "hybrid_exact_phonetic",
-            matches: combined,
-            ...(combined.length === 0
-              ? { hint: "没有找到精确或拼音相关结果。请改用更短的实体名、别名或标题，也可使用 story_index 浏览目录，或用 grep 搜索正文关键字。" }
-              : {})
-          }
-        }
+        result
       };
     }
     if (name === "read_character_sections") {
-      const { sectionIds, include } = args as z.infer<typeof readCharacterSectionsArguments>;
-      let remainingChars = 48_000;
+      const { sectionIds, include, cursor } = args as z.infer<typeof readCharacterSectionsArguments>;
       const sections = sectionIds.map((sectionId) => {
         try {
           const section = this.store.getCharacterProfileSection(sectionId);
           if (section.workId !== workId) return { sectionId, error: { code: "CHARACTER_SECTION_WORK_MISMATCH", message: "The requested character section belongs to a different work." } };
-          const content = collapseAiBlankLines(String(section.contentMarkdown));
-          const excerpt = content.slice(0, Math.max(0, remainingChars));
-          remainingChars -= excerpt.length;
           const character = this.store.getCharacter(String(section.characterId));
           return {
             sectionId,
@@ -3456,48 +3501,52 @@ export class AiManager {
             sectionType: section.sectionType,
             versionNo: section.versionNo,
             ...(include !== "content" ? { summary: section.summary } : {}),
-            ...(include !== "summary" ? { contentMarkdown: excerpt, contentTruncated: excerpt.length < content.length } : {})
+            ...(include !== "summary" ? { contentMarkdown: collapseAiBlankLines(String(section.contentMarkdown)) } : {})
           };
         } catch {
           return { sectionId, error: { code: "CHARACTER_SECTION_NOT_FOUND", message: "The requested character section was not found." } };
         }
       });
-      return { id: toolCall.id, name, calledAt, arguments: { sectionIds, include }, status: "completed", result: { ok: true, data: { sections, contentLimitChars: 48_000 } } };
+      const records = structuralToolResultRecords(sections);
+      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        ok: true,
+        data: { sections: page },
+        pagination
+      }));
+      return { id: toolCall.id, name, calledAt, arguments: { sectionIds, include, ...(cursor > 0 ? { cursor } : {}) }, status: "completed", result };
     }
     if (name === "search_drafts") {
-      const { query, draftType, limit } = args as z.infer<typeof searchDraftsArguments>;
-      let remainingChars = 36_000;
+      const { query, draftType, limit, cursor } = args as z.infer<typeof searchDraftsArguments>;
       const matches = this.store.searchDrafts(workId, query, draftType === "all" ? undefined : draftType, limit).map((draft) => {
         const content = collapseAiBlankLines(String(draft.content));
-        const excerpt = content.slice(0, Math.max(0, Math.min(12_000, remainingChars)));
-        remainingChars -= excerpt.length;
         return {
           id: draft.id,
           draftType: draft.draftType,
           draftTypeLabel: draft.draftType === "prose" ? "正文想法" : "设定想法",
           title: draft.title,
-          content: excerpt,
-          contentTruncated: excerpt.length < content.length,
+          content,
           versionNo: draft.versionNo,
           updatedAt: draft.updatedAt
         };
       });
+      const records = structuralToolResultRecords(matches);
+      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        ok: true,
+        data: {
+          meaning: "这些内容是作者记录的未确认临时想法，可能采用，也可能永远不会写入正文或正式设定；不得视为故事事实。",
+          query,
+          draftType,
+          matches: page
+        },
+        pagination
+      }));
       return {
         id: toolCall.id,
         name,
         calledAt,
-        arguments: { query, draftType, limit },
+        arguments: { query, draftType, limit, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
-        result: {
-          ok: true,
-          data: {
-            meaning: "这些内容是作者记录的未确认临时想法，可能采用，也可能永远不会写入正文或正式设定；不得视为故事事实。",
-            query,
-            draftType,
-            matches,
-            contentLimitChars: 36_000
-          }
-        }
+        result
       };
     }
     throw new Error(`Unhandled agent tool: ${name}`);
@@ -3505,7 +3554,7 @@ export class AiManager {
 
   private constrainParametersForContext(model: ModelRow, messages: CompletionMessage[], parameters: Record<string, unknown>): Record<string, unknown> {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content ?? ""), 0);
+    const inputTokens = estimateAiTokens(JSON.stringify(messages));
     if (inputTokens >= contextWindow) {
       throw new AppError(400, "CONTEXT_WINDOW_EXCEEDED", `当前上下文约 ${inputTokens} Token，已超过模型 ${contextWindow} Token 的上下文容量`);
     }
@@ -3624,13 +3673,14 @@ export class AiManager {
       let totalInputTokens = 0;
       let totalCachedInputTokens = 0;
       const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
+        const roundParameters = this.constrainParametersForContext(model, completionMessages, parameters);
         const traceRound: AiCallTraceRound = {
           round: traceRounds.length + 1,
           requestedAt: now(),
           request: {
             model: stringValue(model, "model_id"),
             messages: structuredClone(completionMessages),
-            parameters: structuredClone(parameters),
+            parameters: structuredClone(roundParameters),
             tools: toolChoice === "auto" ? structuredClone(tools) : [],
             toolChoice
           },
@@ -3666,7 +3716,7 @@ export class AiManager {
                     protocol,
                     model: stringValue(model, "model_id"),
                     messages: completionMessages,
-                    parameters,
+                    parameters: roundParameters,
                     tools,
                     toolChoice
                   })),
@@ -3890,6 +3940,9 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         error: aiErrorForLog(error)
       });
+      if (error instanceof AppError && error.code === "CONTEXT_WINDOW_EXCEEDED") {
+        throw new AppError(error.status, error.code, error.message, { callId, ...(error.details && typeof error.details === "object" ? error.details : {}) });
+      }
       throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message });
     }
   }
