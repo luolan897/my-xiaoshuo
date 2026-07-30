@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "../../src/public/ai-context-meter.js";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "../../src/public/ai-context-meter.js";
 
 describe("AI 上下文用量提示", () => {
+  it("按实际占用量显示一位小数百分比", () => {
+    expect(formatAiContextUsagePercent(2_177, 200_000)).toBe("1.1%");
+    expect(formatAiContextUsagePercent(0, 0)).toBe("0.0%");
+  });
+
   it("分别显示作品、对话和输出预留预算", () => {
     expect(formatAiContextUsageTooltip({
       inputTokens: 12_345,
@@ -29,7 +34,7 @@ describe("AI 上下文用量提示", () => {
       items: [
         { key: "system-prompt", label: "system prompt", tokens: 120, percent: 12 },
         { key: "function", label: "function", tokens: 80, percent: 8 },
-        { key: "skills", label: "skills", tokens: 0, percent: 0 },
+        { key: "skills", label: "skills 待加入", tokens: 0, percent: 0 },
         { key: "context", label: "context", tokens: 300, percent: 30 },
         { key: "left", label: "left", tokens: 500, percent: 50 }
       ]
