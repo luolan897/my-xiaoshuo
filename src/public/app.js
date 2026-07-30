@@ -392,6 +392,8 @@ let aiReferencesLoadPromise = null;
 let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
+const aiConversationHistoryPageLimit = 20;
+let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
 const loadedVolumeChapterIds = new Set();
 const volumeChapterLoadingIds = new Set();
@@ -1244,7 +1246,7 @@ function renderAiCitations() {
     card.append(main, remove, fullText);
     host.append(card);
   }
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 function aiReferenceKey(reference) {
@@ -1288,7 +1290,7 @@ function renderAiReferences() {
     if (rendered.has(aiReferenceKey(reference))) continue;
     prompt.append(createAiReferenceChip(reference), document.createTextNode(" "));
   }
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 function renderAiQuickActions() {
@@ -1367,7 +1369,7 @@ function renderMessageCardActions(message) {
       fork.disabled = true;
       try {
         const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, { method: "POST", body: { messageId: message.dataset.messageId } });
-        await loadAiConversations(false);
+        upsertAiConversationSummary(conversation);
         await openAiConversation(conversation.id);
         toast("已从所选消息创建分支对话");
       } catch (error) {
@@ -1599,6 +1601,12 @@ function setAiHistoryVisible(visible) {
 function renderAiConversationHistory() {
   const host = $("#ai-history-list");
   host.replaceChildren();
+  const pagination = $("#ai-history-pagination");
+  const showPagination = aiConversationHistoryPage.page > 1 || aiConversationHistoryPage.hasMore;
+  pagination.classList.toggle("hidden", !showPagination);
+  $("#ai-history-previous").disabled = aiConversationHistoryPage.page <= 1;
+  $("#ai-history-next").disabled = !aiConversationHistoryPage.hasMore;
+  $("#ai-history-page-label").textContent = `第 ${aiConversationHistoryPage.page} 页 · 本页 ${state.aiConversations.length} 条`;
   if (!state.aiConversations.length) {
     host.innerHTML = '<p class="ai-history-empty">还没有历史对话</p>';
     return;
@@ -1618,6 +1626,43 @@ function renderAiConversationHistory() {
   }
 }
 
+function defaultAiConversationTitle(prompt) {
+  const normalized = String(prompt ?? "").replace(/\s+/gu, " ").trim();
+  return Array.from(normalized).slice(0, 15).join("") || "新对话";
+}
+
+function upsertAiConversationSummary(conversation) {
+  if (!conversation?.id) return;
+  const current = state.aiConversations.find((item) => item.id === conversation.id);
+  const lastMessage = Array.isArray(conversation.messages) ? conversation.messages.at(-1) : null;
+  const summary = { ...current, ...conversation, ...(lastMessage ? { preview: lastMessage.content } : {}) };
+  delete summary.messages;
+  delete summary.messagesPage;
+  if (!current && loadedAiConversationsWorkId === state.work?.id) {
+    loadedAiConversationsWorkId = null;
+    aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
+    state.aiConversations = [summary];
+    renderAiConversationHistory();
+    return;
+  }
+  state.aiConversations = [summary, ...state.aiConversations.filter((item) => item.id !== summary.id)]
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+  renderAiConversationHistory();
+}
+
+function updateAiConversationSummaryFromMessage(message) {
+  if (!message?.conversationId) return;
+  const current = state.aiConversations.find((conversation) => conversation.id === message.conversationId);
+  if (!current) return;
+  upsertAiConversationSummary({
+    ...current,
+    title: current.title === "新对话" && message.role === "user" ? defaultAiConversationTitle(message.content) : current.title,
+    messageCount: Number(current.messageCount ?? 0) + 1,
+    preview: message.content,
+    updatedAt: message.createdAt ?? current.updatedAt
+  });
+}
+
 function applyAiConversationTitle(title) {
   if (!title || !state.aiConversationId) return;
   const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
@@ -1626,20 +1671,27 @@ function applyAiConversationTitle(title) {
   renderAiConversationHistory();
 }
 
-async function loadAiConversations(openLatest = true) {
+function applyAiConversations(pageResult) {
+  state.aiConversations = pageResult.items;
+  aiConversationHistoryPage = {
+    page: pageResult.page,
+    limit: pageResult.limit,
+    hasMore: pageResult.hasMore,
+    nextPage: pageResult.nextPage
+  };
+  loadedAiConversationsWorkId = state.work?.id ?? null;
+  renderAiConversationHistory();
+  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+  if (current) $("#ai-conversation-title").textContent = current.title;
+}
+
+async function loadAiConversations(page = 1) {
   const workId = state.work?.id;
   if (!workId) return;
   const generation = workScopedUiGeneration;
-  const conversations = (await apiPage(`/api/works/${workId}/ai-conversations`)).items;
+  const conversations = await apiPage(`/api/works/${workId}/ai-conversations`, page, aiConversationHistoryPageLimit);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  state.aiConversations = conversations;
-  loadedAiConversationsWorkId = workId;
-  renderAiConversationHistory();
-  if (openLatest && state.aiConversations.length) await openAiConversation(state.aiConversations[0].id, false);
-  else {
-    const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
-    if (current) $("#ai-conversation-title").textContent = current.title;
-  }
+  applyAiConversations(conversations);
 }
 
 async function ensureAiConversationsLoaded() {
@@ -1647,7 +1699,7 @@ async function ensureAiConversationsLoaded() {
   if (!workId || loadedAiConversationsWorkId === workId) return;
   if (aiConversationsLoadPromise && aiConversationsLoadWorkId === workId) return aiConversationsLoadPromise;
   aiConversationsLoadWorkId = workId;
-  aiConversationsLoadPromise = loadAiConversations(false);
+  aiConversationsLoadPromise = loadAiConversations();
   try {
     await aiConversationsLoadPromise;
   } finally {
@@ -1660,6 +1712,7 @@ async function ensureAiConversationsLoaded() {
 
 async function openAiConversation(conversationId, hideHistory = true) {
   const conversation = await api(`/api/ai-conversations/${conversationId}?page=1&limit=100`);
+  upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
   $("#ai-conversation-title").textContent = conversation.title;
@@ -1680,14 +1733,15 @@ async function openAiConversation(conversationId, hideHistory = true) {
 async function createNewAiConversation() {
   if (!state.work) return;
   const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: {} });
+  upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = false;
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   hideAiContextWarning();
+  setAiContextMeter(null);
   renderAiQuickActions();
   setAiHistoryVisible(false);
-  await loadAiConversations(false);
 }
 
 async function ensureAiConversation() {
@@ -1700,7 +1754,7 @@ async function persistAiConversationMessage(role, content, citations = [], metad
   const conversationId = await ensureAiConversation();
   if (!conversationId) throw new Error("无法创建 AI 对话");
   const message = await api(`/api/ai-conversations/${conversationId}/messages`, { method: "POST", body: { role, content, citations, metadata } });
-  await loadAiConversations(false);
+  updateAiConversationSummaryFromMessage(message);
   return message;
 }
 
@@ -2242,7 +2296,6 @@ function invalidateModuleRequestsAfterMutation(path, method) {
     path.startsWith("/api/auth/")
     || path.includes("/presence")
     || path.includes("/context/prepare")
-    || path.includes("/ai-context-usage")
     || path.includes("/chat/stream")
   ) return;
 
@@ -3455,6 +3508,7 @@ function resetWorkScopedUiCaches() {
   aiReferencesLoadWorkId = null;
   aiConversationsLoadPromise = null;
   aiConversationsLoadWorkId = null;
+  aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
   raceHierarchyLoadPromise = null;
   raceHierarchyLoadWorkId = null;
   loadedRaceHierarchyWorkId = null;
@@ -3476,9 +3530,6 @@ function resetWorkScopedUiCaches() {
   volumeChapterRequests.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
-  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-  aiContextUsageTimer = null;
-  aiContextUsageRequest += 1;
   state.aiCitations = [];
   state.aiReferences = [];
   state.aiPromptSent = false;
@@ -6439,7 +6490,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { systemPrompt: $("#work-system-prompt").value } });
       toast("本书系统提示词已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6492,7 +6543,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { bookSummaryContextPercent: Number($("#book-summary-context-percent").value) } });
       toast("全书概要引用配额已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6505,7 +6556,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { contextCompactThreshold: Number($("#context-compact-threshold").value) } });
       toast("对话上下文 compact 阈值已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6556,13 +6607,17 @@ async function loadModels() {
   const generation = workScopedUiGeneration;
   const models = await api(`/api/works/${workId}/models`);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  state.models = models.filter((model) => isSelectableModel(model));
+  applyAiModels(models);
   loadedAiModelsWorkId = workId;
+}
+
+function applyAiModels(models) {
+  state.models = models.filter((model) => isSelectableModel(model));
   const select = $("#ai-model");
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 async function ensureAiModelsLoaded() {
@@ -6585,9 +6640,6 @@ async function ensureAiModelsLoaded() {
     }
   }
 }
-
-let aiContextUsageTimer = null;
-let aiContextUsageRequest = 0;
 
 function currentAiRequestScope() {
   if (!state.work) return null;
@@ -6691,57 +6743,6 @@ function showAiContextWarning(usage = null) {
 
 function hideAiContextWarning() {
   $("#ai-context-warning").classList.add("hidden");
-}
-
-async function prepareAiConversationContext({ instruction, scope, modelId, citations }) {
-  const conversationId = await ensureAiConversation();
-  const prepared = await api(`/api/ai-conversations/${conversationId}/context/prepare`, {
-    method: "POST",
-    body: { instruction, scope, modelId, citations }
-  });
-  setAiContextMeter(prepared.usage);
-  if (prepared.action === "warn") {
-    showAiContextWarning(prepared.usage);
-    return false;
-  }
-  hideAiContextWarning();
-  if (prepared.action === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
-  return true;
-}
-
-function scheduleAiContextUsage() {
-  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-  aiContextUsageTimer = setTimeout(() => {
-    aiContextUsageTimer = null;
-    void refreshAiContextUsage();
-  }, 260);
-}
-
-async function refreshAiContextUsage() {
-  const requestScope = currentAiRequestScope();
-  const modelId = $("#ai-model").value;
-  if (!requestScope || !modelId || (requestScope.taskType === "polish" && !requestScope.selection)) {
-    setAiContextMeter(null);
-    return;
-  }
-  const requestId = ++aiContextUsageRequest;
-  try {
-    const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
-    const usage = await api(`/api/works/${state.work.id}/ai-context-usage`, {
-      method: "POST",
-      body: {
-        modelId,
-        taskType: requestScope.taskType,
-        scope: requestScope.scope,
-        instruction: aiPromptText(),
-        citations,
-        conversationId: state.aiConversationId || undefined
-      }
-    });
-    if (requestId === aiContextUsageRequest) setAiContextMeter(usage);
-  } catch {
-    if (requestId === aiContextUsageRequest) setAiContextMeter(null);
-  }
 }
 
 async function loadAiReferences() {
@@ -9064,7 +9065,7 @@ function openModelDialog(providerId, item = null) {
 async function sendAi() {
   if (!state.work) return toast("请先选择作品", "error");
   try {
-    await Promise.all([ensureAiModelsLoaded(), ensureAiConversationsLoaded()]);
+    await ensureAiModelsLoaded();
   } catch (error) {
     return toast(`创作助手加载失败：${error.message}`, "error");
   }
@@ -9077,30 +9078,18 @@ async function sendAi() {
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
-  if (taskType === "chat") {
-    $("#ai-send").disabled = true;
-    $("#ai-send").textContent = "检查上下文";
+  let persistedUserMessage = null;
+  if (taskType !== "chat") {
     try {
-      const mayContinue = await prepareAiConversationContext({ instruction, scope, modelId, citations });
-      if (!mayContinue) return;
+      persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
     } catch (error) {
-      toast(`上下文检查失败：${error.message}`, "error");
-      return;
-    } finally {
-      $("#ai-send").disabled = false;
-      $("#ai-send").textContent = "发送";
+      return toast(`对话记录创建失败：${error.message}`, "error");
     }
+    state.aiPromptSent = true;
+    renderAiQuickActions();
+    appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+    clearAiPromptComposer();
   }
-  let persistedUserMessage;
-  try {
-    persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
-  } catch (error) {
-    return toast(`对话记录创建失败：${error.message}`, "error");
-  }
-  state.aiPromptSent = true;
-  renderAiQuickActions();
-  appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
-  clearAiPromptComposer();
   $("#ai-send").disabled = true;
   $("#ai-send").textContent = "发送中";
   try {
@@ -9110,7 +9099,8 @@ async function sendAi() {
     let persistedStreamMessage = null;
     let suggestion = null;
     if (taskType === "chat") {
-      const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId, currentMessageId: persistedUserMessage.id });
+      const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId || undefined });
+      if (streamed.action === "warn") return;
       assistantContent = streamed.content;
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
@@ -9118,11 +9108,18 @@ async function sendAi() {
       applyAiConversationTitle(streamed.conversationTitle);
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
+      setAiContextMeter(suggestion.contextUsage);
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
     try {
       if (persistedStreamMessage) {
+        updateAiConversationSummaryFromMessage({
+          conversationId: state.aiConversationId,
+          role: "assistant",
+          content: assistantContent,
+          createdAt: persistedStreamMessage.createdAt
+        });
         updateMessageCreatedAt(assistantMessage, persistedStreamMessage.createdAt);
         attachMessageIdentity(assistantMessage, persistedStreamMessage.id);
       } else {
@@ -9152,13 +9149,19 @@ async function streamChat(body) {
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
   message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
-  attachMessageHeading(message, "助手 · 正在生成");
-  $("#ai-feed").append(message);
-  scrollAiFeedToBottom();
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  let messageMounted = false;
+  const mountAssistantMessage = () => {
+    if (messageMounted) return;
+    attachMessageHeading(message, "助手 · 正在生成");
+    $("#ai-feed").append(message);
+    messageMounted = true;
+    scrollAiFeedToBottom();
+  };
   const typewriter = createStreamTypewriter({
     onRender: (text, progress) => {
+      mountAssistantMessage();
       content.innerHTML = renderMarkdown(text);
       const receivedCharacters = progress.visibleCharacters + progress.pendingCharacters;
       meta.textContent = progress.pendingCharacters > 0
@@ -9174,6 +9177,8 @@ async function streamChat(body) {
   let persistedMessageId = null;
   let persistedMessageCreatedAt = null;
   let conversationTitle = null;
+  let persistedUserMessage = null;
+  let contextAction = "ready";
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -9200,7 +9205,32 @@ async function streamChat(body) {
       }
       if (!dataLines.length) return;
       const payload = JSON.parse(dataLines.join("\n"));
-      if (eventName === "delta") {
+      if (eventName === "context") {
+        contextAction = typeof payload.action === "string" ? payload.action : "ready";
+        setAiContextMeter(payload.usage);
+        if (payload.conversation?.id) {
+          state.aiConversationId = payload.conversation.id;
+          upsertAiConversationSummary(payload.conversation);
+          $("#ai-conversation-title").textContent = payload.conversation.title;
+        }
+        if (contextAction === "warn") showAiContextWarning(payload.usage);
+        else {
+          hideAiContextWarning();
+          if (contextAction === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
+        }
+      } else if (eventName === "user_message") {
+        persistedUserMessage = payload.message;
+        if (persistedUserMessage?.id) {
+          state.aiConversationId = persistedUserMessage.conversationId;
+          updateAiConversationSummaryFromMessage(persistedUserMessage);
+          state.aiPromptSent = true;
+          renderAiQuickActions();
+          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+          clearAiPromptComposer();
+          mountAssistantMessage();
+        }
+      } else if (eventName === "delta") {
+        mountAssistantMessage();
         const firstFinalDelta = streamedText.length === 0;
         const delta = typeof payload.delta === "string" ? payload.delta : "";
         streamedText += delta;
@@ -9209,6 +9239,7 @@ async function streamChat(body) {
         if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
         meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
+        mountAssistantMessage();
         const step = { ...payload };
         const append = step.append === true;
         delete step.append;
@@ -9219,6 +9250,7 @@ async function streamChat(body) {
         meta.textContent = step.type === "thinking" ? `正在思考 · 第 ${Number(step.round) || 1} 轮` : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "tool_call") {
+        mountAssistantMessage();
         const toolCall = { ...payload };
         const round = toolCall.round;
         delete toolCall.round;
@@ -9228,9 +9260,11 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "complete") {
+        mountAssistantMessage();
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
+        setAiContextMeter(payload.contextUsage);
         await typewriter.finish();
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -9258,8 +9292,9 @@ async function streamChat(body) {
     if (buffer.trim()) await consume(buffer);
     await typewriter.finish();
     if (streamError) throw streamError;
-    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle };
+    return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
+    mountAssistantMessage();
     typewriter.reveal();
     message.classList.remove("is-streaming");
     content.setAttribute("aria-busy", "false");
@@ -10397,9 +10432,9 @@ $("#chapter-content").addEventListener("input", (event) => {
   scheduleChapterAutoSave();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 });
-$("#chapter-content").addEventListener("select", scheduleAiContextUsage);
+$("#chapter-content").addEventListener("select", () => setAiContextMeter(null));
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
@@ -10480,7 +10515,7 @@ $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!m
 $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftDialog, settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
   if (!findAiMention(aiPromptTextBeforeCursor())) return;
   try {
     await ensureAiReferencesLoaded();
@@ -10495,9 +10530,9 @@ $("#ai-prompt").addEventListener("focus", () => {
 $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
-$("#ai-model").addEventListener("change", scheduleAiContextUsage);
-$("#ai-task").addEventListener("change", scheduleAiContextUsage);
-$("#ai-scope").addEventListener("change", scheduleAiContextUsage);
+$("#ai-model").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-task").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-scope").addEventListener("change", () => setAiContextMeter(null));
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
@@ -10700,7 +10735,7 @@ $("#ai-context-compact").addEventListener("click", async () => {
     });
     hideAiContextWarning();
     toast(result.changed ? `已整理 ${result.compactedMessageCount} 条较早消息为长期记忆` : "当前没有需要整理的较早消息");
-    await refreshAiContextUsage();
+    setAiContextMeter(result.usage);
   } catch (error) {
     toast(`上下文压缩失败：${error.message}`, "error");
   } finally {
@@ -10723,6 +10758,30 @@ $("#ai-history-toggle").addEventListener("click", async () => {
     await ensureAiConversationsLoaded();
     setAiHistoryVisible(true);
   } catch (error) {
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-history-previous").addEventListener("click", async () => {
+  const targetPage = aiConversationHistoryPage.page - 1;
+  if (targetPage < 1) return;
+  $("#ai-history-previous").disabled = true;
+  $("#ai-history-next").disabled = true;
+  try {
+    await loadAiConversations(targetPage);
+  } catch (error) {
+    renderAiConversationHistory();
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-history-next").addEventListener("click", async () => {
+  const targetPage = aiConversationHistoryPage.nextPage;
+  if (!targetPage) return;
+  $("#ai-history-previous").disabled = true;
+  $("#ai-history-next").disabled = true;
+  try {
+    await loadAiConversations(targetPage);
+  } catch (error) {
+    renderAiConversationHistory();
     toast(`对话历史加载失败：${error.message}`, "error");
   }
 });

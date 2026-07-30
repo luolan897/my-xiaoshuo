@@ -24,8 +24,8 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260731-context-usage-popover-drafts-to-ideas-model-test-dialog-v1');
-    expect(page.text).toContain('/app.js?v=20260731-context-usage-popover-drafts-to-ideas-model-test-dialog-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260731-context-usage-popover-drafts-to-ideas-model-test-dialog-v1"></script>');
+    expect(page.text).toContain('/app.js?v=20260731-ai-request-consolidation-v6');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260731-ai-request-consolidation-v6"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');

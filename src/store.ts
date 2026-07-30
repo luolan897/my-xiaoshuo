@@ -5973,6 +5973,19 @@ export class Store {
     return paginated(rows.map((row) => this.mapAiConversation(row)), pagination);
   }
 
+  getAiConversationSummary(conversationId: string): Record<string, unknown> {
+    const row = this.db.get(
+      `SELECT conversation.*,
+        (SELECT COUNT(*) FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id) AS message_count,
+        COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
+       FROM ai_conversations conversation
+       WHERE conversation.id = ?`,
+      conversationId
+    );
+    if (!row) throw notFound("AI 对话");
+    return this.mapAiConversation(row);
+  }
+
   getAiConversation(conversationId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!row) throw notFound("AI 对话");

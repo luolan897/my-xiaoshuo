@@ -2524,7 +2524,14 @@ export class AiManager {
       currentRequestActor()?.userId ?? null
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }), toolCalls: generated.toolCalls, processSteps: generated.processSteps };
+    return {
+      ...this.getSuggestion(suggestionId),
+      outputTokens: generated.outputTokens,
+      ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
+      toolCalls: generated.toolCalls,
+      processSteps: generated.processSteps,
+      contextUsage: this.getContextUsage(effectiveInput)
+    };
   }
 
   async createStreamingChat(
@@ -3104,7 +3111,7 @@ export class AiManager {
     };
   }
 
-  async prepareConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction"> & { conversationId: string }): Promise<Record<string, unknown>> {
+  async prepareConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string }): Promise<Record<string, unknown>> {
     const usage = this.getContextUsage({ ...input, taskType: "chat" });
     const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
     if (!usage.compactRecommended) {
