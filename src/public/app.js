@@ -5943,9 +5943,9 @@ function renderProviderCards(providers, models) {
           : provider.connectionStatus !== "success"
             ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
             : "";
-      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}<button class="ghost-button model-test-button" type="button" data-test-model="${esc(model.id)}" aria-label="测试模型 ${esc(model.displayName)}">测试连接</button></div>`;
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
     }).join("")}</div>
-    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
+    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI 或 Anthropic 兼容接口地址和密钥，测试成功后再添加模型。");
 }
@@ -5956,14 +5956,6 @@ function bindPlatformProviderActions(host, providers, models) {
     button.textContent = "测试中";
     const result = await api(`/api/providers/${button.dataset.testProvider}/test`, { method: "POST", body: {} });
     toast(result.ok ? "连接测试成功" : `连接失败：${result.error}`, result.ok ? "info" : "error");
-    await renderPlatformAiConfig();
-    await loadModels();
-  }));
-  host.querySelectorAll("[data-test-model]").forEach((button) => button.addEventListener("click", async () => {
-    button.disabled = true;
-    button.textContent = "测试中";
-    const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
-    toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
     await renderPlatformAiConfig();
     await loadModels();
   }));
@@ -9027,7 +9019,13 @@ function openProviderDialog(item) {
 function openModelDialog(providerId, item = null) {
   const values = modelFormValues(item);
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow) + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
+  const connectionTest = item && item.providerStatus === "enabled"
+    ? `<section class="model-connection-test">
+        <div><strong>模型连接测试</strong><p>使用当前已保存的模型标识符和供应商凭据发起最小请求。</p></div>
+        <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
+      </section>`
+    : "";
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow) + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
     const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
@@ -9043,6 +9041,22 @@ function openModelDialog(providerId, item = null) {
   modelIdInput.addEventListener("input", () => {
     if (isKimiModelId(modelIdInput.value)) temperatureInput.value = "1";
     syncKimiTemperature();
+  });
+  $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "测试中";
+    try {
+      const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
+      toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+      await renderPlatformAiConfig();
+      await loadModels();
+    } catch (error) {
+      toast(`模型连接测试失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+      button.textContent = "测试连接";
+    }
   });
   syncKimiTemperature();
 }
