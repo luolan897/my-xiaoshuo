@@ -29,7 +29,11 @@ describe("智谱 Anthropic 多轮思考兼容", () => {
       const body = JSON.parse(String(init?.body)) as {
         thinking?: Record<string, unknown>;
         messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+        stream?: boolean;
       };
+      if (!body.stream) {
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "连接成功" }] }), { status: 200 });
+      }
       expect(body.thinking).toEqual({ type: "enabled" });
       requestCount += 1;
       if (requestCount === 2) {

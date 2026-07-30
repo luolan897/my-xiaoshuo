@@ -26,8 +26,12 @@ describe("LongCat OpenAI 多轮推理兼容", () => {
         model: string;
         thinking?: Record<string, unknown>;
         messages: Array<Record<string, unknown>>;
+        stream?: boolean;
       };
       expect(body.model).toBe("LongCat-2.0");
+      if (!body.stream) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200 });
+      }
       expect(body.thinking).toEqual({ type: "enabled" });
       requestCount += 1;
       if (requestCount === 2) {
@@ -136,7 +140,11 @@ describe("LongCat Anthropic 多轮思考兼容", () => {
       const body = JSON.parse(String(init?.body)) as {
         thinking?: Record<string, unknown>;
         messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+        stream?: boolean;
       };
+      if (!body.stream) {
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "连接成功" }] }), { status: 200 });
+      }
       expect(body.thinking).toEqual({ type: "enabled" });
       requestCount += 1;
       if (requestCount === 2) {
