@@ -36,6 +36,7 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain('"解决评论"');
     expect(application.text).toContain('"删除评论"');
     expect(styles.text).toContain(".chapter-annotation-card");
+    expect(styles.text).toContain("font-family: var(--font-mono), monospace; font-size: 10px; line-height: 1.6");
     expect(page.text).toContain(">编辑</button>");
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
     expect(styles.text).toContain(".editor-view.is-read-only #tidy-blank-lines-button");
