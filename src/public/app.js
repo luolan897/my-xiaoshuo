@@ -667,7 +667,7 @@ function renderPresence() {
   const localKey = presencePageKey(presencePageForRoute());
   syncChapterAutoSaveWithPresence();
   control.classList.remove("hidden");
-  $("#presence-count").textContent = `${groups.length} 人在线`;
+  $("#presence-count").textContent = `${groups.length} 人`;
   $("#presence-list").innerHTML = groups.map((participant) => {
     const isCurrent = participant.userId === state.user?.userId;
     const samePage = !isCurrent && participant.pages.some((page) => page.key === localKey);
