@@ -1150,6 +1150,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.listChapterInsightsPage(request.params.chapterId, pagination) : store.listChapterInsights(request.params.chapterId));
   });
   app.get("/api/chapters/:chapterId/annotations", (request, response) => data(response, store.listChapterAnnotations(request.params.chapterId)));
+  app.get("/api/works/:workId/chapter-annotations", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination)
+      : store.listWorkChapterAnnotations(request.params.workId));
+  });
   app.post("/api/chapters/:chapterId/annotations", (request, response) => {
     const input = parse(z.object({
       kind: z.enum(["note", "todo"]),
