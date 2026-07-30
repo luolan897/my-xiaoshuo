@@ -34,7 +34,7 @@ export function normalizeAiContextTokenDistribution(usage) {
   const items = [
     { key: "system-prompt", label: "system prompt", tokens: systemPromptTokens },
     { key: "function", label: "function", tokens: functionTokens },
-    { key: "skills", label: "skills 待加入", tokens: skillsTokens },
+    { key: "skills", label: "skills", tokens: skillsTokens },
     { key: "context", label: "context", tokens: contextTokens },
     { key: "left", label: "left", tokens: leftTokens }
   ];
