@@ -788,8 +788,8 @@ describe("AI 供应商、模型与建议 API", () => {
       const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number; messages?: Array<{ content: string }>; thinking?: { type?: string } };
       expect(body).toMatchObject({ stream: true, max_tokens: 32_000 });
       expect(body.thinking).toEqual({ type: "enabled" });
-      expect(body.messages?.[1]?.content).toContain("[第一章 L1-L2]");
-      expect(body.messages?.[1]?.content).toContain("林舟启动了飞船。");
+      expect(body.messages?.some((message) => message.content.includes("[第一章 L1-L2]"))).toBe(true);
+      expect(body.messages?.some((message) => message.content.includes("林舟启动了飞船。"))).toBe(true);
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           const encoder = new TextEncoder();
@@ -871,22 +871,18 @@ describe("AI 供应商、模型与建议 API", () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 });
     });
 
-    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
-    const userMessage = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
-      role: "user",
-      content: "请规划北港跃迁路线"
-    }).expect(201);
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
-      instruction: userMessage.body.data.content,
+      instruction: "请规划北港跃迁路线",
       scope: { type: "chapter", chapterId },
-      modelId,
-      conversationId: conversation.body.data.id,
-      currentMessageId: userMessage.body.data.id
+      modelId
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
 
+    expect(streamed.text).toContain("event: context");
+    expect(streamed.text).toContain("event: user_message");
     expect(streamed.text).toContain('"conversationTitle":"北港跃迁路线"');
     expect(completionBodies).toHaveLength(2);
-    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    const completePayload = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId?: string };
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
     expect(reloaded.body.data.title).toBe("北港跃迁路线");
     expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
     const settingsAfter = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);

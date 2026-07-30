@@ -127,6 +127,46 @@ describe("AI 对话上下文压缩", () => {
     expect(secondRetry.body.data.id).toBe(firstRetry.body.data.id);
   });
 
+  it("流式聊天在同一请求内完成预检和消息持久化", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (const [role, content] of [
+      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(90)}`],
+      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(90)}`],
+      ["user", "最近问题：当前燃料还剩多少？"],
+      ["assistant", "最近回答：燃料数据尚未在正文中明确。"]
+    ] as const) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
+    }
+    const body = {
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction: "继续回答燃料问题。",
+      conversationId
+    };
+    fetchMock.mockClear();
+
+    const warned = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send(body).expect(200);
+    expect(warned.text).toContain('event: context\ndata: {"action":"warn"');
+    expect(warned.text).not.toContain("event: user_message");
+    expect(warned.text).not.toContain("event: complete");
+    expect(fetchMock).not.toHaveBeenCalled();
+    const afterWarning = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(afterWarning.body.data).toMatchObject({ messageCount: 4, contextWarningPending: true });
+
+    const continued = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send(body).expect(200);
+    expect(continued.text).toContain('event: context\ndata: {"action":"compacted"');
+    expect(continued.text).toContain("event: user_message");
+    expect(continued.text).toContain("event: complete");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const afterCompletion = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(afterCompletion.body.data).toMatchObject({ messageCount: 6, contextWarningPending: false });
+    expect(afterCompletion.body.data.messages.slice(-2)).toEqual([
+      expect.objectContaining({ role: "user", content: body.instruction }),
+      expect.objectContaining({ role: "assistant", content: "已结合压缩摘要和最近对话回答。" })
+    ]);
+  });
+
   it("手动整理较长对话时优先保留最近八条原始消息", async () => {
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;

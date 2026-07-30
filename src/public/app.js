@@ -6720,22 +6720,6 @@ function hideAiContextWarning() {
   $("#ai-context-warning").classList.add("hidden");
 }
 
-async function prepareAiConversationContext({ instruction, scope, modelId, citations }) {
-  const conversationId = await ensureAiConversation();
-  const prepared = await api(`/api/ai-conversations/${conversationId}/context/prepare`, {
-    method: "POST",
-    body: { instruction, scope, modelId, citations }
-  });
-  setAiContextMeter(prepared.usage);
-  if (prepared.action === "warn") {
-    showAiContextWarning(prepared.usage);
-    return false;
-  }
-  hideAiContextWarning();
-  if (prepared.action === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
-  return true;
-}
-
 async function loadAiReferences() {
   const workId = state.work?.id;
   if (!workId) return;
@@ -9069,30 +9053,18 @@ async function sendAi() {
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
-  if (taskType === "chat") {
-    $("#ai-send").disabled = true;
-    $("#ai-send").textContent = "检查上下文";
+  let persistedUserMessage = null;
+  if (taskType !== "chat") {
     try {
-      const mayContinue = await prepareAiConversationContext({ instruction, scope, modelId, citations });
-      if (!mayContinue) return;
+      persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
     } catch (error) {
-      toast(`上下文检查失败：${error.message}`, "error");
-      return;
-    } finally {
-      $("#ai-send").disabled = false;
-      $("#ai-send").textContent = "发送";
+      return toast(`对话记录创建失败：${error.message}`, "error");
     }
+    state.aiPromptSent = true;
+    renderAiQuickActions();
+    appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+    clearAiPromptComposer();
   }
-  let persistedUserMessage;
-  try {
-    persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
-  } catch (error) {
-    return toast(`对话记录创建失败：${error.message}`, "error");
-  }
-  state.aiPromptSent = true;
-  renderAiQuickActions();
-  appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
-  clearAiPromptComposer();
   $("#ai-send").disabled = true;
   $("#ai-send").textContent = "发送中";
   try {
@@ -9102,7 +9074,8 @@ async function sendAi() {
     let persistedStreamMessage = null;
     let suggestion = null;
     if (taskType === "chat") {
-      const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId, currentMessageId: persistedUserMessage.id });
+      const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId || undefined });
+      if (streamed.action === "warn") return;
       assistantContent = streamed.content;
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
@@ -9151,13 +9124,19 @@ async function streamChat(body) {
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
   message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
-  attachMessageHeading(message, "助手 · 正在生成");
-  $("#ai-feed").append(message);
-  scrollAiFeedToBottom();
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  let messageMounted = false;
+  const mountAssistantMessage = () => {
+    if (messageMounted) return;
+    attachMessageHeading(message, "助手 · 正在生成");
+    $("#ai-feed").append(message);
+    messageMounted = true;
+    scrollAiFeedToBottom();
+  };
   const typewriter = createStreamTypewriter({
     onRender: (text, progress) => {
+      mountAssistantMessage();
       content.innerHTML = renderMarkdown(text);
       const receivedCharacters = progress.visibleCharacters + progress.pendingCharacters;
       meta.textContent = progress.pendingCharacters > 0
@@ -9173,6 +9152,8 @@ async function streamChat(body) {
   let persistedMessageId = null;
   let persistedMessageCreatedAt = null;
   let conversationTitle = null;
+  let persistedUserMessage = null;
+  let contextAction = "ready";
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -9199,7 +9180,32 @@ async function streamChat(body) {
       }
       if (!dataLines.length) return;
       const payload = JSON.parse(dataLines.join("\n"));
-      if (eventName === "delta") {
+      if (eventName === "context") {
+        contextAction = typeof payload.action === "string" ? payload.action : "ready";
+        setAiContextMeter(payload.usage);
+        if (payload.conversation?.id) {
+          state.aiConversationId = payload.conversation.id;
+          upsertAiConversationSummary(payload.conversation);
+          $("#ai-conversation-title").textContent = payload.conversation.title;
+        }
+        if (contextAction === "warn") showAiContextWarning(payload.usage);
+        else {
+          hideAiContextWarning();
+          if (contextAction === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
+        }
+      } else if (eventName === "user_message") {
+        persistedUserMessage = payload.message;
+        if (persistedUserMessage?.id) {
+          state.aiConversationId = persistedUserMessage.conversationId;
+          updateAiConversationSummaryFromMessage(persistedUserMessage);
+          state.aiPromptSent = true;
+          renderAiQuickActions();
+          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+          clearAiPromptComposer();
+          mountAssistantMessage();
+        }
+      } else if (eventName === "delta") {
+        mountAssistantMessage();
         const firstFinalDelta = streamedText.length === 0;
         const delta = typeof payload.delta === "string" ? payload.delta : "";
         streamedText += delta;
@@ -9208,6 +9214,7 @@ async function streamChat(body) {
         if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
         meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
+        mountAssistantMessage();
         const step = { ...payload };
         const append = step.append === true;
         delete step.append;
@@ -9218,6 +9225,7 @@ async function streamChat(body) {
         meta.textContent = step.type === "thinking" ? `正在思考 · 第 ${Number(step.round) || 1} 轮` : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "tool_call") {
+        mountAssistantMessage();
         const toolCall = { ...payload };
         const round = toolCall.round;
         delete toolCall.round;
@@ -9227,6 +9235,7 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "complete") {
+        mountAssistantMessage();
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
@@ -9258,8 +9267,9 @@ async function streamChat(body) {
     if (buffer.trim()) await consume(buffer);
     await typewriter.finish();
     if (streamError) throw streamError;
-    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle };
+    return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
+    mountAssistantMessage();
     typewriter.reveal();
     message.classList.remove("is-streaming");
     content.setAttribute("aria-busy", "false");

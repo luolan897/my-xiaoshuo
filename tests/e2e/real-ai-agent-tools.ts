@@ -229,7 +229,8 @@ try {
   assert.match(page, /id="ai-tool-call-dialog"/u);
   assert.match(page, /id="ai-context-warning"/u);
   assert.match(application, /调用了 \$\{name\} 工具/u);
-  assert.match(application, /prepareAiConversationContext/u);
+  assert.match(application, /eventName === "context"/u);
+  assert.match(application, /eventName === "user_message"/u);
   checked("ui-assets", "tool detail dialog and context compaction controls are served by the real app");
 
   const work = await api<JsonObject>("POST", "/works", { title: "AI 工具 E2E" });

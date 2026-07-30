@@ -62,11 +62,18 @@ describe("作品工作台按需加载", () => {
       application.indexOf("async function createNewAiConversation()"),
       application.indexOf("async function ensureAiConversation()")
     );
+    const sendAiSource = application.slice(
+      application.indexOf("async function sendAi()"),
+      application.indexOf("async function streamChat(")
+    );
 
     expect(persistMessageSource).toContain("updateAiConversationSummaryFromMessage(message);");
     expect(persistMessageSource).not.toContain("loadAiConversations");
     expect(createConversationSource).toContain("upsertAiConversationSummary(conversation);");
     expect(createConversationSource).not.toContain("loadAiConversations");
+    expect(sendAiSource).toContain('if (taskType !== "chat")');
+    expect(sendAiSource).not.toContain("context/prepare");
+    expect(sendAiSource).not.toContain("currentMessageId");
     expect(application).toContain("upsertAiConversationSummary(conversation);");
   });
 

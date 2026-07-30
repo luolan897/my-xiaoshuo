@@ -23,11 +23,12 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('对话 context 使用独立预算');
     expect(application).toContain("对话历史已使用 ${percent}% 的独立预算");
     expect(application).toContain("作品正文超限不会触发此操作");
-    expect(application).toContain("/context/prepare`");
+    expect(application).toContain('eventName === "context"');
+    expect(application).toContain('eventName === "user_message"');
     expect(application).toContain("/compact`");
-    expect(application).toContain("currentMessageId: persistedUserMessage.id");
-    expect(application).toContain('prepared.action === "warn"');
-    expect(application).toContain('prepared.action === "compacted"');
+    expect(application).not.toContain("prepareAiConversationContext");
+    expect(application).toContain('contextAction === "warn"');
+    expect(application).toContain('contextAction === "compacted"');
     expect(application).toContain("normalizeAiContextTokenDistribution");
     expect(application).toContain("formatAiContextUsagePercent");
     expect(application).toContain("setAiContextDistributionVisible");

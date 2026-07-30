@@ -2002,6 +2002,38 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     };
     sendEvent("ready", { streaming: true });
     try {
+      const conversation = input.conversationId
+        ? store.getAiConversationSummary(input.conversationId)
+        : store.createAiConversation(request.params.workId);
+      if (String(conversation.workId) !== request.params.workId) {
+        throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+      }
+      const conversationId = String(conversation.id);
+      const prepared = await ai.prepareConversationContext({
+        conversationId,
+        workId: request.params.workId,
+        modelId: input.modelId,
+        scope: input.scope as ContextScope,
+        instruction: instructionWithCitations(input.instruction, citations),
+        excludeConversationMessageId: input.currentMessageId
+      });
+      sendEvent("context", {
+        ...prepared,
+        conversation: {
+          ...conversation,
+          contextWarningPending: prepared.action === "warn"
+        }
+      });
+      if (prepared.action === "warn") return;
+      const userMessage = input.currentMessageId
+        ? null
+        : store.addAiConversationMessage(conversationId, {
+          role: "user",
+          content: input.instruction,
+          citations
+        });
+      const currentMessageId = input.currentMessageId ?? String(userMessage?.id ?? "");
+      if (userMessage) sendEvent("user_message", { message: userMessage });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: instructionWithCitations(input.instruction, citations),
@@ -2009,9 +2041,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
         onProcessStep: (step) => sendEvent("process_step", step),
-        conversationId: input.conversationId,
-        excludeConversationMessageId: input.currentMessageId,
-        ...(input.currentMessageId ? { assistantMessageRequestId: `assistant:${input.currentMessageId}` } : {}),
+        conversationId,
+        excludeConversationMessageId: currentMessageId,
+        ...(currentMessageId ? { assistantMessageRequestId: `assistant:${currentMessageId}` } : {}),
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
@@ -2020,7 +2052,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         taskType: "chat",
         instruction: "",
         scope: input.scope as ContextScope,
-        conversationId: input.conversationId,
+        conversationId,
         modelId: input.modelId
       });
       sendEvent("complete", {
@@ -2034,6 +2066,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         toolCalls: suggestion.toolCalls,
         processSteps: suggestion.processSteps,
         contextUsage,
+        conversationId,
         conversationTitle: suggestion.conversationTitle,
         messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
           ? (suggestion.conversationMessage as Record<string, unknown>).id

@@ -3111,7 +3111,7 @@ export class AiManager {
     };
   }
 
-  async prepareConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction"> & { conversationId: string }): Promise<Record<string, unknown>> {
+  async prepareConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string }): Promise<Record<string, unknown>> {
     const usage = this.getContextUsage({ ...input, taskType: "chat" });
     const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
     if (!usage.compactRecommended) {
