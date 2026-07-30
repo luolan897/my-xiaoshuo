@@ -386,12 +386,10 @@ let onboardingSteps = [];
 let loadedAiModelsWorkId = null;
 let loadedAiReferencesWorkId = null;
 let loadedAiConversationsWorkId = null;
-let aiModelsLoadPromise = null;
-let aiModelsLoadWorkId = null;
 let aiReferencesLoadPromise = null;
 let aiReferencesLoadWorkId = null;
-let aiConversationsLoadPromise = null;
-let aiConversationsLoadWorkId = null;
+let aiSidebarLoadPromise = null;
+let aiSidebarLoadWorkId = null;
 let workScopedUiGeneration = 0;
 const loadedVolumeChapterIds = new Set();
 const volumeChapterLoadingIds = new Set();
@@ -1656,36 +1654,45 @@ function applyAiConversationTitle(title) {
   renderAiConversationHistory();
 }
 
-async function loadAiConversations(openLatest = true) {
+function applyAiConversations(conversations) {
+  state.aiConversations = conversations;
+  loadedAiConversationsWorkId = state.work?.id ?? null;
+  renderAiConversationHistory();
+  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+  if (current) $("#ai-conversation-title").textContent = current.title;
+}
+
+async function loadAiSidebarResources() {
   const workId = state.work?.id;
   if (!workId) return;
   const generation = workScopedUiGeneration;
-  const conversations = (await apiPage(`/api/works/${workId}/ai-conversations`)).items;
+  const sidebar = await api(`/api/works/${workId}/chat`);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  state.aiConversations = conversations;
+  applyAiModels(sidebar.models);
+  applyAiConversations(sidebar.conversations);
+  loadedAiModelsWorkId = workId;
   loadedAiConversationsWorkId = workId;
-  renderAiConversationHistory();
-  if (openLatest && state.aiConversations.length) await openAiConversation(state.aiConversations[0].id, false);
-  else {
-    const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
-    if (current) $("#ai-conversation-title").textContent = current.title;
+}
+
+async function ensureAiSidebarResourcesLoaded() {
+  const workId = state.work?.id;
+  if (!workId || (loadedAiModelsWorkId === workId && loadedAiConversationsWorkId === workId)) return;
+  if (aiSidebarLoadPromise && aiSidebarLoadWorkId === workId) return aiSidebarLoadPromise;
+  aiSidebarLoadWorkId = workId;
+  aiSidebarLoadPromise = loadAiSidebarResources();
+  try {
+    await aiSidebarLoadPromise;
+  } finally {
+    if (aiSidebarLoadWorkId === workId) {
+      aiSidebarLoadPromise = null;
+      aiSidebarLoadWorkId = null;
+    }
   }
 }
 
 async function ensureAiConversationsLoaded() {
-  const workId = state.work?.id;
-  if (!workId || loadedAiConversationsWorkId === workId) return;
-  if (aiConversationsLoadPromise && aiConversationsLoadWorkId === workId) return aiConversationsLoadPromise;
-  aiConversationsLoadWorkId = workId;
-  aiConversationsLoadPromise = loadAiConversations(false);
-  try {
-    await aiConversationsLoadPromise;
-  } finally {
-    if (aiConversationsLoadWorkId === workId) {
-      aiConversationsLoadPromise = null;
-      aiConversationsLoadWorkId = null;
-    }
-  }
+  if (loadedAiConversationsWorkId === state.work?.id) return;
+  await ensureAiSidebarResourcesLoaded();
 }
 
 async function openAiConversation(conversationId, hideHistory = true) {
@@ -3481,12 +3488,10 @@ function resetWorkScopedUiCaches() {
   loadedAiModelsWorkId = null;
   loadedAiReferencesWorkId = null;
   loadedAiConversationsWorkId = null;
-  aiModelsLoadPromise = null;
-  aiModelsLoadWorkId = null;
   aiReferencesLoadPromise = null;
   aiReferencesLoadWorkId = null;
-  aiConversationsLoadPromise = null;
-  aiConversationsLoadWorkId = null;
+  aiSidebarLoadPromise = null;
+  aiSidebarLoadWorkId = null;
   raceHierarchyLoadPromise = null;
   raceHierarchyLoadWorkId = null;
   loadedRaceHierarchyWorkId = null;
@@ -6585,8 +6590,12 @@ async function loadModels() {
   const generation = workScopedUiGeneration;
   const models = await api(`/api/works/${workId}/models`);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  state.models = models.filter((model) => isSelectableModel(model));
+  applyAiModels(models);
   loadedAiModelsWorkId = workId;
+}
+
+function applyAiModels(models) {
+  state.models = models.filter((model) => isSelectableModel(model));
   const select = $("#ai-model");
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")
@@ -6597,21 +6606,13 @@ async function loadModels() {
 async function ensureAiModelsLoaded() {
   const workId = state.work?.id;
   if (!workId || loadedAiModelsWorkId === workId) return;
-  if (aiModelsLoadPromise && aiModelsLoadWorkId === workId) return aiModelsLoadPromise;
   const select = $("#ai-model");
   select.innerHTML = '<option value="">正在加载模型……</option>';
-  aiModelsLoadWorkId = workId;
-  aiModelsLoadPromise = loadModels();
   try {
-    await aiModelsLoadPromise;
+    await ensureAiSidebarResourcesLoaded();
   } catch (error) {
     if (state.work?.id === workId) select.innerHTML = '<option value="">模型加载失败，点击重试</option>';
     throw error;
-  } finally {
-    if (aiModelsLoadWorkId === workId) {
-      aiModelsLoadPromise = null;
-      aiModelsLoadWorkId = null;
-    }
   }
 }
 

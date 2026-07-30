@@ -1828,6 +1828,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     data(response, updated);
   });
+  app.get("/api/works/:workId/chat", (request, response) => {
+    data(response, {
+      models: ai.listWorkModels(request.params.workId),
+      conversations: store.listAiConversations(request.params.workId)
+    });
+  });
   app.get("/api/works/:workId/ai-conversations", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listAiConversationsPage(request.params.workId, pagination) : store.listAiConversations(request.params.workId));

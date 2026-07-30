@@ -46,6 +46,10 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain('$("#ai-prompt").addEventListener("focus"');
     expect(application).toContain("await ensureAiReferencesLoaded();");
     expect(application).toContain("await ensureAiConversationsLoaded();");
+    expect(application).toContain('const sidebar = await api(`/api/works/${workId}/chat`);');
+    expect(application).toContain("if (aiSidebarLoadPromise && aiSidebarLoadWorkId === workId) return aiSidebarLoadPromise;");
+    expect(application).not.toContain("aiModelsLoadPromise");
+    expect(application).not.toContain("aiConversationsLoadPromise");
   });
 
   it("会话写入后增量更新历史摘要而不重复拉取列表", async () => {

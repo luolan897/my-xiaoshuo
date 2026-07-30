@@ -90,6 +90,19 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(409);
   });
 
+  it("聊天初始化一次返回模型和会话列表", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "初始化会话" }).expect(201);
+
+    const initialized = await request(runtime.app).get(`/api/works/${workId}/chat`).expect(200);
+
+    expect(initialized.body.data.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: modelId })]));
+    expect(initialized.body.data.conversations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: conversation.body.data.id, title: "初始化会话", messageCount: 0 })
+    ]));
+  });
+
   it("连接测试必须用 max_tokens=10 收到正文或 thinking", async () => {
     const { providerId } = await configureAi();
     fetchMock.mockImplementation(async (input, init) => {
