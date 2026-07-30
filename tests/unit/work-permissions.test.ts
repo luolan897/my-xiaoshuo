@@ -56,7 +56,7 @@ describe("作品模块权限", () => {
     expect(canWriteUiModule(work, "drafts")).toBe(true);
     expect(canReadUiModule(work, "characters")).toBe(false);
     expect(firstReadableUiModule(work)).toBe("editor");
-    expect(permissionSummary(permissions)).toContain("可编辑：草稿、设定库");
+    expect(permissionSummary(permissions)).toContain("可编辑：想法、设定库");
     expect(permissionSummary(permissions)).toContain("只读：正文");
   });
 

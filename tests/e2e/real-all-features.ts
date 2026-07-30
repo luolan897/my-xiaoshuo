@@ -146,7 +146,8 @@ try {
   assert.match(application, /contextWindow/u);
   assert.match(application, /renderPlatformAiConfig/u);
   assert.match(application, /renderBookAiSettings/u);
-  assert.match(application, /scheduleAiContextUsage/u);
+  assert.doesNotMatch(application, /ai-context-usage/u);
+  assert.match(application, /setAiContextMeter\(payload\.contextUsage\)/u);
   assert.match(application, /step="any"/u);
   assert.match(application, /streamChat/u);
   assert.match(application, /renderMarkdown/u);
@@ -318,16 +319,6 @@ try {
   });
   assert.equal(model.preset.max_tokens, 32_000);
   assert.equal(model.contextWindow, 128_000);
-  const contextUsage = await api<Entity>("POST", `/works/${disposableWorkId}/ai-context-usage`, {
-    modelId: model.id,
-    taskType: "chat",
-    scope: { type: "chapter", chapterId: firstChapter.id },
-    instruction: "概述本章"
-  });
-  assert.equal(contextUsage.contextWindow, 128_000);
-  assert.ok(contextUsage.inputTokens > 0);
-  checked("platform-ai", "global providers and prompt settings are shared, book prompts remain isolated, and model context usage is measurable");
-
   const streamResponse = await fetch(`${baseUrl}/works/${disposableWorkId}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -351,6 +342,11 @@ try {
   assert.equal(observedDeltaBeforeUpstreamEnd, true);
   assert.match(streamedText, /event: delta\ndata: \{"delta":"流式回复。"\}/u);
   assert.match(streamedText, /event: complete/u);
+  const streamComplete = JSON.parse(streamedText.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as Entity;
+  const contextUsage = streamComplete.contextUsage as Entity;
+  assert.equal(contextUsage.contextWindow, 128_000);
+  assert.ok(Number(contextUsage.inputTokens) > 0);
+  checked("platform-ai", "global providers and prompt settings are shared, book prompts remain isolated, and chat responses report model context usage");
   checked("streaming-chat", "the sidebar chat endpoint forwards the first model delta before the upstream response finishes");
 
   const suggestion = await api<Entity>("POST", `/works/${disposableWorkId}/suggestions`, {

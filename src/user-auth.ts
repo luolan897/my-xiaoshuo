@@ -1072,11 +1072,8 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     const contextRead = aiContextReadModules(request);
     return write ? { read: contextRead, write: ["ai-chat"] } : { read: ["ai-chat"] };
   }
-  if (/^\/api\/(?:works\/[^/]+\/(?:suggestions|ai-context-usage)|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
+  if (/^\/api\/(?:works\/[^/]+\/suggestions|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
     const contextRead = aiContextReadModules(request);
-    if (/^\/api\/works\/[^/]+\/ai-context-usage$/u.test(pathname)) {
-      return { anyRead: [...aiInteractionModules], read: contextRead };
-    }
     return write
       ? { read: contextRead, anyWrite: [...aiInteractionModules] }
       : { anyRead: [...aiInteractionModules] };

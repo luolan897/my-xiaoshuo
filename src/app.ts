@@ -1836,8 +1836,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, updated);
   });
   app.get("/api/works/:workId/ai-conversations", (request, response) => {
-    const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listAiConversationsPage(request.params.workId, pagination) : store.listAiConversations(request.params.workId));
+    const pagination = parsePagination({
+      page: request.query.page ?? "1",
+      limit: request.query.limit ?? "20"
+    }) ?? { page: 1, limit: 20, offset: 0 };
+    data(response, store.listAiConversationsPage(request.params.workId, pagination));
   });
   app.post("/api/works/:workId/ai-conversations", (request, response) => {
     const input = parse(z.object({ title: z.string().max(200).optional() }), request.body ?? {});
@@ -1887,32 +1890,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/ai-conversations/:conversationId/compact", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional(), scope: contextSchema }), request.body);
     const conversation = store.getAiConversation(request.params.conversationId);
-    data(response, await ai.compactConversation({
+    const compacted = await ai.compactConversation({
       conversationId: request.params.conversationId,
       workId: String(conversation.workId),
       modelId: input.modelId,
       scope: input.scope
-    }));
-  });
-  app.post("/api/works/:workId/ai-context-usage", (request, response) => {
-    const input = parse(z.object({
-      modelId: identifier.optional(),
-      taskType: z.enum(TASK_TYPES).default("chat"),
-      scope: contextSchema,
-      instruction: z.string().max(100_000).default(""),
-      citations: aiCitationsSchema.optional(),
-      conversationId: identifier.optional(),
-      currentMessageId: identifier.optional()
-    }), request.body ?? {});
-    data(response, ai.getContextUsage({
-      workId: request.params.workId,
-      modelId: input.modelId,
-      taskType: input.taskType,
-      scope: input.scope,
-      instruction: instructionWithCitations(input.instruction, input.citations ?? []),
-      conversationId: input.conversationId,
-      excludeConversationMessageId: input.currentMessageId
-    }));
+    });
+    data(response, {
+      ...compacted,
+      usage: ai.getContextUsage({
+        workId: String(conversation.workId),
+        taskType: "chat",
+        instruction: "",
+        conversationId: request.params.conversationId,
+        modelId: input.modelId,
+        scope: input.scope
+      })
+    });
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {
@@ -2012,6 +2006,38 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     };
     sendEvent("ready", { streaming: true });
     try {
+      const conversation = input.conversationId
+        ? store.getAiConversationSummary(input.conversationId)
+        : store.createAiConversation(request.params.workId);
+      if (String(conversation.workId) !== request.params.workId) {
+        throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+      }
+      const conversationId = String(conversation.id);
+      const prepared = await ai.prepareConversationContext({
+        conversationId,
+        workId: request.params.workId,
+        modelId: input.modelId,
+        scope: input.scope as ContextScope,
+        instruction: instructionWithCitations(input.instruction, citations),
+        excludeConversationMessageId: input.currentMessageId
+      });
+      sendEvent("context", {
+        ...prepared,
+        conversation: {
+          ...conversation,
+          contextWarningPending: prepared.action === "warn"
+        }
+      });
+      if (prepared.action === "warn") return;
+      const userMessage = input.currentMessageId
+        ? null
+        : store.addAiConversationMessage(conversationId, {
+          role: "user",
+          content: input.instruction,
+          citations
+        });
+      const currentMessageId = input.currentMessageId ?? String(userMessage?.id ?? "");
+      if (userMessage) sendEvent("user_message", { message: userMessage });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: instructionWithCitations(input.instruction, citations),
@@ -2019,12 +2045,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
         onProcessStep: (step) => sendEvent("process_step", step),
-        conversationId: input.conversationId,
-        excludeConversationMessageId: input.currentMessageId,
-        ...(input.currentMessageId ? { assistantMessageRequestId: `assistant:${input.currentMessageId}` } : {}),
+        conversationId,
+        excludeConversationMessageId: currentMessageId,
+        ...(currentMessageId ? { assistantMessageRequestId: `assistant:${currentMessageId}` } : {}),
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
+      const contextUsage = ai.getContextUsage({
+        workId: request.params.workId,
+        taskType: "chat",
+        instruction: "",
+        scope: input.scope as ContextScope,
+        conversationId,
+        modelId: input.modelId
+      });
       sendEvent("complete", {
         suggestionId: suggestion.id,
         callId: suggestion.callId,
@@ -2035,6 +2069,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         chapterVersion: suggestion.chapterVersion,
         toolCalls: suggestion.toolCalls,
         processSteps: suggestion.processSteps,
+        contextUsage,
+        conversationId,
         conversationTitle: suggestion.conversationTitle,
         messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
           ? (suggestion.conversationMessage as Record<string, unknown>).id

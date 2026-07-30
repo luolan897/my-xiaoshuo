@@ -583,7 +583,7 @@ export default function Home() {
             <div className="source-chips"><span>第十三章</span><span>@林砚</span><span>@灰塔协议</span></div>
             <p>灰塔场景与已锁定的“北门禁行”设定一致。第 34 行信件的出现，与第二卷第 8 章埋下的货运清单形成呼应。</p>
             <blockquote><b>建议的后续方向</b>让姚灯从信封蜡印认出调查局旧徽记，并保留来访者身份到下一章揭示。</blockquote>
-            <footer><span>依据：正文 31—34 行 · 设定 2 项</span><button type="button">采纳到草稿</button></footer>
+            <footer><span>依据：正文 31—34 行 · 设定 2 项</span><button type="button">采纳到想法</button></footer>
           </article>
           <div className="task-stack">
             <article><span>STRUCTURE</span><strong>全书结构分析</strong><small>识别节奏失衡、叙事断层与章节职责</small><b>完成 84%</b></article>
