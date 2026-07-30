@@ -3223,7 +3223,7 @@ export class Store {
         timestamp
       );
       this.syncMarkdownAttachmentReferences(workId, "draft", draftId, input.content);
-      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "建立创作草稿", timestamp);
+      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "建立创作想法", timestamp);
       this.audit(workId, source === "restore" ? "draft.restored" : "draft.created", "draft", draftId, {
         draftType: input.draftType,
         source,
@@ -3302,7 +3302,7 @@ export class Store {
 
   getDraft(draftId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM drafts WHERE id = ?", draftId);
-    if (!row) throw notFound("草稿");
+    if (!row) throw notFound("想法");
     return this.mapDraft(row, true);
   }
 
@@ -3317,7 +3317,7 @@ export class Store {
     const current = this.getDraft(draftId);
     const content = input.content ?? String(current.content);
     this.db.transaction(() => {
-      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "草稿");
+      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "想法");
       this.db.run(
         "UPDATE drafts SET draft_type = ?, title = ?, content = ?, updated_at = ? WHERE id = ?",
         input.draftType ?? String(current.draftType),
@@ -3327,7 +3327,7 @@ export class Store {
         draftId
       );
       this.syncMarkdownAttachmentReferences(String(current.workId), "draft", draftId, content);
-      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "更新创作草稿");
+      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "更新创作想法");
       this.audit(String(current.workId), "draft.updated", "draft", draftId, { fields: Object.keys(input), source, sourceRef });
     });
     return this.getDraft(draftId);
@@ -3336,8 +3336,8 @@ export class Store {
   deleteDraft(draftId: string, expectedVersionNo?: number): void {
     const current = this.getDraft(draftId);
     this.db.transaction(() => {
-      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "草稿");
-      this.recordEntityVersion("draft", draftId, "delete", null, "删除创作草稿");
+      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "想法");
+      this.recordEntityVersion("draft", draftId, "delete", null, "删除创作想法");
       this.clearMarkdownAttachmentReferences("draft", draftId);
       this.db.run("DELETE FROM drafts WHERE id = ?", draftId);
       this.audit(String(current.workId), "draft.deleted", "draft", draftId);
