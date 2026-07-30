@@ -121,7 +121,7 @@ const presenceHeartbeatSchema = z.object({
   page: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal(presencePageKinds[0]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[1]), resourceId: identifier }).strict(),
-    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["drafts", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["drafts", "settings", "characters", "races", "organizations", "timeline", "comments", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[3]), module: z.enum(["setting", "character", "race", "organization", "relationship"]), resourceId: identifier.optional() }).strict(),
     z.object({ kind: z.literal(presencePageKinds[4]) }).strict()
   ])
@@ -370,6 +370,7 @@ const platformPageSizesSchema = z.object({
   timeline: z.number().int().min(10).max(100).optional(),
   outlines: z.number().int().min(10).max(100).optional(),
   relationships: z.number().int().min(10).max(100).optional(),
+  comments: z.number().int().min(10).max(100).optional(),
   reviews: z.number().int().min(10).max(100).optional(),
   analysisTasks: z.number().int().min(10).max(100).optional(),
   fileVersions: z.number().int().min(10).max(100).optional()

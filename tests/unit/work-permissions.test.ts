@@ -48,6 +48,8 @@ describe("作品模块权限", () => {
     const work = { accessRole: "custom", modulePermissions: permissions };
     expect(canReadUiModule(work, "editor")).toBe(true);
     expect(canWriteUiModule(work, "editor")).toBe(false);
+    expect(canReadUiModule(work, "comments")).toBe(true);
+    expect(canWriteUiModule(work, "comments")).toBe(false);
     expect(canReadUiModule(work, "settings")).toBe(true);
     expect(canWriteUiModule(work, "settings")).toBe(true);
     expect(canReadUiModule(work, "drafts")).toBe(true);

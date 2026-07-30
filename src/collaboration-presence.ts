@@ -61,6 +61,7 @@ const moduleLabels: Record<string, string> = {
   races: "种族",
   organizations: "组织",
   timeline: "时间轴",
+  comments: "正文评论",
   relationships: "人物关系",
   outlines: "大纲与伏笔",
   reviews: "审核队列",

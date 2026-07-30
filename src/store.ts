@@ -45,6 +45,7 @@ type PlatformPageSizes = {
   timeline: number;
   outlines: number;
   relationships: number;
+  comments: number;
   reviews: number;
   analysisTasks: number;
   fileVersions: number;
@@ -59,6 +60,7 @@ const defaultPlatformPageSizes: PlatformPageSizes = {
   timeline: 30,
   outlines: 30,
   relationships: 30,
+  comments: 30,
   reviews: 30,
   analysisTasks: 30,
   fileVersions: 30
@@ -83,6 +85,7 @@ function platformPageSizes(value: unknown): PlatformPageSizes {
     timeline: pageSize("timeline"),
     outlines: pageSize("outlines"),
     relationships: pageSize("relationships"),
+    comments: pageSize("comments"),
     reviews: pageSize("reviews"),
     analysisTasks: pageSize("analysisTasks"),
     fileVersions: pageSize("fileVersions")

@@ -5,6 +5,7 @@ export const RESTORABLE_MODULES = Object.freeze([
   "races",
   "organizations",
   "timeline",
+  "comments",
   "outlines",
   "relationships",
   "reviews",

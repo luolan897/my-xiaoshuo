@@ -320,12 +320,12 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260731-chapter-comments-v1');
-    expect(page.text).toContain('/styles.css?v=20260731-chapter-comments-v3');
+    expect(page.text).toContain('/app.js?v=20260731-work-comments-v2');
+    expect(page.text).toContain('/styles.css?v=20260731-work-comments-v2');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
-    expect(application.text).toContain('/page-route.js?v=20260729-drafts-v1');
+    expect(application.text).toContain('/page-route.js?v=20260731-work-comments-v2');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
@@ -434,6 +434,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="page-size-timeline"');
     expect(page.text).toContain('id="page-size-outlines"');
     expect(page.text).toContain('id="page-size-relationships"');
+    expect(page.text).toContain('id="page-size-comments"');
     expect(page.text).toContain('id="page-size-reviews"');
     expect(page.text).toContain('id="page-size-analysis-tasks"');
     expect(page.text).toContain('id="page-size-file-versions"');
@@ -645,8 +646,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('</svg>AI 分析</button>');
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text).toContain('<span class="nav-label">更多</span>');
-    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(4);
-    expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(14);
+    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(5);
+    expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(15);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');
     expect(page.text).toContain(">作品设置</button>");
@@ -701,6 +702,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".app-shell.shelf-mode #top-search-button { display: none; }");
     expect(styles.text).toContain(".app-shell.shelf-mode .mobile-module-tab { display: none; }");
     expect(styles.text).toContain(".mobile-module-tab { position: fixed;");
+    expect(styles.text).toContain(".mobile-panel-backdrop { position: fixed; z-index: 36;");
+    expect(styles.text).toMatch(/\.left-panel \{[\s\S]*?z-index: 37;/);
+    expect(styles.text).toContain(".ai-panel {\n    position: fixed;\n    z-index: 35;");
     expect(application.text).toContain("function isMobileViewport()");
     expect(styles.text).toContain(".presence-button #presence-count { display: none; }");
     expect(styles.text).toContain(".top-actions .save-state { display: none; }");

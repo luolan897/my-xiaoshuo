@@ -1383,6 +1383,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         timeline: 30,
         outlines: 30,
         relationships: 30,
+        comments: 30,
         reviews: 30,
         analysisTasks: 30,
         fileVersions: 30
@@ -1423,6 +1424,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
           timeline: 23,
           outlines: 24,
           relationships: 25,
+          comments: 27,
           reviews: 26,
           analysisTasks: 40,
           fileVersions: 15
@@ -1439,6 +1441,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         timeline: 23,
         outlines: 24,
         relationships: 25,
+        comments: 27,
         reviews: 26,
         analysisTasks: 40,
         fileVersions: 15
@@ -1450,12 +1453,12 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     expect(partialUpdate.body.data).toMatchObject({
       toastPosition: "top-right",
-      pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, reviews: 26, analysisTasks: 40, fileVersions: 15 }
+      pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, comments: 27, reviews: 26, analysisTasks: 40, fileVersions: 15 }
     });
     const visibleToWriter = await writer.agent.get("/api/ui-settings").expect(200);
     expect(visibleToWriter.body.data).toMatchObject({
       toastPosition: "top-right",
-      pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, reviews: 26, analysisTasks: 40, fileVersions: 15 }
+      pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, comments: 27, reviews: 26, analysisTasks: 40, fileVersions: 15 }
     });
     expect(runtime.database.get(
       "SELECT action, user_id FROM audit_logs WHERE action = 'platform.ui-settings.updated'"
