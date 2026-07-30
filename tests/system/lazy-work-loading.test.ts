@@ -48,6 +48,24 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain("await ensureAiConversationsLoaded();");
   });
 
+  it("会话写入后增量更新历史摘要而不重复拉取列表", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const persistMessageSource = application.slice(
+      application.indexOf("async function persistAiConversationMessage("),
+      application.indexOf("function promptTextFromNode(")
+    );
+    const createConversationSource = application.slice(
+      application.indexOf("async function createNewAiConversation()"),
+      application.indexOf("async function ensureAiConversation()")
+    );
+
+    expect(persistMessageSource).toContain("updateAiConversationSummaryFromMessage(message);");
+    expect(persistMessageSource).not.toContain("loadAiConversations");
+    expect(createConversationSource).toContain("upsertAiConversationSummary(conversation);");
+    expect(createConversationSource).not.toContain("loadAiConversations");
+    expect(application).toContain("upsertAiConversationSummary(conversation);");
+  });
+
   it("作品模块按模块和请求参数复用页面生命周期缓存", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
 

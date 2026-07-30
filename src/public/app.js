@@ -1367,7 +1367,7 @@ function renderMessageCardActions(message) {
       fork.disabled = true;
       try {
         const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, { method: "POST", body: { messageId: message.dataset.messageId } });
-        await loadAiConversations(false);
+        upsertAiConversationSummary(conversation);
         await openAiConversation(conversation.id);
         toast("已从所选消息创建分支对话");
       } catch (error) {
@@ -1618,6 +1618,36 @@ function renderAiConversationHistory() {
   }
 }
 
+function defaultAiConversationTitle(prompt) {
+  const normalized = String(prompt ?? "").replace(/\s+/gu, " ").trim();
+  return Array.from(normalized).slice(0, 15).join("") || "新对话";
+}
+
+function upsertAiConversationSummary(conversation) {
+  if (!conversation?.id) return;
+  const current = state.aiConversations.find((item) => item.id === conversation.id);
+  const lastMessage = Array.isArray(conversation.messages) ? conversation.messages.at(-1) : null;
+  const summary = { ...current, ...conversation, ...(lastMessage ? { preview: lastMessage.content } : {}) };
+  delete summary.messages;
+  delete summary.messagesPage;
+  state.aiConversations = [summary, ...state.aiConversations.filter((item) => item.id !== summary.id)]
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+  renderAiConversationHistory();
+}
+
+function updateAiConversationSummaryFromMessage(message) {
+  if (!message?.conversationId) return;
+  const current = state.aiConversations.find((conversation) => conversation.id === message.conversationId);
+  if (!current) return;
+  upsertAiConversationSummary({
+    ...current,
+    title: current.title === "新对话" && message.role === "user" ? defaultAiConversationTitle(message.content) : current.title,
+    messageCount: Number(current.messageCount ?? 0) + 1,
+    preview: message.content,
+    updatedAt: message.createdAt ?? current.updatedAt
+  });
+}
+
 function applyAiConversationTitle(title) {
   if (!title || !state.aiConversationId) return;
   const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
@@ -1660,6 +1690,7 @@ async function ensureAiConversationsLoaded() {
 
 async function openAiConversation(conversationId, hideHistory = true) {
   const conversation = await api(`/api/ai-conversations/${conversationId}?page=1&limit=100`);
+  upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
   $("#ai-conversation-title").textContent = conversation.title;
@@ -1679,15 +1710,17 @@ async function openAiConversation(conversationId, hideHistory = true) {
 
 async function createNewAiConversation() {
   if (!state.work) return;
+  await ensureAiConversationsLoaded();
   const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: {} });
+  upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = false;
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   hideAiContextWarning();
+  setAiContextMeter(null);
   renderAiQuickActions();
   setAiHistoryVisible(false);
-  await loadAiConversations(false);
 }
 
 async function ensureAiConversation() {
@@ -1700,7 +1733,7 @@ async function persistAiConversationMessage(role, content, citations = [], metad
   const conversationId = await ensureAiConversation();
   if (!conversationId) throw new Error("无法创建 AI 对话");
   const message = await api(`/api/ai-conversations/${conversationId}/messages`, { method: "POST", body: { role, content, citations, metadata } });
-  await loadAiConversations(false);
+  updateAiConversationSummaryFromMessage(message);
   return message;
 }
 
@@ -9082,6 +9115,12 @@ async function sendAi() {
     }
     try {
       if (persistedStreamMessage) {
+        updateAiConversationSummaryFromMessage({
+          conversationId: state.aiConversationId,
+          role: "assistant",
+          content: assistantContent,
+          createdAt: persistedStreamMessage.createdAt
+        });
         updateMessageCreatedAt(assistantMessage, persistedStreamMessage.createdAt);
         attachMessageIdentity(assistantMessage, persistedStreamMessage.id);
       } else {
