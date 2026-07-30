@@ -386,10 +386,14 @@ let onboardingSteps = [];
 let loadedAiModelsWorkId = null;
 let loadedAiReferencesWorkId = null;
 let loadedAiConversationsWorkId = null;
+let aiModelsLoadPromise = null;
+let aiModelsLoadWorkId = null;
 let aiReferencesLoadPromise = null;
 let aiReferencesLoadWorkId = null;
-let aiSidebarLoadPromise = null;
-let aiSidebarLoadWorkId = null;
+let aiConversationsLoadPromise = null;
+let aiConversationsLoadWorkId = null;
+const aiConversationHistoryPageLimit = 20;
+let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
 const loadedVolumeChapterIds = new Set();
 const volumeChapterLoadingIds = new Set();
@@ -1597,6 +1601,12 @@ function setAiHistoryVisible(visible) {
 function renderAiConversationHistory() {
   const host = $("#ai-history-list");
   host.replaceChildren();
+  const pagination = $("#ai-history-pagination");
+  const showPagination = aiConversationHistoryPage.page > 1 || aiConversationHistoryPage.hasMore;
+  pagination.classList.toggle("hidden", !showPagination);
+  $("#ai-history-previous").disabled = aiConversationHistoryPage.page <= 1;
+  $("#ai-history-next").disabled = !aiConversationHistoryPage.hasMore;
+  $("#ai-history-page-label").textContent = `第 ${aiConversationHistoryPage.page} 页 · 本页 ${state.aiConversations.length} 条`;
   if (!state.aiConversations.length) {
     host.innerHTML = '<p class="ai-history-empty">还没有历史对话</p>';
     return;
@@ -1628,6 +1638,13 @@ function upsertAiConversationSummary(conversation) {
   const summary = { ...current, ...conversation, ...(lastMessage ? { preview: lastMessage.content } : {}) };
   delete summary.messages;
   delete summary.messagesPage;
+  if (!current && loadedAiConversationsWorkId === state.work?.id) {
+    loadedAiConversationsWorkId = null;
+    aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
+    state.aiConversations = [summary];
+    renderAiConversationHistory();
+    return;
+  }
   state.aiConversations = [summary, ...state.aiConversations.filter((item) => item.id !== summary.id)]
     .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
   renderAiConversationHistory();
@@ -1654,45 +1671,43 @@ function applyAiConversationTitle(title) {
   renderAiConversationHistory();
 }
 
-function applyAiConversations(conversations) {
-  state.aiConversations = conversations;
+function applyAiConversations(pageResult) {
+  state.aiConversations = pageResult.items;
+  aiConversationHistoryPage = {
+    page: pageResult.page,
+    limit: pageResult.limit,
+    hasMore: pageResult.hasMore,
+    nextPage: pageResult.nextPage
+  };
   loadedAiConversationsWorkId = state.work?.id ?? null;
   renderAiConversationHistory();
   const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
   if (current) $("#ai-conversation-title").textContent = current.title;
 }
 
-async function loadAiSidebarResources() {
+async function loadAiConversations(page = 1) {
   const workId = state.work?.id;
   if (!workId) return;
   const generation = workScopedUiGeneration;
-  const sidebar = await api(`/api/works/${workId}/chat`);
+  const conversations = await apiPage(`/api/works/${workId}/ai-conversations`, page, aiConversationHistoryPageLimit);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  applyAiModels(sidebar.models);
-  applyAiConversations(sidebar.conversations);
-  loadedAiModelsWorkId = workId;
-  loadedAiConversationsWorkId = workId;
-}
-
-async function ensureAiSidebarResourcesLoaded() {
-  const workId = state.work?.id;
-  if (!workId || (loadedAiModelsWorkId === workId && loadedAiConversationsWorkId === workId)) return;
-  if (aiSidebarLoadPromise && aiSidebarLoadWorkId === workId) return aiSidebarLoadPromise;
-  aiSidebarLoadWorkId = workId;
-  aiSidebarLoadPromise = loadAiSidebarResources();
-  try {
-    await aiSidebarLoadPromise;
-  } finally {
-    if (aiSidebarLoadWorkId === workId) {
-      aiSidebarLoadPromise = null;
-      aiSidebarLoadWorkId = null;
-    }
-  }
+  applyAiConversations(conversations);
 }
 
 async function ensureAiConversationsLoaded() {
-  if (loadedAiConversationsWorkId === state.work?.id) return;
-  await ensureAiSidebarResourcesLoaded();
+  const workId = state.work?.id;
+  if (!workId || loadedAiConversationsWorkId === workId) return;
+  if (aiConversationsLoadPromise && aiConversationsLoadWorkId === workId) return aiConversationsLoadPromise;
+  aiConversationsLoadWorkId = workId;
+  aiConversationsLoadPromise = loadAiConversations();
+  try {
+    await aiConversationsLoadPromise;
+  } finally {
+    if (aiConversationsLoadWorkId === workId) {
+      aiConversationsLoadPromise = null;
+      aiConversationsLoadWorkId = null;
+    }
+  }
 }
 
 async function openAiConversation(conversationId, hideHistory = true) {
@@ -1717,7 +1732,6 @@ async function openAiConversation(conversationId, hideHistory = true) {
 
 async function createNewAiConversation() {
   if (!state.work) return;
-  await ensureAiConversationsLoaded();
   const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: {} });
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
@@ -3488,10 +3502,13 @@ function resetWorkScopedUiCaches() {
   loadedAiModelsWorkId = null;
   loadedAiReferencesWorkId = null;
   loadedAiConversationsWorkId = null;
+  aiModelsLoadPromise = null;
+  aiModelsLoadWorkId = null;
   aiReferencesLoadPromise = null;
   aiReferencesLoadWorkId = null;
-  aiSidebarLoadPromise = null;
-  aiSidebarLoadWorkId = null;
+  aiConversationsLoadPromise = null;
+  aiConversationsLoadWorkId = null;
+  aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
   raceHierarchyLoadPromise = null;
   raceHierarchyLoadWorkId = null;
   loadedRaceHierarchyWorkId = null;
@@ -6606,13 +6623,21 @@ function applyAiModels(models) {
 async function ensureAiModelsLoaded() {
   const workId = state.work?.id;
   if (!workId || loadedAiModelsWorkId === workId) return;
+  if (aiModelsLoadPromise && aiModelsLoadWorkId === workId) return aiModelsLoadPromise;
   const select = $("#ai-model");
   select.innerHTML = '<option value="">正在加载模型……</option>';
+  aiModelsLoadWorkId = workId;
+  aiModelsLoadPromise = loadModels();
   try {
-    await ensureAiSidebarResourcesLoaded();
+    await aiModelsLoadPromise;
   } catch (error) {
     if (state.work?.id === workId) select.innerHTML = '<option value="">模型加载失败，点击重试</option>';
     throw error;
+  } finally {
+    if (aiModelsLoadWorkId === workId) {
+      aiModelsLoadPromise = null;
+      aiModelsLoadWorkId = null;
+    }
   }
 }
 
@@ -9040,7 +9065,7 @@ function openModelDialog(providerId, item = null) {
 async function sendAi() {
   if (!state.work) return toast("请先选择作品", "error");
   try {
-    await Promise.all([ensureAiModelsLoaded(), ensureAiConversationsLoaded()]);
+    await ensureAiModelsLoaded();
   } catch (error) {
     return toast(`创作助手加载失败：${error.message}`, "error");
   }
@@ -10733,6 +10758,30 @@ $("#ai-history-toggle").addEventListener("click", async () => {
     await ensureAiConversationsLoaded();
     setAiHistoryVisible(true);
   } catch (error) {
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-history-previous").addEventListener("click", async () => {
+  const targetPage = aiConversationHistoryPage.page - 1;
+  if (targetPage < 1) return;
+  $("#ai-history-previous").disabled = true;
+  $("#ai-history-next").disabled = true;
+  try {
+    await loadAiConversations(targetPage);
+  } catch (error) {
+    renderAiConversationHistory();
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-history-next").addEventListener("click", async () => {
+  const targetPage = aiConversationHistoryPage.nextPage;
+  if (!targetPage) return;
+  $("#ai-history-previous").disabled = true;
+  $("#ai-history-next").disabled = true;
+  try {
+    await loadAiConversations(targetPage);
+  } catch (error) {
+    renderAiConversationHistory();
     toast(`对话历史加载失败：${error.message}`, "error");
   }
 });

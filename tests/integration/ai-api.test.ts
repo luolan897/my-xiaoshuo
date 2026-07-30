@@ -90,17 +90,22 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(409);
   });
 
-  it("聊天初始化一次返回模型和会话列表", async () => {
+  it("聊天模型和历史列表通过独立接口返回", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "初始化会话" }).expect(201);
+    for (let index = 1; index <= 21; index += 1) {
+      await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: `初始化会话 ${index}` }).expect(201);
+    }
 
-    const initialized = await request(runtime.app).get(`/api/works/${workId}/chat`).expect(200);
+    const models = await request(runtime.app).get(`/api/works/${workId}/models`).expect(200);
+    const firstPage = await request(runtime.app).get(`/api/works/${workId}/ai-conversations`).expect(200);
+    const secondPage = await request(runtime.app).get(`/api/works/${workId}/ai-conversations?page=2`).expect(200);
 
-    expect(initialized.body.data.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: modelId })]));
-    expect(initialized.body.data.conversations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: conversation.body.data.id, title: "初始化会话", messageCount: 0 })
-    ]));
+    expect(models.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: modelId })]));
+    expect(firstPage.body.data).toMatchObject({ page: 1, limit: 20, hasMore: true, nextPage: 2 });
+    expect(firstPage.body.data.items).toHaveLength(20);
+    expect(secondPage.body.data).toMatchObject({ page: 2, limit: 20, hasMore: false, nextPage: null });
+    expect(secondPage.body.data.items).toHaveLength(1);
   });
 
   it("连接测试必须用 max_tokens=10 收到正文或 thinking", async () => {
