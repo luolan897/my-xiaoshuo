@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260731-model-test-dialog-v1');
-    expect(page.text).toContain('/styles.css?v=20260731-model-test-dialog-v1');
+    expect(page.text).toContain('/app.js?v=20260731-context-usage-popover-drafts-to-ideas-model-test-dialog-v1');
+    expect(page.text).toContain('/styles.css?v=20260731-context-usage-popover-drafts-to-ideas-model-test-dialog-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -549,7 +549,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-permission-preset="read"');
     expect(application.text).toContain('data-member-permission=');
     expect(application.text).toContain('body: existing ? { permissions } : { userId, permissions }');
-    expect(application.text).toContain('/work-permissions.js?v=20260729-drafts-v1');
+    expect(application.text).toContain('/work-permissions.js?v=20260731-drafts-to-ideas-v1');
     expect(workPermissions.text).toContain('label: "AI 对话"');
     expect(workPermissions.text).toContain('label: "AI 分析"');
     expect(workPermissions.text).toContain('id: "ai-chat"');

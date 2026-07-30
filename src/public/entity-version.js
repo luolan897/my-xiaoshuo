@@ -1,7 +1,7 @@
 import { levelLabel, relationshipCategoryLabel } from "./display-labels.js?v=20260725-enum-labels-zh";
 
 export const VERSIONED_ENTITY_LABELS = Object.freeze({
-  draft: "创作草稿",
+  draft: "创作想法",
   setting: "世界观设定",
   race: "种族档案",
   organization: "组织档案",
@@ -25,7 +25,7 @@ export function entityVersionSourceLabel(source) {
 }
 
 export function entityVersionSnapshotSummary(type, snapshot = {}) {
-  if (type === "draft") return `${snapshot.draftType === "setting" ? "设定草稿" : "正文草稿"} · ${snapshot.title || "未命名草稿"}`;
+  if (type === "draft") return `${snapshot.draftType === "setting" ? "设定想法" : "正文想法"} · ${snapshot.title || "未命名想法"}`;
   if (type === "setting") return `${snapshot.category || "未分类"} · ${snapshot.title || "未命名设定"}`;
   if (type === "race") return `${snapshot.name || "未命名种族"} · ${(snapshot.memberIds ?? []).length} 位角色`;
   if (type === "organization") return `${snapshot.name || "未命名组织"} · ${(snapshot.memberIds ?? []).length} 位成员`;

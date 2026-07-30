@@ -25,7 +25,7 @@ export const proseReplacementPermissionModules = workPermissionModules.filter(
 
 export const workPermissionModuleLabels: Record<WorkPermissionModule, string> = {
   prose: "正文",
-  drafts: "草稿",
+  drafts: "想法",
   settings: "设定库",
   characters: "角色",
   races: "种族",

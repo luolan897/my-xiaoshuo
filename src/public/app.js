@@ -11,12 +11,12 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260730-token-distribution-v2";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260730-token-distribution-v4";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260725-unified-permissions";
-import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260729-drafts-v1";
+import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260731-drafts-to-ideas-v1";
 import {
   chapterVersionSourceLabel,
   foreshadowStatusLabel,
@@ -41,7 +41,7 @@ import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelatio
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260729-drafts-v1";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
@@ -1399,7 +1399,7 @@ const AI_TOOL_DISPLAY_NAMES = {
   grep: "查询正文关键字",
   search_story_entities: "搜索作品实体",
   read_character_sections: "读取人物 Markdown 章节",
-  search_drafts: "搜索草稿"
+  search_drafts: "搜索想法"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -2963,15 +2963,15 @@ const workAuditActionLabels = {
   "chapter.deleted": "删除章节",
   "chapter.purged": "彻底删除章节",
   "chapter.restored": "恢复章节",
-  "draft.created": "创建草稿",
-  "draft.updated": "更新草稿",
-  "draft.deleted": "删除草稿",
-  "draft.restored": "恢复草稿",
+  "draft.created": "创建想法",
+  "draft.updated": "更新想法",
+  "draft.deleted": "删除想法",
+  "draft.restored": "恢复想法",
   "work.imported": "导入正文"
 };
 
 function workAuditEntityLabel(type) {
-  return ({ work: "作品", volume: "分卷", chapter: "章节", draft: "草稿", user: "用户" })[type] ?? type;
+  return ({ work: "作品", volume: "分卷", chapter: "章节", draft: "想法", user: "用户" })[type] ?? type;
 }
 
 function workAuditDetailText(detail) {
@@ -4000,7 +4000,7 @@ function markActiveModule(module) {
 }
 
 const moduleMeta = {
-  drafts: ["临时想法", "创作草稿", "记录可能采用、也可能永远不会写入正文或正式设定的想法。", "新建草稿"],
+  drafts: ["临时想法", "创作想法", "记录可能采用、也可能永远不会写入正文或正式设定的想法。", "新建想法"],
   settings: ["世界事实", "世界观与设定库", "锁定的设定会成为 AI 续写与校对的硬约束。", "新建设定"],
   characters: ["人物档案", "角色与人物属性", "维护别名、属性、当前状态及不可被 AI 覆盖的字段。", "新建角色"],
   races: ["物种档案", "种族与共同设定", "先维护种族档案，再由角色选择引用；角色不能临时填写种族。", "新建种族"],
@@ -4371,7 +4371,7 @@ function mountRelationshipFilterToggle() {
 
 function mountDraftFilterToggle() {
   $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.remove();
-  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="draft-filter-toggle" aria-label="筛选草稿" aria-controls="draft-filter-panel" aria-expanded="${draftFiltersPanelOpen}" title="筛选草稿"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="draft-filter-toggle" aria-label="筛选想法" aria-controls="draft-filter-panel" aria-expanded="${draftFiltersPanelOpen}" title="筛选想法"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
   $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.addEventListener("click", async () => {
     draftFiltersPanelOpen = !draftFiltersPanelOpen;
     await renderDrafts(moduleListPages.drafts);
@@ -4467,15 +4467,15 @@ function settingRecordActions(item) {
 }
 
 function draftTypeLabel(draftType) {
-  return draftType === "setting" ? "设定草稿" : "正文草稿";
+  return draftType === "setting" ? "设定想法" : "正文想法";
 }
 
 async function deleteDraft(item) {
   if (!item || !canEditModule("drafts")) return;
   const dialog = $("#form-dialog");
   dialog.close();
-  if (!await confirmToast(`确认删除草稿“${item.title}”吗？草稿将从当前列表移除。`, {
-    title: "删除草稿",
+  if (!await confirmToast(`确认删除想法“${item.title}”吗？想法将从当前列表移除。`, {
+    title: "删除想法",
     confirmLabel: "确认删除"
   })) {
     openDraftDialog(item);
@@ -4484,7 +4484,7 @@ async function deleteDraft(item) {
   try {
     await api(`/api/drafts/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderDrafts(moduleListPages.drafts);
-    toast("草稿已删除");
+    toast("想法已删除");
   } catch (error) {
     toast(error.message, "error");
     try {
@@ -4497,21 +4497,21 @@ async function deleteDraft(item) {
 
 function openDraftDialog(item = null, { readOnly = false } = {}) {
   const viewOnly = readOnly || !canEditModule("drafts");
-  const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="草稿操作">
-    <div><strong>草稿操作</strong><small>删除后将从草稿列表移除，版本历史仍会保留。</small></div>
-    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除草稿</button></div>
+  const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="想法操作">
+    <div><strong>想法操作</strong><small>删除后将从想法列表移除，版本历史仍会保留。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除想法</button></div>
   </section>` : "";
-  const fields = `<p class="form-field-note">草稿只记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
-    + field("draftType", "草稿类型", "select", item?.draftType ?? "prose", [["prose", "正文草稿"], ["setting", "设定草稿"]])
+  const fields = `<p class="form-field-note">这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
+    + field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
     + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
       readOnly: viewOnly
     }) + management;
-  openDialog(item ? viewOnly ? "查看草稿" : "编辑草稿" : "新建草稿", fields, async (form) => {
+  openDialog(item ? viewOnly ? "查看想法" : "编辑想法" : "新建想法", fields, async (form) => {
     if (viewOnly) return;
     const title = String(form.get("title") ?? "").trim();
-    if (!title) throw new Error("请填写草稿标题");
+    if (!title) throw new Error("请填写想法标题");
     const body = {
       draftType: form.get("draftType"),
       title,
@@ -4523,12 +4523,12 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       body
     });
     await renderDrafts(moduleListPages.drafts);
-    toast(item ? "草稿已保存" : "草稿已创建");
+    toast(item ? "想法已保存" : "想法已创建");
   }, item ? draftTypeLabel(item.draftType) : "未确认想法", {
-    submitLabel: viewOnly ? "关闭" : "保存草稿",
+    submitLabel: viewOnly ? "关闭" : "保存想法",
     hideCancel: viewOnly,
     editor: true,
-    errorPrefix: "草稿保存失败："
+    errorPrefix: "想法保存失败："
   });
   if (viewOnly) {
     $("#dialog-fields").querySelectorAll("input, select, textarea").forEach((control) => {
@@ -4550,23 +4550,23 @@ async function renderDrafts(page = moduleListPages.drafts) {
   const pageResult = paginateModuleItems(drafts, page, "drafts");
   moduleListPages.drafts = pageResult.page;
   const layout = readModuleLayout();
-  if (drafts.length) mountModuleLayoutToggle(layout, "草稿列表样式");
+  if (drafts.length) mountModuleLayoutToggle(layout, "想法列表样式");
   else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
   mountDraftFilterToggle();
-  const filterToolbar = `<section id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="草稿筛选">
-    <label for="draft-type-filter">草稿类型</label>
-    <select id="draft-type-filter" aria-label="按草稿类型筛选">
-      <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部草稿</option>
-      <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文草稿</option>
-      <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定草稿</option>
+  const filterToolbar = `<section id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="想法筛选">
+    <label for="draft-type-filter">想法类型</label>
+    <select id="draft-type-filter" aria-label="按想法类型筛选">
+      <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部想法</option>
+      <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文想法</option>
+      <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定想法</option>
     </select>
-    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 篇草稿</span>`}
+    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>`}
   </section>`;
   const actions = (item) => canEditModule("drafts")
-    ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
+    ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
     : recordHistoryButton("draft", item.id, item.title);
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
-    <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
+    <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
       <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
       <h3>${esc(item.title)}</h3>
       <div class="record-markdown-preview">${esc(item.contentPreview || "暂无内容")}</div>
@@ -4574,17 +4574,17 @@ async function renderDrafts(page = moduleListPages.drafts) {
     </article>`).join("")}</div>`;
   const rows = `<div class="module-row-list">${pageResult.items.map((item) => {
     const preview = moduleRowPreview(item.contentPreview || "暂无内容");
-    return `<article class="record-card module-row preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
+    return `<article class="record-card module-row preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
       <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
       <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
       <div class="card-actions">${actions(item)}</div>
     </article>`;
   }).join("")}</div>`;
   const emptyDrafts = allDrafts.length
-    ? emptyModule("没有符合筛选条件的草稿", "可以切换草稿类型查看其他想法。")
-    : emptyModule("还没有草稿", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
+    ? emptyModule("没有符合筛选条件的想法", "可以切换想法类型查看其他内容。")
+    : emptyModule("还没有想法", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
   $("#module-content").innerHTML = filterToolbar + (drafts.length
-    ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "草稿列表")}`
+    ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "想法列表")}`
     : emptyDrafts);
   $("#draft-type-filter").addEventListener("change", async (event) => {
     draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
@@ -6400,7 +6400,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索草稿</strong><small>查询正文草稿和设定草稿。草稿只是可能采用、也可能永远不会进入正文或正式设定的临时想法，Agent 不会把它当作已确认事实。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -6614,7 +6614,7 @@ function renderAiContextDistribution(usage) {
   const distribution = normalizeAiContextTokenDistribution(usage);
   const contextWindow = distribution.contextWindow.toLocaleString("zh-CN");
   $("#ai-context-popover-description").textContent = usage
-    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok`
+    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok · ${formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow)}`
     : "选择可用模型后显示当前上下文用量";
   host.replaceChildren(...distribution.items.map((item) => {
     const row = document.createElement("div");
