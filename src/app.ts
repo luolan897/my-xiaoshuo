@@ -413,6 +413,15 @@ const aiProcessStepSchema = z.discriminatedUnion("type", [
     round: z.number().int().min(1).max(20),
     toolCall: aiToolCallResultSchema,
     createdAt: z.string().datetime({ offset: true })
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(300),
+    type: z.literal("context_compaction"),
+    round: z.number().int().min(1).max(20),
+    sourceMessageCount: z.number().int().min(1).max(100),
+    sourceChars: z.number().int().min(1).max(10_000_000),
+    summaryChars: z.number().int().min(1).max(1_000_000),
+    createdAt: z.string().datetime({ offset: true })
   }).strict()
 ]);
 
@@ -2024,7 +2033,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       sendEvent("context", {
         ...prepared,
         conversation: {
-          ...conversation,
+          ...store.getAiConversationSummary(conversationId),
           contextWarningPending: prepared.action === "warn"
         }
       });
@@ -2045,20 +2054,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
         onProcessStep: (step) => sendEvent("process_step", step),
+        onContextCompacted: (event) => sendEvent("context_compacted", event),
         conversationId,
         excludeConversationMessageId: currentMessageId,
         ...(currentMessageId ? { assistantMessageRequestId: `assistant:${currentMessageId}` } : {}),
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
-      const contextUsage = ai.getContextUsage({
-        workId: request.params.workId,
-        taskType: "chat",
-        instruction: "",
-        scope: input.scope as ContextScope,
-        conversationId,
-        modelId: input.modelId
-      });
       sendEvent("complete", {
         suggestionId: suggestion.id,
         callId: suggestion.callId,
@@ -2069,7 +2071,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         chapterVersion: suggestion.chapterVersion,
         toolCalls: suggestion.toolCalls,
         processSteps: suggestion.processSteps,
-        contextUsage,
+        contextUsage: suggestion.contextUsage,
         conversationId,
         conversationTitle: suggestion.conversationTitle,
         messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null

@@ -1337,6 +1337,34 @@ function resetAiFeed() {
   $("#ai-feed").innerHTML = '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
+function appendAiContextCompactionDivider(kind, before = null) {
+  const divider = document.createElement("div");
+  divider.className = "ai-context-compaction-divider";
+  divider.dataset.contextCompaction = kind;
+  divider.dataset.testid = "ai-context-compaction-divider";
+  divider.setAttribute("role", "separator");
+  divider.setAttribute("aria-label", "已压缩上下文");
+  divider.innerHTML = "<span>已压缩上下文</span>";
+  const feed = $("#ai-feed");
+  if (before?.parentElement === feed) feed.insertBefore(divider, before);
+  else feed.append(divider);
+  scrollAiFeedToBottom();
+  return divider;
+}
+
+function renderConversationCompactionDivider(compactedMessageCount, totalMessageCount = null) {
+  const feed = $("#ai-feed");
+  feed.querySelector('[data-context-compaction="conversation"]')?.remove();
+  const compactedCount = Math.max(0, Number(compactedMessageCount) || 0);
+  if (compactedCount === 0) return null;
+  const messages = [...feed.querySelectorAll("[data-message-id]")];
+  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+  const totalCount = Math.max(messages.length, Number(totalMessageCount ?? current?.messageCount) || messages.length);
+  const loadedOffset = Math.max(0, totalCount - messages.length);
+  const boundaryIndex = Math.max(0, Math.min(messages.length, compactedCount - loadedOffset));
+  return appendAiContextCompactionDivider("conversation", messages[boundaryIndex] ?? null);
+}
+
 function renderMessageCardActions(message) {
   let actions = message.querySelector(".message-card-actions");
   if (!actions) {
@@ -1565,6 +1593,17 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null) {
   const list = document.createElement("div");
   list.className = "ai-process-list";
   for (const step of steps) {
+    if (step?.type === "context_compaction") {
+      const compaction = document.createElement("div");
+      compaction.className = "ai-process-context-compaction";
+      compaction.dataset.testid = "ai-process-context-compaction";
+      compaction.setAttribute("role", "separator");
+      compaction.setAttribute("aria-label", `第 ${Number(step.round) || 1} 轮已压缩上下文`);
+      compaction.title = `已将 ${Number(step.sourceMessageCount) || 0} 条工具上下文压缩为摘要`;
+      compaction.innerHTML = "<span>已压缩上下文</span>";
+      list.append(compaction);
+      continue;
+    }
     if (step?.type === "tool" && step.toolCall) {
       const tool = document.createElement("section");
       tool.className = "ai-process-step ai-process-tool-step";
@@ -1722,6 +1761,9 @@ async function openAiConversation(conversationId, hideHistory = true) {
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
+  if (conversation.hasCompactedSummary) {
+    renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount);
+  }
   state.aiCitations = [];
   state.aiReferences = [];
   setAiPromptText("");
@@ -9309,7 +9351,10 @@ async function streamChat(body) {
         if (contextAction === "warn") showAiContextWarning(payload.usage);
         else {
           hideAiContextWarning();
-          if (contextAction === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
+          if (contextAction === "compacted") {
+            renderConversationCompactionDivider(payload.compaction?.compactedMessageCount, payload.conversation?.messageCount);
+            toast("已自动整理较早对话为长期记忆并继续发送");
+          }
         }
       } else if (eventName === "user_message") {
         persistedUserMessage = payload.message;
@@ -9340,7 +9385,11 @@ async function streamChat(body) {
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
         renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
-        meta.textContent = step.type === "thinking" ? `正在思考 · 第 ${Number(step.round) || 1} 轮` : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
+        meta.textContent = step.type === "thinking"
+          ? `正在思考 · 第 ${Number(step.round) || 1} 轮`
+          : step.type === "context_compaction"
+            ? `已压缩第 ${Number(step.round) || 1} 轮工具上下文`
+            : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "tool_call") {
         mountAssistantMessage();
@@ -9352,6 +9401,9 @@ async function streamChat(body) {
         renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
+      } else if (eventName === "context_compacted") {
+        setAiContextMeter(payload.contextUsage);
+        if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
       } else if (eventName === "complete") {
         mountAssistantMessage();
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
@@ -10842,6 +10894,14 @@ $("#ai-context-compact").addEventListener("click", async () => {
     hideAiContextWarning();
     toast(result.changed ? `已整理 ${result.compactedMessageCount} 条较早消息为长期记忆` : "当前没有需要整理的较早消息");
     setAiContextMeter(result.usage);
+    if (result.changed) {
+      const current = state.aiConversations.find((conversation) => conversation.id === conversationId);
+      if (current) {
+        current.compactedMessageCount = result.compactedMessageCount;
+        current.hasCompactedSummary = true;
+      }
+      renderConversationCompactionDivider(result.compactedMessageCount, current?.messageCount);
+    }
   } catch (error) {
     toast(`上下文压缩失败：${error.message}`, "error");
   } finally {

@@ -649,11 +649,16 @@ describe("AI 供应商、模型与建议 API", () => {
     runtime.store.saveChapter(chapterId, { content });
     const fragments: string[] = [];
     const maxTokens: number[] = [];
+    let compactRequestCount = 0;
     let completionCount = 0;
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       const body = JSON.parse(String(init?.body)) as { max_tokens: number; messages: Array<{ role: string; tool_call_id?: string; content?: string }> };
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        compactRequestCount += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "已压缩先前分页正文，仍需继续读取剩余游标。" } }] }), { status: 200 });
+      }
       maxTokens.push(body.max_tokens);
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
@@ -695,23 +700,117 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.toolCalls.length).toBeGreaterThan(1);
     expect(response.body.data.toolCalls[1].arguments).toMatchObject({ cursor: expect.any(Number) });
     expect(fragments.join("")).toBe(content);
-    expect(maxTokens.slice(1).every((value, index) => value < (maxTokens[index] ?? 0))).toBe(true);
+    expect(maxTokens.every((value) => value > 0)).toBe(true);
+    expect(compactRequestCount).toBeGreaterThan(0);
   });
 
-  it("工具结果让下一轮超过模型上下文时在本地阻止请求", async () => {
+  it("工具结果接近模型上限时先压缩旧工具上下文再拼入新结果", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 16_000 }).expect(200);
+    runtime.store.saveChapter(chapterId, { content: "分页上下文证据。".repeat(2_500) });
+    let completionCount = 0;
+    let firstPageContent = "";
+    let compactedFirstPage = false;
+    let finalMessages: Array<{ role: string; content?: string }> = [];
+    const requestInputTokens: number[] = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content?: string }>;
+        tools?: unknown[];
+      };
+      requestInputTokens.push(estimateAiTokens(JSON.stringify(body.messages)));
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        expect(body.tools).toBeUndefined();
+        const prefix = "待压缩的工具调用上下文：\n";
+        const compactionInput = body.messages[1]?.content ?? "";
+        const compactedMessages = JSON.parse(compactionInput.slice(prefix.length)) as Array<{ role: string; content?: string }>;
+        compactedFirstPage = compactedMessages.some((message) => message.role === "tool" && message.content === firstPageContent);
+        return new Response(JSON.stringify({ choices: [{ message: { content: "已确认前一页包含章节正文证据，后续仍需按游标读取。" } }] }), { status: 200 });
+      }
+      const toolMessages = body.messages.filter((message) => message.role === "tool");
+      if (toolMessages.length === 0) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "context-page-1",
+          type: "function",
+          function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
+        }] } }] }), { status: 200 });
+      }
+      const joined = body.messages.map((message) => message.content ?? "").join("\n");
+      if (!joined.includes("已压缩的工具调用上下文")) {
+        firstPageContent = toolMessages[0]?.content ?? "";
+        const firstPage = JSON.parse(firstPageContent) as { pagination: { nextCursor: number | null } };
+        expect(firstPage.pagination.nextCursor).toEqual(expect.any(Number));
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "context-page-2",
+          type: "function",
+          function: {
+            name: "read_chapters",
+            arguments: { chapterIds: [chapterId], include: "content", cursor: firstPage.pagination.nextCursor }
+          }
+        }] } }] }), { status: 200 });
+      }
+      finalMessages = body.messages;
+      expect(toolMessages).toHaveLength(1);
+      expect(toolMessages[0]?.content).not.toBe(firstPageContent);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已结合压缩摘要和最新分页结果回答。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "读取章节后回答。",
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(response.text).toContain('event: delta\ndata: {"delta":"已结合压缩摘要和最新分页结果回答。"}');
+    expect(response.text).toContain("event: context_compacted");
+    expect(response.text).toContain('event: process_step\ndata: {"id":"process_');
+    expect(response.text).toContain('"type":"context_compaction"');
+    const compactPayload = JSON.parse(response.text.match(/event: context_compacted\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      contextUsage?: { inputTokens?: number; contextWindow?: number; usagePercent?: number };
+    };
+    expect(compactPayload.contextUsage?.inputTokens).toBeGreaterThan(0);
+    expect(compactPayload.contextUsage?.inputTokens).toBeLessThan(compactPayload.contextUsage?.contextWindow ?? 0);
+    expect(compactPayload.contextUsage?.usagePercent).toEqual(expect.any(Number));
+    const completePayload = JSON.parse(response.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      contextUsage?: { inputTokens?: number; contextWindow?: number };
+      toolCalls?: unknown[];
+    };
+    expect(completePayload.contextUsage?.inputTokens).toBeLessThan(completePayload.contextUsage?.contextWindow ?? 0);
+    expect(completePayload.toolCalls?.length).toBe(2);
+    expect(completionCount).toBe(4);
+    expect(compactedFirstPage).toBe(true);
+    const finalContext = finalMessages.map((message) => message.content ?? "").join("\n");
+    expect(finalContext).toContain("已压缩的工具调用上下文");
+    expect(finalContext).toContain("已确认前一页包含章节正文证据");
+    expect(finalContext).not.toContain(firstPageContent);
+    expect(requestInputTokens.every((tokens) => tokens < 16_000)).toBe(true);
+  });
+
+  it("模型上下文较小时按剩余预算缩小工具结果分页", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 6_000 }).expect(200);
-    runtime.store.saveChapter(chapterId, { content: "上下文保护正文。".repeat(2_000) });
+    runtime.store.saveChapter(chapterId, { content: "小窗口分页正文。".repeat(2_000) });
     let completionCount = 0;
-    fetchMock.mockImplementation(async (input) => {
+    const returnedPages: Array<{ pagination: { maxChars: number; nextCursor: number | null } }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
-      return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
-        id: "context-guard-tool",
-        type: "function",
-        function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
-      }] } }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      if (!toolMessage) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "small-context-page",
+          type: "function",
+          function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
+        }] } }] }), { status: 200 });
+      }
+      returnedPages.push(JSON.parse(toolMessage.content ?? "{}") as { pagination: { maxChars: number; nextCursor: number | null } });
+      expect(estimateAiTokens(JSON.stringify(body.messages))).toBeLessThan(6_000);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取适配小窗口的结构化分页。" } }] }), { status: 200 });
     });
 
     const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
@@ -719,10 +818,12 @@ describe("AI 供应商、模型与建议 API", () => {
       instruction: "读取章节后回答。",
       scope: { type: "none" },
       modelId
-    }).expect(400);
+    }).expect(201);
 
-    expect(response.body.error.code).toBe("CONTEXT_WINDOW_EXCEEDED");
-    expect(completionCount).toBe(1);
+    expect(response.body.data.content).toBe("已读取适配小窗口的结构化分页。");
+    expect(completionCount).toBe(2);
+    expect(returnedPages[0]?.pagination.maxChars).toBeLessThan(10_000);
+    expect(returnedPages[0]?.pagination.nextCursor).toEqual(expect.any(Number));
   });
 
   it("把无效工具参数和未知工具作为英文错误结果反馈给模型", async () => {
@@ -1050,6 +1151,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
     const processSteps = [
       { id: "process-thinking", type: "thinking", round: 1, content: "需要读取目录。", createdAt: "2026-07-17T12:34:55.000Z" },
+      { id: "process-compaction", type: "context_compaction", round: 1, sourceMessageCount: 2, sourceChars: 12000, summaryChars: 180, createdAt: "2026-07-17T12:34:55.500Z" },
       { id: "process-tool", type: "tool", round: 1, toolCall: toolCalls[0], createdAt: "2026-07-17T12:34:56.000Z" }
     ];
     await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({

@@ -56,6 +56,10 @@ const mockAi = createServer(async (request, response) => {
   const latestUserMessage = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
   const joined = messages.map((message) => message.content ?? "").join("\n");
   const toolMessages = messages.filter((message) => message.role === "tool");
+  if (messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+    sendCompletion(response, { content: "已压缩前一轮章节工具结果，保留了跃迁冷却证据。" });
+    return;
+  }
   if (joined.includes("结构化中文长期记忆")) {
     const sourceMessageIds = [...joined.matchAll(/^\[([^\]]+)\]/gmu)].map((match) => match[1]).filter(Boolean).slice(0, 2);
     sendCompletion(response, { content: `<json>{"authorGoals":[],"confirmedDecisions":[],"storyFacts":[{"text":"最近正在确认燃料状态","sourceMessageIds":${JSON.stringify(sourceMessageIds)}}],"constraints":[{"text":"必须遵守跃迁冷却规则","sourceMessageIds":${JSON.stringify(sourceMessageIds)}}],"unresolvedQuestions":[],"importantReferences":[]}</json>` });
@@ -167,6 +171,18 @@ const mockAi = createServer(async (request, response) => {
       return;
     }
     sendCompletion(response, { content: "模型先查询目录，再读取对应章节，确认林舟启动了跃迁。" });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器工具上下文压缩测试")) {
+    if (joined.includes("已压缩的工具调用上下文") && toolMessages.length > 0) {
+      sendCompletion(response, { content: "工具上下文压缩后已继续完成回答。" });
+      return;
+    }
+    if (toolMessages.length === 0) {
+      sendToolCalls(response, [{ id: "browser-compact-read", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }]);
+      return;
+    }
+    sendToolCalls(response, [{ id: "browser-compact-index", name: "story_index", arguments: { offset: 0, limit: 1 } }]);
     return;
   }
   if (latestUserMessage.includes("浏览器压缩后测试")) {
