@@ -2302,7 +2302,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-annotation-card header em { margin-left: auto; color: var(--muted); font-size: 9px; font-style: normal; }
 .chapter-annotation-kind { padding: 2px 6px; border: 1px solid var(--accent); border-radius: 10px; color: var(--accent-dark); font-size: 8px; }
 .chapter-annotation-card blockquote { max-height: 100px; overflow: auto; margin: 0; padding: 8px 10px; border-left: 3px solid var(--line); background: var(--surface); color: var(--muted); font: 10px/1.6 var(--font-mono), monospace; white-space: pre-wrap; }
-.chapter-annotation-card p { margin: 0; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.chapter-annotation-card p { margin: 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
 .chapter-annotation-card > small { color: var(--muted); font-size: 9px; }
 .chapter-annotation-card footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .chapter-annotation-card footer button { min-height: 30px; padding: 5px 9px; font-size: 9px; }
@@ -3083,7 +3083,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .dialog-header { padding: 14px 16px 12px; }
   .dialog-header h2 { font-size: 20px; }
   .settings-dialog-header-actions { gap: 6px; }
-  .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list { padding-inline: 16px; }
+  .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list, .chapter-annotations-list { padding-inline: 16px; }
   .task-detail-overview { grid-template-columns: minmax(0, 1fr); padding: 12px; }
   .task-detail-overview > * { grid-column: 1 !important; }
   .task-result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

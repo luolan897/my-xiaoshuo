@@ -1837,9 +1837,9 @@ async function createSelectedLineAnnotation(kind) {
   if (!state.chapter || !chapterLineSelection || !canEditProse()) return;
   const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
   closeLineCitationMenu();
-  const note = await inputToast(kind === "todo" ? "描述需要后续处理的事项" : "写下这段正文的批注", {
-    title: kind === "todo" ? "添加正文待办" : "添加正文批注",
-    inputLabel: kind === "todo" ? "待办内容" : "批注内容",
+  const note = await inputToast(kind === "todo" ? "描述需要后续处理的事项" : `评论第 ${selection.safeStart + 1} 行正文`, {
+    title: kind === "todo" ? "添加正文待办" : "添加正文评论",
+    inputLabel: kind === "todo" ? "待办内容" : "评论内容",
     confirmLabel: "添加",
     maxLength: 2000
   });
@@ -1849,7 +1849,7 @@ async function createSelectedLineAnnotation(kind) {
       method: "POST",
       body: { kind, startLine: selection.safeStart + 1, endLine: selection.safeEnd + 1, note }
     });
-    toast(kind === "todo" ? "正文待办已添加" : "正文批注已添加");
+    toast(kind === "todo" ? "正文待办已添加" : "正文评论已添加");
     await openChapterAnnotationsDialog();
   } catch (error) {
     toast(error.message, "error");
@@ -1859,12 +1859,12 @@ async function createSelectedLineAnnotation(kind) {
 function renderChapterAnnotations() {
   const host = $("#chapter-annotations-list");
   host.innerHTML = chapterAnnotations.length ? chapterAnnotations.map((annotation) => `<article class="chapter-annotation-card ${annotation.status === "resolved" ? "is-resolved" : ""}" data-annotation-id="${esc(annotation.id)}">
-    <header><span class="chapter-annotation-kind">${annotation.kind === "todo" ? "待办" : "批注"}</span><strong>${annotation.startLine === annotation.endLine ? `第 ${annotation.startLine} 行` : `第 ${annotation.startLine}-${annotation.endLine} 行`}</strong><em>${annotation.status === "resolved" ? "已完成" : "处理中"}</em></header>
+    <header><span class="chapter-annotation-kind">${annotation.kind === "todo" ? "待办" : "评论"}</span><strong>${annotation.startLine === annotation.endLine ? `第 ${annotation.startLine} 行` : `第 ${annotation.startLine}-${annotation.endLine} 行`}</strong><em>${annotation.status === "resolved" ? (annotation.kind === "todo" ? "已完成" : "已解决") : (annotation.kind === "todo" ? "待处理" : "未解决")}</em></header>
     <blockquote>${esc(annotation.quote || "空白行")}</blockquote>
-    <p>${esc(annotation.note)}</p>
+    <p data-annotation-content>${esc(annotation.note)}</p>
     <small>${esc(annotation.actor)} · ${esc(formatDateTime(annotation.updatedAt))} · v${Number(annotation.versionNo)}</small>
-    <footer><button type="button" data-annotation-locate>定位原文</button>${canEditProse() ? `<button type="button" data-annotation-edit>编辑说明</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : "完成待办"}</button><button class="danger-button" type="button" data-annotation-delete>删除</button>` : ""}</footer>
-  </article>`).join("") : '<p class="entity-history-empty">本章还没有批注或待办。选择正文行并打开右键菜单即可添加。</p>';
+    <footer><button type="button" data-annotation-locate>定位原文</button>${canEditProse() ? `<button type="button" data-annotation-edit>${annotation.kind === "todo" ? "编辑待办" : "编辑评论"}</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : (annotation.kind === "todo" ? "完成待办" : "解决评论")}</button><button class="danger-button" type="button" data-annotation-delete>${annotation.kind === "todo" ? "删除待办" : "删除评论"}</button>` : ""}</footer>
+  </article>`).join("") : '<p class="entity-history-empty">本章还没有评论。在正文行上点击右键即可添加。</p>';
   host.querySelectorAll("[data-annotation-id]").forEach((card) => {
     const annotation = chapterAnnotations.find((item) => item.id === card.dataset.annotationId);
     if (!annotation) return;
@@ -1882,7 +1882,13 @@ function renderChapterAnnotations() {
     card.querySelector("[data-annotation-edit]")?.addEventListener("click", async () => {
       const dialog = $("#chapter-annotations-dialog");
       dialog.close();
-      const note = await inputToast("修改批注或待办说明", { title: "编辑说明", inputLabel: "说明", placeholder: annotation.note, confirmLabel: "保存", maxLength: 2000 });
+      const note = await inputToast(annotation.kind === "todo" ? "修改待办内容" : "修改评论内容", {
+        title: annotation.kind === "todo" ? "编辑待办" : "编辑评论",
+        inputLabel: annotation.kind === "todo" ? "待办内容" : "评论内容",
+        value: annotation.note,
+        confirmLabel: "保存",
+        maxLength: 2000
+      });
       if (!note) return dialog.showModal();
       try {
         await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "PATCH", body: { note, expectedVersionNo: annotation.versionNo } });
@@ -1893,7 +1899,10 @@ function renderChapterAnnotations() {
     card.querySelector("[data-annotation-delete]")?.addEventListener("click", async () => {
       const dialog = $("#chapter-annotations-dialog");
       dialog.close();
-      const confirmed = await confirmToast("删除后不会在本章清单中显示，但历史版本仍会保留。", { title: "删除批注或待办", confirmLabel: "确认删除" });
+      const confirmed = await confirmToast("删除后不会在本章评论中显示，但历史版本仍会保留。", {
+        title: annotation.kind === "todo" ? "删除待办" : "删除评论",
+        confirmLabel: "确认删除"
+      });
       if (!confirmed) return dialog.showModal();
       try {
         await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "DELETE", body: { expectedVersionNo: annotation.versionNo } });
@@ -1912,8 +1921,8 @@ async function loadChapterAnnotations() {
 
 async function openChapterAnnotationsDialog() {
   if (!state.chapter) return;
-  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文批注与待办`;
-  $("#chapter-annotations-list").innerHTML = '<p class="entity-history-empty">正在加载批注与待办…</p>';
+  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文评论`;
+  $("#chapter-annotations-list").innerHTML = '<p class="entity-history-empty">正在加载评论…</p>';
   if (!$("#chapter-annotations-dialog").open) $("#chapter-annotations-dialog").showModal();
   try {
     await loadChapterAnnotations();
@@ -2523,7 +2532,7 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
   });
 }
 
-function inputToast(message, { title = "请输入", inputLabel = title, placeholder = "", confirmLabel = "确认", cancelLabel = "取消", maxLength = 500 } = {}) {
+function inputToast(message, { title = "请输入", inputLabel = title, value = "", placeholder = "", confirmLabel = "确认", cancelLabel = "取消", maxLength = 500 } = {}) {
   const region = $("#toast-region");
   const element = document.createElement("section");
   element.className = "toast toast-confirmation toast-input-dialog";
@@ -2537,6 +2546,7 @@ function inputToast(message, { title = "请输入", inputLabel = title, placehol
   input.className = "toast-input";
   input.type = "text";
   input.maxLength = maxLength;
+  input.value = value;
   input.placeholder = placeholder;
   input.setAttribute("aria-label", inputLabel);
   const actions = document.createElement("div");
@@ -10387,6 +10397,10 @@ $("#chapter-content").addEventListener("input", (event) => {
 });
 $("#chapter-content").addEventListener("select", scheduleAiContextUsage);
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
+$("#chapter-content").addEventListener("contextmenu", (event) => {
+  if (!state.chapter) return;
+  showLineCitationMenu(event, lineIndexAtPointer(event.clientY));
+});
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
   if (!row || event.button !== 0) return;
