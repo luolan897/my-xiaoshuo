@@ -9,6 +9,9 @@ export const MODEL_PURPOSE_OPTIONS = Object.freeze([
   ["consistency-check", "一致性校对"]
 ]);
 
+export const MIN_MODEL_CONTEXT_WINDOW = 32_768;
+export const RECOMMENDED_MODEL_CONTEXT_WINDOW = 128_000;
+
 const purposeAliases = new Map([
   ...MODEL_PURPOSE_OPTIONS.flatMap(([key, label]) => [[key, key], [label, key]]),
   ["章节分析", "chapter-analysis"],
@@ -23,6 +26,17 @@ export function normalizeModelPurposes(purposes) {
 
 export function isKimiModelId(modelId) {
   return String(modelId ?? "").toLowerCase().includes("kimi");
+}
+
+export function modelContextWindowGuidance(value) {
+  const contextWindow = Number(value);
+  const hasNumericValue = String(value ?? "").trim() !== "" && Number.isFinite(contextWindow);
+  return {
+    belowMinimum: hasNumericValue && contextWindow < MIN_MODEL_CONTEXT_WINDOW,
+    showRecommendation: hasNumericValue
+      && contextWindow >= MIN_MODEL_CONTEXT_WINDOW
+      && contextWindow < RECOMMENDED_MODEL_CONTEXT_WINDOW
+  };
 }
 
 export function modelFormValues(model = null) {

@@ -121,7 +121,7 @@ const presenceHeartbeatSchema = z.object({
   page: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal(presencePageKinds[0]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[1]), resourceId: identifier }).strict(),
-    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["drafts", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
+    z.object({ kind: z.literal(presencePageKinds[2]), module: z.enum(["drafts", "settings", "characters", "races", "organizations", "timeline", "comments", "relationships", "outlines", "reviews", "tasks", "ai-settings"]) }).strict(),
     z.object({ kind: z.literal(presencePageKinds[3]), module: z.enum(["setting", "character", "race", "organization", "relationship"]), resourceId: identifier.optional() }).strict(),
     z.object({ kind: z.literal(presencePageKinds[4]) }).strict()
   ])
@@ -345,7 +345,7 @@ const modelSchema = z.object({
   modelId: nonEmpty.max(300),
   purposes: optionalStrings,
   contextNote: z.string().max(10_000).optional(),
-  contextWindow: z.number().int().min(1_024).max(2_000_000).optional(),
+  contextWindow: z.number().int().min(32_768, "模型上下文不能低于 32768 Token").max(2_000_000).optional(),
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
   thinkingEnabled: z.boolean().optional(),
@@ -370,6 +370,7 @@ const platformPageSizesSchema = z.object({
   timeline: z.number().int().min(10).max(100).optional(),
   outlines: z.number().int().min(10).max(100).optional(),
   relationships: z.number().int().min(10).max(100).optional(),
+  comments: z.number().int().min(10).max(100).optional(),
   reviews: z.number().int().min(10).max(100).optional(),
   analysisTasks: z.number().int().min(10).max(100).optional(),
   fileVersions: z.number().int().min(10).max(100).optional()
@@ -411,6 +412,15 @@ const aiProcessStepSchema = z.discriminatedUnion("type", [
     type: z.literal("tool"),
     round: z.number().int().min(1).max(20),
     toolCall: aiToolCallResultSchema,
+    createdAt: z.string().datetime({ offset: true })
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(300),
+    type: z.literal("context_compaction"),
+    round: z.number().int().min(1).max(20),
+    sourceMessageCount: z.number().int().min(1).max(100),
+    sourceChars: z.number().int().min(1).max(10_000_000),
+    summaryChars: z.number().int().min(1).max(1_000_000),
     createdAt: z.string().datetime({ offset: true })
   }).strict()
 ]);
@@ -1150,6 +1160,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.listChapterInsightsPage(request.params.chapterId, pagination) : store.listChapterInsights(request.params.chapterId));
   });
   app.get("/api/chapters/:chapterId/annotations", (request, response) => data(response, store.listChapterAnnotations(request.params.chapterId)));
+  app.get("/api/works/:workId/chapter-annotations", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listWorkChapterAnnotationsPage(request.params.workId, pagination)
+      : store.listWorkChapterAnnotations(request.params.workId));
+  });
   app.post("/api/chapters/:chapterId/annotations", (request, response) => {
     const input = parse(z.object({
       kind: z.enum(["note", "todo"]),
@@ -1829,8 +1845,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, updated);
   });
   app.get("/api/works/:workId/ai-conversations", (request, response) => {
-    const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listAiConversationsPage(request.params.workId, pagination) : store.listAiConversations(request.params.workId));
+    const pagination = parsePagination({
+      page: request.query.page ?? "1",
+      limit: request.query.limit ?? "20"
+    }) ?? { page: 1, limit: 20, offset: 0 };
+    data(response, store.listAiConversationsPage(request.params.workId, pagination));
   });
   app.post("/api/works/:workId/ai-conversations", (request, response) => {
     const input = parse(z.object({ title: z.string().max(200).optional() }), request.body ?? {});
@@ -1880,32 +1899,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/ai-conversations/:conversationId/compact", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional(), scope: contextSchema }), request.body);
     const conversation = store.getAiConversation(request.params.conversationId);
-    data(response, await ai.compactConversation({
+    const compacted = await ai.compactConversation({
       conversationId: request.params.conversationId,
       workId: String(conversation.workId),
       modelId: input.modelId,
       scope: input.scope
-    }));
-  });
-  app.post("/api/works/:workId/ai-context-usage", (request, response) => {
-    const input = parse(z.object({
-      modelId: identifier.optional(),
-      taskType: z.enum(TASK_TYPES).default("chat"),
-      scope: contextSchema,
-      instruction: z.string().max(100_000).default(""),
-      citations: aiCitationsSchema.optional(),
-      conversationId: identifier.optional(),
-      currentMessageId: identifier.optional()
-    }), request.body ?? {});
-    data(response, ai.getContextUsage({
-      workId: request.params.workId,
-      modelId: input.modelId,
-      taskType: input.taskType,
-      scope: input.scope,
-      instruction: instructionWithCitations(input.instruction, input.citations ?? []),
-      conversationId: input.conversationId,
-      excludeConversationMessageId: input.currentMessageId
-    }));
+    });
+    data(response, {
+      ...compacted,
+      usage: ai.getContextUsage({
+        workId: String(conversation.workId),
+        taskType: "chat",
+        instruction: "",
+        conversationId: request.params.conversationId,
+        modelId: input.modelId,
+        scope: input.scope
+      })
+    });
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {
@@ -2005,6 +2015,38 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     };
     sendEvent("ready", { streaming: true });
     try {
+      const conversation = input.conversationId
+        ? store.getAiConversationSummary(input.conversationId)
+        : store.createAiConversation(request.params.workId);
+      if (String(conversation.workId) !== request.params.workId) {
+        throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+      }
+      const conversationId = String(conversation.id);
+      const prepared = await ai.prepareConversationContext({
+        conversationId,
+        workId: request.params.workId,
+        modelId: input.modelId,
+        scope: input.scope as ContextScope,
+        instruction: instructionWithCitations(input.instruction, citations),
+        excludeConversationMessageId: input.currentMessageId
+      });
+      sendEvent("context", {
+        ...prepared,
+        conversation: {
+          ...store.getAiConversationSummary(conversationId),
+          contextWarningPending: prepared.action === "warn"
+        }
+      });
+      if (prepared.action === "warn") return;
+      const userMessage = input.currentMessageId
+        ? null
+        : store.addAiConversationMessage(conversationId, {
+          role: "user",
+          content: input.instruction,
+          citations
+        });
+      const currentMessageId = input.currentMessageId ?? String(userMessage?.id ?? "");
+      if (userMessage) sendEvent("user_message", { message: userMessage });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: instructionWithCitations(input.instruction, citations),
@@ -2012,9 +2054,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
         onProcessStep: (step) => sendEvent("process_step", step),
-        conversationId: input.conversationId,
-        excludeConversationMessageId: input.currentMessageId,
-        ...(input.currentMessageId ? { assistantMessageRequestId: `assistant:${input.currentMessageId}` } : {}),
+        onContextCompacted: (event) => sendEvent("context_compacted", event),
+        conversationId,
+        excludeConversationMessageId: currentMessageId,
+        ...(currentMessageId ? { assistantMessageRequestId: `assistant:${currentMessageId}` } : {}),
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
@@ -2028,6 +2071,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         chapterVersion: suggestion.chapterVersion,
         toolCalls: suggestion.toolCalls,
         processSteps: suggestion.processSteps,
+        contextUsage: suggestion.contextUsage,
+        conversationId,
         conversationTitle: suggestion.conversationTitle,
         messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
           ? (suggestion.conversationMessage as Record<string, unknown>).id
@@ -2046,7 +2091,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           message: error instanceof Error ? error.message : "AI 流式调用失败",
           ...(error instanceof AppError ? { status: error.status } : {}),
           ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
-          ...(typeof details?.callId === "string" ? { callId: details.callId } : {})
+          ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
+          ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
+          ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
+          ...(typeof details?.modelId === "string" ? { modelId: details.modelId } : {}),
+          ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {})
         });
       }
     } finally {

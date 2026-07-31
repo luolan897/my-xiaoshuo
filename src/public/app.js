@@ -5,18 +5,18 @@ import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260731-model-context-guidance-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260730-token-distribution-v2";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260731-skills-description-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260725-unified-permissions";
-import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260729-drafts-v1";
+import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260731-drafts-to-ideas-v1";
 import {
   chapterVersionSourceLabel,
   foreshadowStatusLabel,
@@ -36,12 +36,12 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260728-hybrid-search-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260729-drafts-v1";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260729-drafts-v1";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
@@ -69,6 +69,7 @@ const defaultPageSizes = Object.freeze({
   timeline: 30,
   outlines: 30,
   relationships: 30,
+  comments: 30,
   reviews: 30,
   analysisTasks: 30,
   fileVersions: 30
@@ -134,6 +135,7 @@ const cachedWorkModules = new Set([
   "timeline",
   "outlines",
   "relationships",
+  "comments",
   "reviews",
   "tasks",
   "ai-settings"
@@ -311,6 +313,7 @@ function applyWorkAccessMode() {
     const button = $(`#module-nav [data-module="${item.uiModule}"]`);
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }
+  $("#module-nav [data-module=\"comments\"]").classList.toggle("permission-hidden", Boolean(state.work) && !canReadModule("comments"));
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
   $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#chapter-batch-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
@@ -392,6 +395,8 @@ let aiReferencesLoadPromise = null;
 let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
+const aiConversationHistoryPageLimit = 20;
+let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
 const loadedVolumeChapterIds = new Set();
 const volumeChapterLoadingIds = new Set();
@@ -662,7 +667,7 @@ function renderPresence() {
   const localKey = presencePageKey(presencePageForRoute());
   syncChapterAutoSaveWithPresence();
   control.classList.remove("hidden");
-  $("#presence-count").textContent = `${groups.length} 人在线`;
+  $("#presence-count").textContent = `${groups.length} 人`;
   $("#presence-list").innerHTML = groups.map((participant) => {
     const isCurrent = participant.userId === state.user?.userId;
     const samePage = !isCurrent && participant.pages.some((page) => page.key === localKey);
@@ -908,6 +913,7 @@ const moduleListPages = {
   outlinePlans: 1,
   foreshadows: 1,
   relationships: 1,
+  comments: 1,
   reviews: 1
 };
 const characterFilters = { raceIds: [], organizationIds: [] };
@@ -1244,7 +1250,7 @@ function renderAiCitations() {
     card.append(main, remove, fullText);
     host.append(card);
   }
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 function aiReferenceKey(reference) {
@@ -1288,7 +1294,7 @@ function renderAiReferences() {
     if (rendered.has(aiReferenceKey(reference))) continue;
     prompt.append(createAiReferenceChip(reference), document.createTextNode(" "));
   }
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 function renderAiQuickActions() {
@@ -1331,6 +1337,34 @@ function resetAiFeed() {
   $("#ai-feed").innerHTML = '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
+function appendAiContextCompactionDivider(kind, before = null) {
+  const divider = document.createElement("div");
+  divider.className = "ai-context-compaction-divider";
+  divider.dataset.contextCompaction = kind;
+  divider.dataset.testid = "ai-context-compaction-divider";
+  divider.setAttribute("role", "separator");
+  divider.setAttribute("aria-label", "已压缩上下文");
+  divider.innerHTML = "<span>已压缩上下文</span>";
+  const feed = $("#ai-feed");
+  if (before?.parentElement === feed) feed.insertBefore(divider, before);
+  else feed.append(divider);
+  scrollAiFeedToBottom();
+  return divider;
+}
+
+function renderConversationCompactionDivider(compactedMessageCount, totalMessageCount = null) {
+  const feed = $("#ai-feed");
+  feed.querySelector('[data-context-compaction="conversation"]')?.remove();
+  const compactedCount = Math.max(0, Number(compactedMessageCount) || 0);
+  if (compactedCount === 0) return null;
+  const messages = [...feed.querySelectorAll("[data-message-id]")];
+  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+  const totalCount = Math.max(messages.length, Number(totalMessageCount ?? current?.messageCount) || messages.length);
+  const loadedOffset = Math.max(0, totalCount - messages.length);
+  const boundaryIndex = Math.max(0, Math.min(messages.length, compactedCount - loadedOffset));
+  return appendAiContextCompactionDivider("conversation", messages[boundaryIndex] ?? null);
+}
+
 function renderMessageCardActions(message) {
   let actions = message.querySelector(".message-card-actions");
   if (!actions) {
@@ -1367,7 +1401,7 @@ function renderMessageCardActions(message) {
       fork.disabled = true;
       try {
         const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, { method: "POST", body: { messageId: message.dataset.messageId } });
-        await loadAiConversations(false);
+        upsertAiConversationSummary(conversation);
         await openAiConversation(conversation.id);
         toast("已从所选消息创建分支对话");
       } catch (error) {
@@ -1399,7 +1433,7 @@ const AI_TOOL_DISPLAY_NAMES = {
   grep: "查询正文关键字",
   search_story_entities: "搜索作品实体",
   read_character_sections: "读取人物 Markdown 章节",
-  search_drafts: "搜索草稿"
+  search_drafts: "搜索想法"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -1559,6 +1593,17 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null) {
   const list = document.createElement("div");
   list.className = "ai-process-list";
   for (const step of steps) {
+    if (step?.type === "context_compaction") {
+      const compaction = document.createElement("div");
+      compaction.className = "ai-process-context-compaction";
+      compaction.dataset.testid = "ai-process-context-compaction";
+      compaction.setAttribute("role", "separator");
+      compaction.setAttribute("aria-label", `第 ${Number(step.round) || 1} 轮已压缩上下文`);
+      compaction.title = `已将 ${Number(step.sourceMessageCount) || 0} 条工具上下文压缩为摘要`;
+      compaction.innerHTML = "<span>已压缩上下文</span>";
+      list.append(compaction);
+      continue;
+    }
     if (step?.type === "tool" && step.toolCall) {
       const tool = document.createElement("section");
       tool.className = "ai-process-step ai-process-tool-step";
@@ -1599,6 +1644,12 @@ function setAiHistoryVisible(visible) {
 function renderAiConversationHistory() {
   const host = $("#ai-history-list");
   host.replaceChildren();
+  const pagination = $("#ai-history-pagination");
+  const showPagination = aiConversationHistoryPage.page > 1 || aiConversationHistoryPage.hasMore;
+  pagination.classList.toggle("hidden", !showPagination);
+  $("#ai-history-previous").disabled = aiConversationHistoryPage.page <= 1;
+  $("#ai-history-next").disabled = !aiConversationHistoryPage.hasMore;
+  $("#ai-history-page-label").textContent = `第 ${aiConversationHistoryPage.page} 页 · 本页 ${state.aiConversations.length} 条`;
   if (!state.aiConversations.length) {
     host.innerHTML = '<p class="ai-history-empty">还没有历史对话</p>';
     return;
@@ -1618,6 +1669,43 @@ function renderAiConversationHistory() {
   }
 }
 
+function defaultAiConversationTitle(prompt) {
+  const normalized = String(prompt ?? "").replace(/\s+/gu, " ").trim();
+  return Array.from(normalized).slice(0, 15).join("") || "新对话";
+}
+
+function upsertAiConversationSummary(conversation) {
+  if (!conversation?.id) return;
+  const current = state.aiConversations.find((item) => item.id === conversation.id);
+  const lastMessage = Array.isArray(conversation.messages) ? conversation.messages.at(-1) : null;
+  const summary = { ...current, ...conversation, ...(lastMessage ? { preview: lastMessage.content } : {}) };
+  delete summary.messages;
+  delete summary.messagesPage;
+  if (!current && loadedAiConversationsWorkId === state.work?.id) {
+    loadedAiConversationsWorkId = null;
+    aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
+    state.aiConversations = [summary];
+    renderAiConversationHistory();
+    return;
+  }
+  state.aiConversations = [summary, ...state.aiConversations.filter((item) => item.id !== summary.id)]
+    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+  renderAiConversationHistory();
+}
+
+function updateAiConversationSummaryFromMessage(message) {
+  if (!message?.conversationId) return;
+  const current = state.aiConversations.find((conversation) => conversation.id === message.conversationId);
+  if (!current) return;
+  upsertAiConversationSummary({
+    ...current,
+    title: current.title === "新对话" && message.role === "user" ? defaultAiConversationTitle(message.content) : current.title,
+    messageCount: Number(current.messageCount ?? 0) + 1,
+    preview: message.content,
+    updatedAt: message.createdAt ?? current.updatedAt
+  });
+}
+
 function applyAiConversationTitle(title) {
   if (!title || !state.aiConversationId) return;
   const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
@@ -1626,20 +1714,27 @@ function applyAiConversationTitle(title) {
   renderAiConversationHistory();
 }
 
-async function loadAiConversations(openLatest = true) {
+function applyAiConversations(pageResult) {
+  state.aiConversations = pageResult.items;
+  aiConversationHistoryPage = {
+    page: pageResult.page,
+    limit: pageResult.limit,
+    hasMore: pageResult.hasMore,
+    nextPage: pageResult.nextPage
+  };
+  loadedAiConversationsWorkId = state.work?.id ?? null;
+  renderAiConversationHistory();
+  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+  if (current) $("#ai-conversation-title").textContent = current.title;
+}
+
+async function loadAiConversations(page = 1) {
   const workId = state.work?.id;
   if (!workId) return;
   const generation = workScopedUiGeneration;
-  const conversations = (await apiPage(`/api/works/${workId}/ai-conversations`)).items;
+  const conversations = await apiPage(`/api/works/${workId}/ai-conversations`, page, aiConversationHistoryPageLimit);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  state.aiConversations = conversations;
-  loadedAiConversationsWorkId = workId;
-  renderAiConversationHistory();
-  if (openLatest && state.aiConversations.length) await openAiConversation(state.aiConversations[0].id, false);
-  else {
-    const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
-    if (current) $("#ai-conversation-title").textContent = current.title;
-  }
+  applyAiConversations(conversations);
 }
 
 async function ensureAiConversationsLoaded() {
@@ -1647,7 +1742,7 @@ async function ensureAiConversationsLoaded() {
   if (!workId || loadedAiConversationsWorkId === workId) return;
   if (aiConversationsLoadPromise && aiConversationsLoadWorkId === workId) return aiConversationsLoadPromise;
   aiConversationsLoadWorkId = workId;
-  aiConversationsLoadPromise = loadAiConversations(false);
+  aiConversationsLoadPromise = loadAiConversations();
   try {
     await aiConversationsLoadPromise;
   } finally {
@@ -1660,11 +1755,15 @@ async function ensureAiConversationsLoaded() {
 
 async function openAiConversation(conversationId, hideHistory = true) {
   const conversation = await api(`/api/ai-conversations/${conversationId}?page=1&limit=100`);
+  upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
+  if (conversation.hasCompactedSummary) {
+    renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount);
+  }
   state.aiCitations = [];
   state.aiReferences = [];
   setAiPromptText("");
@@ -1680,14 +1779,15 @@ async function openAiConversation(conversationId, hideHistory = true) {
 async function createNewAiConversation() {
   if (!state.work) return;
   const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: {} });
+  upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = false;
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   hideAiContextWarning();
+  setAiContextMeter(null);
   renderAiQuickActions();
   setAiHistoryVisible(false);
-  await loadAiConversations(false);
 }
 
 async function ensureAiConversation() {
@@ -1700,7 +1800,7 @@ async function persistAiConversationMessage(role, content, citations = [], metad
   const conversationId = await ensureAiConversation();
   if (!conversationId) throw new Error("无法创建 AI 对话");
   const message = await api(`/api/ai-conversations/${conversationId}/messages`, { method: "POST", body: { role, content, citations, metadata } });
-  await loadAiConversations(false);
+  updateAiConversationSummaryFromMessage(message);
   return message;
 }
 
@@ -1837,9 +1937,9 @@ async function createSelectedLineAnnotation(kind) {
   if (!state.chapter || !chapterLineSelection || !canEditProse()) return;
   const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
   closeLineCitationMenu();
-  const note = await inputToast(kind === "todo" ? "描述需要后续处理的事项" : "写下这段正文的批注", {
-    title: kind === "todo" ? "添加正文待办" : "添加正文批注",
-    inputLabel: kind === "todo" ? "待办内容" : "批注内容",
+  const note = await inputToast(kind === "todo" ? "描述需要后续处理的事项" : `评论第 ${selection.safeStart + 1} 行正文`, {
+    title: kind === "todo" ? "添加正文待办" : "添加正文评论",
+    inputLabel: kind === "todo" ? "待办内容" : "评论内容",
     confirmLabel: "添加",
     maxLength: 2000
   });
@@ -1849,58 +1949,104 @@ async function createSelectedLineAnnotation(kind) {
       method: "POST",
       body: { kind, startLine: selection.safeStart + 1, endLine: selection.safeEnd + 1, note }
     });
-    toast(kind === "todo" ? "正文待办已添加" : "正文批注已添加");
+    toast(kind === "todo" ? "正文待办已添加" : "正文评论已添加");
     await openChapterAnnotationsDialog();
   } catch (error) {
     toast(error.message, "error");
   }
 }
 
-function renderChapterAnnotations() {
-  const host = $("#chapter-annotations-list");
-  host.innerHTML = chapterAnnotations.length ? chapterAnnotations.map((annotation) => `<article class="chapter-annotation-card ${annotation.status === "resolved" ? "is-resolved" : ""}" data-annotation-id="${esc(annotation.id)}">
-    <header><span class="chapter-annotation-kind">${annotation.kind === "todo" ? "待办" : "批注"}</span><strong>${annotation.startLine === annotation.endLine ? `第 ${annotation.startLine} 行` : `第 ${annotation.startLine}-${annotation.endLine} 行`}</strong><em>${annotation.status === "resolved" ? "已完成" : "处理中"}</em></header>
+function chapterAnnotationLineLabel(annotation) {
+  return annotation.startLine === annotation.endLine
+    ? `第 ${annotation.startLine} 行`
+    : `第 ${annotation.startLine}-${annotation.endLine} 行`;
+}
+
+function chapterAnnotationStatusLabel(annotation) {
+  if (annotation.status === "resolved") return annotation.kind === "todo" ? "已完成" : "已解决";
+  return annotation.kind === "todo" ? "待处理" : "未解决";
+}
+
+function chapterAnnotationCard(annotation, { showSource = false } = {}) {
+  const lineLabel = chapterAnnotationLineLabel(annotation);
+  const sourceLabel = `${annotation.volumeTitle ?? "正文"} / ${annotation.chapterTitle ?? "未命名章节"}`;
+  const heading = showSource
+    ? `<strong class="chapter-annotation-source" title="${esc(sourceLabel)}">${esc(sourceLabel)}</strong><span class="chapter-annotation-line">${esc(lineLabel)}</span>`
+    : `<strong>${esc(lineLabel)}</strong>`;
+  return `<article class="chapter-annotation-card ${annotation.status === "resolved" ? "is-resolved" : ""}" data-annotation-id="${esc(annotation.id)}">
+    <header><span class="chapter-annotation-kind">${annotation.kind === "todo" ? "待办" : "评论"}</span>${heading}<em>${esc(chapterAnnotationStatusLabel(annotation))}</em></header>
     <blockquote>${esc(annotation.quote || "空白行")}</blockquote>
-    <p>${esc(annotation.note)}</p>
+    <p data-annotation-content>${esc(annotation.note)}</p>
     <small>${esc(annotation.actor)} · ${esc(formatDateTime(annotation.updatedAt))} · v${Number(annotation.versionNo)}</small>
-    <footer><button type="button" data-annotation-locate>定位原文</button>${canEditProse() ? `<button type="button" data-annotation-edit>编辑说明</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : "完成待办"}</button><button class="danger-button" type="button" data-annotation-delete>删除</button>` : ""}</footer>
-  </article>`).join("") : '<p class="entity-history-empty">本章还没有批注或待办。选择正文行并打开右键菜单即可添加。</p>';
+    <footer><button type="button" data-annotation-locate>定位原文</button>${canEditProse() ? `<button type="button" data-annotation-edit>${annotation.kind === "todo" ? "编辑待办" : "编辑评论"}</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : (annotation.kind === "todo" ? "完成待办" : "解决评论")}</button><button class="danger-button" type="button" data-annotation-delete>${annotation.kind === "todo" ? "删除待办" : "删除评论"}</button>` : ""}</footer>
+  </article>`;
+}
+
+function bindChapterAnnotationCards(host, annotations, { refresh, locate, overlayDialog = null }) {
+  const suspendOverlay = () => {
+    if (overlayDialog?.open) overlayDialog.close();
+  };
+  const resumeOverlay = () => {
+    if (overlayDialog && !overlayDialog.open) overlayDialog.showModal();
+  };
   host.querySelectorAll("[data-annotation-id]").forEach((card) => {
-    const annotation = chapterAnnotations.find((item) => item.id === card.dataset.annotationId);
+    const annotation = annotations.find((item) => item.id === card.dataset.annotationId);
     if (!annotation) return;
-    card.querySelector("[data-annotation-locate]")?.addEventListener("click", () => {
-      $("#chapter-annotations-dialog").close();
-      paintChapterLineSelection(annotation.startLine - 1, annotation.endLine - 1);
-      selectChapterLines(annotation.startLine - 1, annotation.endLine - 1);
+    card.querySelector("[data-annotation-locate]")?.addEventListener("click", async () => {
+      try { await locate(annotation); }
+      catch (error) { toast(error.message, "error"); }
     });
     card.querySelector("[data-annotation-status]")?.addEventListener("click", async () => {
       try {
         await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "PATCH", body: { status: annotation.status === "resolved" ? "open" : "resolved", expectedVersionNo: annotation.versionNo } });
-        await loadChapterAnnotations();
+        await refresh();
       } catch (error) { toast(error.message, "error"); }
     });
     card.querySelector("[data-annotation-edit]")?.addEventListener("click", async () => {
-      const dialog = $("#chapter-annotations-dialog");
-      dialog.close();
-      const note = await inputToast("修改批注或待办说明", { title: "编辑说明", inputLabel: "说明", placeholder: annotation.note, confirmLabel: "保存", maxLength: 2000 });
-      if (!note) return dialog.showModal();
+      suspendOverlay();
+      const note = await inputToast(annotation.kind === "todo" ? "修改待办内容" : "修改评论内容", {
+        title: annotation.kind === "todo" ? "编辑待办" : "编辑评论",
+        inputLabel: annotation.kind === "todo" ? "待办内容" : "评论内容",
+        value: annotation.note,
+        confirmLabel: "保存",
+        maxLength: 2000
+      });
+      if (!note) return resumeOverlay();
       try {
         await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "PATCH", body: { note, expectedVersionNo: annotation.versionNo } });
-        await loadChapterAnnotations();
+        await refresh();
       } catch (error) { toast(error.message, "error"); }
-      dialog.showModal();
+      resumeOverlay();
     });
     card.querySelector("[data-annotation-delete]")?.addEventListener("click", async () => {
-      const dialog = $("#chapter-annotations-dialog");
-      dialog.close();
-      const confirmed = await confirmToast("删除后不会在本章清单中显示，但历史版本仍会保留。", { title: "删除批注或待办", confirmLabel: "确认删除" });
-      if (!confirmed) return dialog.showModal();
+      suspendOverlay();
+      const confirmed = await confirmToast("删除后不会在正文评论中显示，但历史版本仍会保留。", {
+        title: annotation.kind === "todo" ? "删除待办" : "删除评论",
+        confirmLabel: "确认删除"
+      });
+      if (!confirmed) return resumeOverlay();
       try {
         await api(`/api/chapter-annotations/${encodeURIComponent(annotation.id)}`, { method: "DELETE", body: { expectedVersionNo: annotation.versionNo } });
-        await loadChapterAnnotations();
-        dialog.showModal();
-      } catch (error) { dialog.showModal(); toast(error.message, "error"); }
+        await refresh();
+      } catch (error) { toast(error.message, "error"); }
+      resumeOverlay();
     });
+  });
+}
+
+function renderChapterAnnotations() {
+  const host = $("#chapter-annotations-list");
+  host.innerHTML = chapterAnnotations.length
+    ? chapterAnnotations.map((annotation) => chapterAnnotationCard(annotation)).join("")
+    : '<p class="entity-history-empty">本章还没有评论。在正文行上点击右键即可添加。</p>';
+  bindChapterAnnotationCards(host, chapterAnnotations, {
+    refresh: loadChapterAnnotations,
+    locate: (annotation) => {
+      $("#chapter-annotations-dialog").close();
+      paintChapterLineSelection(annotation.startLine - 1, annotation.endLine - 1);
+      selectChapterLines(annotation.startLine - 1, annotation.endLine - 1);
+    },
+    overlayDialog: $("#chapter-annotations-dialog")
   });
 }
 
@@ -1912,8 +2058,8 @@ async function loadChapterAnnotations() {
 
 async function openChapterAnnotationsDialog() {
   if (!state.chapter) return;
-  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文批注与待办`;
-  $("#chapter-annotations-list").innerHTML = '<p class="entity-history-empty">正在加载批注与待办…</p>';
+  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文评论`;
+  $("#chapter-annotations-list").innerHTML = '<p class="entity-history-empty">正在加载评论…</p>';
   if (!$("#chapter-annotations-dialog").open) $("#chapter-annotations-dialog").showModal();
   try {
     await loadChapterAnnotations();
@@ -2182,6 +2328,10 @@ function createClientError(payload, fallbackMessage, fallbackStatus = null) {
   error.details = source.details;
   error.failure = typeof source.failure === "string" ? source.failure : undefined;
   error.callId = typeof source.callId === "string" ? source.callId : undefined;
+  error.providerName = typeof source.providerName === "string" ? source.providerName : undefined;
+  error.providerId = typeof source.providerId === "string" ? source.providerId : undefined;
+  error.modelId = typeof source.modelId === "string" ? source.modelId : undefined;
+  error.modelRecordId = typeof source.modelRecordId === "string" ? source.modelRecordId : undefined;
   return error;
 }
 
@@ -2193,8 +2343,13 @@ function formatAiFailureMessage(error) {
   const details = error?.details && typeof error.details === "object" && !Array.isArray(error.details) ? error.details : {};
   const failure = typeof error?.failure === "string" ? error.failure : typeof details.failure === "string" ? details.failure : "";
   const callId = typeof error?.callId === "string" ? error.callId : typeof details.callId === "string" ? details.callId : "";
+  const providerName = typeof error?.providerName === "string" ? error.providerName : typeof details.providerName === "string" ? details.providerName : "";
+  const providerId = typeof error?.providerId === "string" ? error.providerId : typeof details.providerId === "string" ? details.providerId : "";
+  const modelId = typeof error?.modelId === "string" ? error.modelId : typeof details.modelId === "string" ? details.modelId : "";
   if (code) lines.push(`错误码：${code}`);
   if (status) lines.push(`服务端状态：HTTP ${status}`);
+  if (providerName || providerId) lines.push(`模型供应商：${providerName || providerId}`);
+  if (modelId) lines.push(`模型 ID：${modelId}`);
   if (failure && failure !== message) lines.push(`详细原因：${failure}`);
   if (callId) lines.push(`调用 ID：${callId}`);
   return lines.join("\n\n");
@@ -2242,7 +2397,6 @@ function invalidateModuleRequestsAfterMutation(path, method) {
     path.startsWith("/api/auth/")
     || path.includes("/presence")
     || path.includes("/context/prepare")
-    || path.includes("/ai-context-usage")
     || path.includes("/chat/stream")
   ) return;
 
@@ -2259,6 +2413,7 @@ function invalidateModuleRequestsAfterMutation(path, method) {
   if (path.includes("/timeline")) affected.add("timeline");
   if (path.includes("/outlines") || path.includes("/foreshadows")) affected.add("outlines");
   if (path.includes("/relationships")) affected.add("relationships");
+  if (path.includes("/chapter-annotations/") || /\/chapters\/[^/]+\/annotations(?:$|\?)/u.test(path)) affected.add("comments");
   if (path.includes("/reviews")) affected.add("reviews");
   if (path.includes("/entity-versions/")) {
     if (path.includes("/draft/")) affected.add("drafts");
@@ -2523,7 +2678,7 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
   });
 }
 
-function inputToast(message, { title = "请输入", inputLabel = title, placeholder = "", confirmLabel = "确认", cancelLabel = "取消", maxLength = 500 } = {}) {
+function inputToast(message, { title = "请输入", inputLabel = title, value = "", placeholder = "", confirmLabel = "确认", cancelLabel = "取消", maxLength = 500 } = {}) {
   const region = $("#toast-region");
   const element = document.createElement("section");
   element.className = "toast toast-confirmation toast-input-dialog";
@@ -2537,6 +2692,7 @@ function inputToast(message, { title = "请输入", inputLabel = title, placehol
   input.className = "toast-input";
   input.type = "text";
   input.maxLength = maxLength;
+  input.value = value;
   input.placeholder = placeholder;
   input.setAttribute("aria-label", inputLabel);
   const actions = document.createElement("div");
@@ -2963,15 +3119,15 @@ const workAuditActionLabels = {
   "chapter.deleted": "删除章节",
   "chapter.purged": "彻底删除章节",
   "chapter.restored": "恢复章节",
-  "draft.created": "创建草稿",
-  "draft.updated": "更新草稿",
-  "draft.deleted": "删除草稿",
-  "draft.restored": "恢复草稿",
+  "draft.created": "创建想法",
+  "draft.updated": "更新想法",
+  "draft.deleted": "删除想法",
+  "draft.restored": "恢复想法",
   "work.imported": "导入正文"
 };
 
 function workAuditEntityLabel(type) {
-  return ({ work: "作品", volume: "分卷", chapter: "章节", draft: "草稿", user: "用户" })[type] ?? type;
+  return ({ work: "作品", volume: "分卷", chapter: "章节", draft: "想法", user: "用户" })[type] ?? type;
 }
 
 function workAuditDetailText(detail) {
@@ -3089,6 +3245,7 @@ async function openPlatformUiSettingsDialog() {
     $("#page-size-timeline").value = String(pageSizes.timeline);
     $("#page-size-outlines").value = String(pageSizes.outlines);
     $("#page-size-relationships").value = String(pageSizes.relationships);
+    $("#page-size-comments").value = String(pageSizes.comments);
     $("#page-size-reviews").value = String(pageSizes.reviews);
     $("#page-size-analysis-tasks").value = String(pageSizes.analysisTasks);
     $("#page-size-file-versions").value = String(pageSizes.fileVersions);
@@ -3455,6 +3612,7 @@ function resetWorkScopedUiCaches() {
   aiReferencesLoadWorkId = null;
   aiConversationsLoadPromise = null;
   aiConversationsLoadWorkId = null;
+  aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
   raceHierarchyLoadPromise = null;
   raceHierarchyLoadWorkId = null;
   loadedRaceHierarchyWorkId = null;
@@ -3476,9 +3634,6 @@ function resetWorkScopedUiCaches() {
   volumeChapterRequests.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
-  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-  aiContextUsageTimer = null;
-  aiContextUsageRequest += 1;
   state.aiCitations = [];
   state.aiReferences = [];
   state.aiPromptSent = false;
@@ -4000,7 +4155,7 @@ function markActiveModule(module) {
 }
 
 const moduleMeta = {
-  drafts: ["临时想法", "创作草稿", "记录可能采用、也可能永远不会写入正文或正式设定的想法。", "新建草稿"],
+  drafts: ["临时想法", "创作想法", "记录可能采用、也可能永远不会写入正文或正式设定的想法。", "新建想法"],
   settings: ["世界事实", "世界观与设定库", "锁定的设定会成为 AI 续写与校对的硬约束。", "新建设定"],
   characters: ["人物档案", "角色与人物属性", "维护别名、属性、当前状态及不可被 AI 覆盖的字段。", "新建角色"],
   races: ["物种档案", "种族与共同设定", "先维护种族档案，再由角色选择引用；角色不能临时填写种族。", "新建种族"],
@@ -4008,6 +4163,7 @@ const moduleMeta = {
   timeline: ["剧情脉络", "大事件时间轴", "候选事件经作者确认后，才进入正式时间线。", "新建事件"],
   outlines: ["创作规划", "大纲/伏笔", "为每章维护目标、冲突与转折，并持续提醒尚未回收的伏笔。", "新建伏笔"],
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
+  comments: ["正文协作", "正文评论", "集中查看并处理当前作品所有章节的评论与待办。", ""],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
   tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
   "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
@@ -4052,7 +4208,7 @@ async function showModule(module) {
   $("#module-description").textContent = meta[2];
   $("#module-header-actions").querySelectorAll("[data-module-header-action]").forEach((action) => action.remove());
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditModule(module));
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || module === "comments" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   bindModuleContentInteractions();
   try {
@@ -4064,6 +4220,7 @@ async function showModule(module) {
     if (module === "timeline") await renderTimeline();
     if (module === "outlines") await renderOutlines();
     if (module === "relationships") await renderRelationships();
+    if (module === "comments") await renderWorkChapterComments();
     if (module === "reviews") await renderReviews();
     if (module === "tasks") await renderTasks(taskListPage);
     if (module === "ai-settings") await renderBookAiSettings();
@@ -4371,7 +4528,7 @@ function mountRelationshipFilterToggle() {
 
 function mountDraftFilterToggle() {
   $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.remove();
-  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="draft-filter-toggle" aria-label="筛选草稿" aria-controls="draft-filter-panel" aria-expanded="${draftFiltersPanelOpen}" title="筛选草稿"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="draft-filter-toggle" aria-label="筛选想法" aria-controls="draft-filter-panel" aria-expanded="${draftFiltersPanelOpen}" title="筛选想法"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
   $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.addEventListener("click", async () => {
     draftFiltersPanelOpen = !draftFiltersPanelOpen;
     await renderDrafts(moduleListPages.drafts);
@@ -4467,15 +4624,15 @@ function settingRecordActions(item) {
 }
 
 function draftTypeLabel(draftType) {
-  return draftType === "setting" ? "设定草稿" : "正文草稿";
+  return draftType === "setting" ? "设定想法" : "正文想法";
 }
 
 async function deleteDraft(item) {
   if (!item || !canEditModule("drafts")) return;
   const dialog = $("#form-dialog");
   dialog.close();
-  if (!await confirmToast(`确认删除草稿“${item.title}”吗？草稿将从当前列表移除。`, {
-    title: "删除草稿",
+  if (!await confirmToast(`确认删除想法“${item.title}”吗？想法将从当前列表移除。`, {
+    title: "删除想法",
     confirmLabel: "确认删除"
   })) {
     openDraftDialog(item);
@@ -4484,7 +4641,7 @@ async function deleteDraft(item) {
   try {
     await api(`/api/drafts/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderDrafts(moduleListPages.drafts);
-    toast("草稿已删除");
+    toast("想法已删除");
   } catch (error) {
     toast(error.message, "error");
     try {
@@ -4497,21 +4654,21 @@ async function deleteDraft(item) {
 
 function openDraftDialog(item = null, { readOnly = false } = {}) {
   const viewOnly = readOnly || !canEditModule("drafts");
-  const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="草稿操作">
-    <div><strong>草稿操作</strong><small>删除后将从草稿列表移除，版本历史仍会保留。</small></div>
-    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除草稿</button></div>
+  const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="想法操作">
+    <div><strong>想法操作</strong><small>删除后将从想法列表移除，版本历史仍会保留。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除想法</button></div>
   </section>` : "";
-  const fields = `<p class="form-field-note">草稿只记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
-    + field("draftType", "草稿类型", "select", item?.draftType ?? "prose", [["prose", "正文草稿"], ["setting", "设定草稿"]])
+  const fields = `<p class="form-field-note">这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
+    + field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
     + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
       readOnly: viewOnly
     }) + management;
-  openDialog(item ? viewOnly ? "查看草稿" : "编辑草稿" : "新建草稿", fields, async (form) => {
+  openDialog(item ? viewOnly ? "查看想法" : "编辑想法" : "新建想法", fields, async (form) => {
     if (viewOnly) return;
     const title = String(form.get("title") ?? "").trim();
-    if (!title) throw new Error("请填写草稿标题");
+    if (!title) throw new Error("请填写想法标题");
     const body = {
       draftType: form.get("draftType"),
       title,
@@ -4523,12 +4680,12 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       body
     });
     await renderDrafts(moduleListPages.drafts);
-    toast(item ? "草稿已保存" : "草稿已创建");
+    toast(item ? "想法已保存" : "想法已创建");
   }, item ? draftTypeLabel(item.draftType) : "未确认想法", {
-    submitLabel: viewOnly ? "关闭" : "保存草稿",
+    submitLabel: viewOnly ? "关闭" : "保存想法",
     hideCancel: viewOnly,
     editor: true,
-    errorPrefix: "草稿保存失败："
+    errorPrefix: "想法保存失败："
   });
   if (viewOnly) {
     $("#dialog-fields").querySelectorAll("input, select, textarea").forEach((control) => {
@@ -4550,23 +4707,23 @@ async function renderDrafts(page = moduleListPages.drafts) {
   const pageResult = paginateModuleItems(drafts, page, "drafts");
   moduleListPages.drafts = pageResult.page;
   const layout = readModuleLayout();
-  if (drafts.length) mountModuleLayoutToggle(layout, "草稿列表样式");
+  if (drafts.length) mountModuleLayoutToggle(layout, "想法列表样式");
   else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
   mountDraftFilterToggle();
-  const filterToolbar = `<section id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="草稿筛选">
-    <label for="draft-type-filter">草稿类型</label>
-    <select id="draft-type-filter" aria-label="按草稿类型筛选">
-      <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部草稿</option>
-      <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文草稿</option>
-      <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定草稿</option>
+  const filterToolbar = `<section id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="想法筛选">
+    <label for="draft-type-filter">想法类型</label>
+    <select id="draft-type-filter" aria-label="按想法类型筛选">
+      <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部想法</option>
+      <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文想法</option>
+      <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定想法</option>
     </select>
-    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 篇草稿</span>`}
+    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>`}
   </section>`;
   const actions = (item) => canEditModule("drafts")
-    ? `${recordCardEditButton("edit-draft", item.id, `草稿“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
+    ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
     : recordHistoryButton("draft", item.id, item.title);
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
-    <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
+    <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
       <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
       <h3>${esc(item.title)}</h3>
       <div class="record-markdown-preview">${esc(item.contentPreview || "暂无内容")}</div>
@@ -4574,17 +4731,17 @@ async function renderDrafts(page = moduleListPages.drafts) {
     </article>`).join("")}</div>`;
   const rows = `<div class="module-row-list">${pageResult.items.map((item) => {
     const preview = moduleRowPreview(item.contentPreview || "暂无内容");
-    return `<article class="record-card module-row preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看草稿 ${esc(item.title)}">
+    return `<article class="record-card module-row preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
       <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
       <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
       <div class="card-actions">${actions(item)}</div>
     </article>`;
   }).join("")}</div>`;
   const emptyDrafts = allDrafts.length
-    ? emptyModule("没有符合筛选条件的草稿", "可以切换草稿类型查看其他想法。")
-    : emptyModule("还没有草稿", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
+    ? emptyModule("没有符合筛选条件的想法", "可以切换想法类型查看其他内容。")
+    : emptyModule("还没有想法", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
   $("#module-content").innerHTML = filterToolbar + (drafts.length
-    ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "草稿列表")}`
+    ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "想法列表")}`
     : emptyDrafts);
   $("#draft-type-filter").addEventListener("change", async (event) => {
     draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
@@ -5093,6 +5250,35 @@ async function renderRelationships(page = moduleListPages.relationships) {
   });
   $("#module-content").querySelectorAll("[data-edit-relationship]").forEach((button) => button.addEventListener("click", () => openRelationshipDialog(filteredRelationships.find((item) => item.id === button.dataset.editRelationship))));
   bindEntityHistoryButtons(async () => { await renderRelationships(pageResult.page); await loadAiReferences(); });
+}
+
+async function renderWorkChapterComments(page = moduleListPages.comments) {
+  const pageSize = pageSizeFor("comments");
+  const result = await moduleApiPage(
+    "comments",
+    `/api/works/${encodeURIComponent(state.work.id)}/chapter-annotations`,
+    page,
+    pageSize
+  );
+  if (!result.items.length && page > 1) return renderWorkChapterComments(page - 1);
+  const total = Number(result.total ?? result.items.length);
+  const pageCount = Math.max(1, Math.ceil(total / result.limit));
+  const pageResult = { ...result, total, pageCount, itemCount: result.items.length };
+  moduleListPages.comments = pageResult.page;
+  mountModuleCount(total);
+  $("#module-content").innerHTML = result.items.length
+    ? `<div class="chapter-comment-module-list">${result.items.map((annotation) => chapterAnnotationCard(annotation, { showSource: true })).join("")}</div>${renderModulePagination(pageResult, "comments", "正文评论列表")}`
+    : emptyModule("还没有正文评论", "在任一正文行上点击右键，即可添加评论或待办。");
+  bindModulePagination("comments", renderWorkChapterComments);
+  bindChapterAnnotationCards($("#module-content"), result.items, {
+    refresh: () => renderWorkChapterComments(pageResult.page),
+    locate: async (annotation) => {
+      await selectChapter(annotation.chapterId);
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      paintChapterLineSelection(annotation.startLine - 1, annotation.endLine - 1);
+      selectChapterLines(annotation.startLine - 1, annotation.endLine - 1);
+    }
+  });
 }
 
 async function renderReviews(page = moduleListPages.reviews) {
@@ -5943,9 +6129,9 @@ function renderProviderCards(providers, models) {
           : provider.connectionStatus !== "success"
             ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
             : "";
-      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}<button class="ghost-button model-test-button" type="button" data-test-model="${esc(model.id)}" aria-label="测试模型 ${esc(model.displayName)}">测试连接</button></div>`;
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
     }).join("")}</div>
-    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
+    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI 或 Anthropic 兼容接口地址和密钥，测试成功后再添加模型。");
 }
@@ -5956,14 +6142,6 @@ function bindPlatformProviderActions(host, providers, models) {
     button.textContent = "测试中";
     const result = await api(`/api/providers/${button.dataset.testProvider}/test`, { method: "POST", body: {} });
     toast(result.ok ? "连接测试成功" : `连接失败：${result.error}`, result.ok ? "info" : "error");
-    await renderPlatformAiConfig();
-    await loadModels();
-  }));
-  host.querySelectorAll("[data-test-model]").forEach((button) => button.addEventListener("click", async () => {
-    button.disabled = true;
-    button.textContent = "测试中";
-    const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
-    toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
     await renderPlatformAiConfig();
     await loadModels();
   }));
@@ -6408,7 +6586,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索草稿</strong><small>查询正文草稿和设定草稿。草稿只是可能采用、也可能永远不会进入正文或正式设定的临时想法，Agent 不会把它当作已确认事实。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -6447,7 +6625,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { systemPrompt: $("#work-system-prompt").value } });
       toast("本书系统提示词已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6500,7 +6678,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { bookSummaryContextPercent: Number($("#book-summary-context-percent").value) } });
       toast("全书概要引用配额已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6513,7 +6691,7 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { contextCompactThreshold: Number($("#context-compact-threshold").value) } });
       toast("对话上下文 compact 阈值已保存");
-      scheduleAiContextUsage();
+      setAiContextMeter(null);
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -6564,13 +6742,17 @@ async function loadModels() {
   const generation = workScopedUiGeneration;
   const models = await api(`/api/works/${workId}/models`);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  state.models = models.filter((model) => isSelectableModel(model));
+  applyAiModels(models);
   loadedAiModelsWorkId = workId;
+}
+
+function applyAiModels(models) {
+  state.models = models.filter((model) => isSelectableModel(model));
   const select = $("#ai-model");
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 }
 
 async function ensureAiModelsLoaded() {
@@ -6593,9 +6775,6 @@ async function ensureAiModelsLoaded() {
     }
   }
 }
-
-let aiContextUsageTimer = null;
-let aiContextUsageRequest = 0;
 
 function currentAiRequestScope() {
   if (!state.work) return null;
@@ -6622,7 +6801,7 @@ function renderAiContextDistribution(usage) {
   const distribution = normalizeAiContextTokenDistribution(usage);
   const contextWindow = distribution.contextWindow.toLocaleString("zh-CN");
   $("#ai-context-popover-description").textContent = usage
-    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok`
+    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok · ${formatAiContextUsagePercent(distribution.occupiedTokens, distribution.contextWindow)}`
     : "选择可用模型后显示当前上下文用量";
   host.replaceChildren(...distribution.items.map((item) => {
     const row = document.createElement("div");
@@ -6635,9 +6814,9 @@ function renderAiContextDistribution(usage) {
     label.className = "ai-context-distribution-label";
     const title = document.createElement("span");
     title.textContent = item.label;
-    if (item.key === "context") {
+    if (item.key === "skills" || item.key === "context") {
       const description = document.createElement("small");
-      description.textContent = "用户和 agent 的交互";
+      description.textContent = item.key === "skills" ? "待加入" : "用户和 agent 的交互";
       title.append(" ", description);
     }
     const value = document.createElement("strong");
@@ -6699,57 +6878,6 @@ function showAiContextWarning(usage = null) {
 
 function hideAiContextWarning() {
   $("#ai-context-warning").classList.add("hidden");
-}
-
-async function prepareAiConversationContext({ instruction, scope, modelId, citations }) {
-  const conversationId = await ensureAiConversation();
-  const prepared = await api(`/api/ai-conversations/${conversationId}/context/prepare`, {
-    method: "POST",
-    body: { instruction, scope, modelId, citations }
-  });
-  setAiContextMeter(prepared.usage);
-  if (prepared.action === "warn") {
-    showAiContextWarning(prepared.usage);
-    return false;
-  }
-  hideAiContextWarning();
-  if (prepared.action === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
-  return true;
-}
-
-function scheduleAiContextUsage() {
-  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-  aiContextUsageTimer = setTimeout(() => {
-    aiContextUsageTimer = null;
-    void refreshAiContextUsage();
-  }, 260);
-}
-
-async function refreshAiContextUsage() {
-  const requestScope = currentAiRequestScope();
-  const modelId = $("#ai-model").value;
-  if (!requestScope || !modelId || (requestScope.taskType === "polish" && !requestScope.selection)) {
-    setAiContextMeter(null);
-    return;
-  }
-  const requestId = ++aiContextUsageRequest;
-  try {
-    const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
-    const usage = await api(`/api/works/${state.work.id}/ai-context-usage`, {
-      method: "POST",
-      body: {
-        modelId,
-        taskType: requestScope.taskType,
-        scope: requestScope.scope,
-        instruction: aiPromptText(),
-        citations,
-        conversationId: state.aiConversationId || undefined
-      }
-    });
-    if (requestId === aiContextUsageRequest) setAiContextMeter(usage);
-  } catch {
-    if (requestId === aiContextUsageRequest) setAiContextMeter(null);
-  }
 }
 
 async function loadAiReferences() {
@@ -9026,16 +9154,30 @@ function openProviderDialog(item) {
 
 function openModelDialog(providerId, item = null) {
   const values = modelFormValues(item);
+  const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow) + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
+  const connectionTest = item && item.providerStatus === "enabled"
+    ? `<section class="model-connection-test">
+        <div><strong>模型连接测试</strong><p>使用当前已保存的模型标识符和供应商凭据发起最小请求。</p></div>
+        <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
+      </section>`
+    : "";
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
     const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
   }, item ? "模型配置" : "供应商模型");
   const modelIdInput = $("#dialog-fields input[name='modelId']");
+  const contextWindowInput = $("#model-context-window");
+  const contextWindowHint = $("#model-context-window-hint");
   const temperatureInput = $("#dialog-fields input[name='temperature']");
   const temperatureHint = $("#model-temperature-hint");
+  const syncModelContextWindowGuidance = () => {
+    const guidance = modelContextWindowGuidance(contextWindowInput.value);
+    contextWindowInput.setCustomValidity(guidance.belowMinimum ? "模型上下文不能低于 32K（32768 Token）。" : "");
+    contextWindowHint.hidden = !guidance.showRecommendation;
+  };
   const syncKimiTemperature = () => {
     const isKimi = isKimiModelId(modelIdInput.value);
     temperatureHint.hidden = !isKimi;
@@ -9044,13 +9186,31 @@ function openModelDialog(providerId, item = null) {
     if (isKimiModelId(modelIdInput.value)) temperatureInput.value = "1";
     syncKimiTemperature();
   });
+  contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
+  $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "测试中";
+    try {
+      const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
+      toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+      await renderPlatformAiConfig();
+      await loadModels();
+    } catch (error) {
+      toast(`模型连接测试失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+      button.textContent = "测试连接";
+    }
+  });
+  syncModelContextWindowGuidance();
   syncKimiTemperature();
 }
 
 async function sendAi() {
   if (!state.work) return toast("请先选择作品", "error");
   try {
-    await Promise.all([ensureAiModelsLoaded(), ensureAiConversationsLoaded()]);
+    await ensureAiModelsLoaded();
   } catch (error) {
     return toast(`创作助手加载失败：${error.message}`, "error");
   }
@@ -9063,30 +9223,18 @@ async function sendAi() {
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
-  if (taskType === "chat") {
-    $("#ai-send").disabled = true;
-    $("#ai-send").textContent = "检查上下文";
+  let persistedUserMessage = null;
+  if (taskType !== "chat") {
     try {
-      const mayContinue = await prepareAiConversationContext({ instruction, scope, modelId, citations });
-      if (!mayContinue) return;
+      persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
     } catch (error) {
-      toast(`上下文检查失败：${error.message}`, "error");
-      return;
-    } finally {
-      $("#ai-send").disabled = false;
-      $("#ai-send").textContent = "发送";
+      return toast(`对话记录创建失败：${error.message}`, "error");
     }
+    state.aiPromptSent = true;
+    renderAiQuickActions();
+    appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+    clearAiPromptComposer();
   }
-  let persistedUserMessage;
-  try {
-    persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
-  } catch (error) {
-    return toast(`对话记录创建失败：${error.message}`, "error");
-  }
-  state.aiPromptSent = true;
-  renderAiQuickActions();
-  appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
-  clearAiPromptComposer();
   $("#ai-send").disabled = true;
   $("#ai-send").textContent = "发送中";
   try {
@@ -9096,7 +9244,8 @@ async function sendAi() {
     let persistedStreamMessage = null;
     let suggestion = null;
     if (taskType === "chat") {
-      const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId, currentMessageId: persistedUserMessage.id });
+      const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId || undefined });
+      if (streamed.action === "warn") return;
       assistantContent = streamed.content;
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
@@ -9104,11 +9253,18 @@ async function sendAi() {
       applyAiConversationTitle(streamed.conversationTitle);
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
+      setAiContextMeter(suggestion.contextUsage);
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
     try {
       if (persistedStreamMessage) {
+        updateAiConversationSummaryFromMessage({
+          conversationId: state.aiConversationId,
+          role: "assistant",
+          content: assistantContent,
+          createdAt: persistedStreamMessage.createdAt
+        });
         updateMessageCreatedAt(assistantMessage, persistedStreamMessage.createdAt);
         attachMessageIdentity(assistantMessage, persistedStreamMessage.id);
       } else {
@@ -9138,13 +9294,19 @@ async function streamChat(body) {
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
   message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
-  attachMessageHeading(message, "助手 · 正在生成");
-  $("#ai-feed").append(message);
-  scrollAiFeedToBottom();
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  let messageMounted = false;
+  const mountAssistantMessage = () => {
+    if (messageMounted) return;
+    attachMessageHeading(message, "助手 · 正在生成");
+    $("#ai-feed").append(message);
+    messageMounted = true;
+    scrollAiFeedToBottom();
+  };
   const typewriter = createStreamTypewriter({
     onRender: (text, progress) => {
+      mountAssistantMessage();
       content.innerHTML = renderMarkdown(text);
       const receivedCharacters = progress.visibleCharacters + progress.pendingCharacters;
       meta.textContent = progress.pendingCharacters > 0
@@ -9160,6 +9322,8 @@ async function streamChat(body) {
   let persistedMessageId = null;
   let persistedMessageCreatedAt = null;
   let conversationTitle = null;
+  let persistedUserMessage = null;
+  let contextAction = "ready";
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -9186,7 +9350,35 @@ async function streamChat(body) {
       }
       if (!dataLines.length) return;
       const payload = JSON.parse(dataLines.join("\n"));
-      if (eventName === "delta") {
+      if (eventName === "context") {
+        contextAction = typeof payload.action === "string" ? payload.action : "ready";
+        setAiContextMeter(payload.usage);
+        if (payload.conversation?.id) {
+          state.aiConversationId = payload.conversation.id;
+          upsertAiConversationSummary(payload.conversation);
+          $("#ai-conversation-title").textContent = payload.conversation.title;
+        }
+        if (contextAction === "warn") showAiContextWarning(payload.usage);
+        else {
+          hideAiContextWarning();
+          if (contextAction === "compacted") {
+            renderConversationCompactionDivider(payload.compaction?.compactedMessageCount, payload.conversation?.messageCount);
+            toast("已自动整理较早对话为长期记忆并继续发送");
+          }
+        }
+      } else if (eventName === "user_message") {
+        persistedUserMessage = payload.message;
+        if (persistedUserMessage?.id) {
+          state.aiConversationId = persistedUserMessage.conversationId;
+          updateAiConversationSummaryFromMessage(persistedUserMessage);
+          state.aiPromptSent = true;
+          renderAiQuickActions();
+          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+          clearAiPromptComposer();
+          mountAssistantMessage();
+        }
+      } else if (eventName === "delta") {
+        mountAssistantMessage();
         const firstFinalDelta = streamedText.length === 0;
         const delta = typeof payload.delta === "string" ? payload.delta : "";
         streamedText += delta;
@@ -9195,6 +9387,7 @@ async function streamChat(body) {
         if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
         meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
+        mountAssistantMessage();
         const step = { ...payload };
         const append = step.append === true;
         delete step.append;
@@ -9202,9 +9395,14 @@ async function streamChat(body) {
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
         renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
-        meta.textContent = step.type === "thinking" ? `正在思考 · 第 ${Number(step.round) || 1} 轮` : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
+        meta.textContent = step.type === "thinking"
+          ? `正在思考 · 第 ${Number(step.round) || 1} 轮`
+          : step.type === "context_compaction"
+            ? `已压缩第 ${Number(step.round) || 1} 轮工具上下文`
+            : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "tool_call") {
+        mountAssistantMessage();
         const toolCall = { ...payload };
         const round = toolCall.round;
         delete toolCall.round;
@@ -9213,10 +9411,15 @@ async function streamChat(body) {
         renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
+      } else if (eventName === "context_compacted") {
+        setAiContextMeter(payload.contextUsage);
+        if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
       } else if (eventName === "complete") {
+        mountAssistantMessage();
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
+        setAiContextMeter(payload.contextUsage);
         await typewriter.finish();
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -9244,8 +9447,9 @@ async function streamChat(body) {
     if (buffer.trim()) await consume(buffer);
     await typewriter.finish();
     if (streamError) throw streamError;
-    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle };
+    return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
+    mountAssistantMessage();
     typewriter.reveal();
     message.classList.remove("is-streaming");
     content.setAttribute("aria-busy", "false");
@@ -9265,7 +9469,15 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     ? `<p class="ai-error-text">${esc(text)}</p>`
     : renderMarkdown(text);
   message.innerHTML = `<div class="message-body">${messageBody}</div>`;
-  attachMessageHeading(message, role === "user" ? "作者" : "助手", createdAt ?? undefined);
+  const heading = attachMessageHeading(message, role === "user" ? "作者" : "助手", createdAt ?? undefined);
+  if (isFailure) {
+    message.dataset.status = "failed";
+    const failureBadge = document.createElement("strong");
+    failureBadge.className = "ai-message-status is-error";
+    failureBadge.textContent = "失败";
+    failureBadge.setAttribute("aria-label", "消息状态：失败");
+    heading.firstElementChild?.append(failureBadge);
+  }
   if (citations.length) {
     const references = document.createElement("div");
     references.className = "message-citations";
@@ -10238,6 +10450,7 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
           timeline: Number($("#page-size-timeline").value),
           outlines: Number($("#page-size-outlines").value),
           relationships: Number($("#page-size-relationships").value),
+          comments: Number($("#page-size-comments").value),
           reviews: Number($("#page-size-reviews").value),
           analysisTasks: Number($("#page-size-analysis-tasks").value),
           fileVersions: Number($("#page-size-file-versions").value)
@@ -10383,10 +10596,14 @@ $("#chapter-content").addEventListener("input", (event) => {
   scheduleChapterAutoSave();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
 });
-$("#chapter-content").addEventListener("select", scheduleAiContextUsage);
+$("#chapter-content").addEventListener("select", () => setAiContextMeter(null));
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
+$("#chapter-content").addEventListener("contextmenu", (event) => {
+  if (!state.chapter) return;
+  showLineCitationMenu(event, lineIndexAtPointer(event.clientY));
+});
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
   if (!row || event.button !== 0) return;
@@ -10466,7 +10683,7 @@ $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!m
 $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftDialog, settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
-  scheduleAiContextUsage();
+  setAiContextMeter(null);
   if (!findAiMention(aiPromptTextBeforeCursor())) return;
   try {
     await ensureAiReferencesLoaded();
@@ -10481,9 +10698,9 @@ $("#ai-prompt").addEventListener("focus", () => {
 $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
-$("#ai-model").addEventListener("change", scheduleAiContextUsage);
-$("#ai-task").addEventListener("change", scheduleAiContextUsage);
-$("#ai-scope").addEventListener("change", scheduleAiContextUsage);
+$("#ai-model").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-task").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-scope").addEventListener("change", () => setAiContextMeter(null));
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
@@ -10686,7 +10903,15 @@ $("#ai-context-compact").addEventListener("click", async () => {
     });
     hideAiContextWarning();
     toast(result.changed ? `已整理 ${result.compactedMessageCount} 条较早消息为长期记忆` : "当前没有需要整理的较早消息");
-    await refreshAiContextUsage();
+    setAiContextMeter(result.usage);
+    if (result.changed) {
+      const current = state.aiConversations.find((conversation) => conversation.id === conversationId);
+      if (current) {
+        current.compactedMessageCount = result.compactedMessageCount;
+        current.hasCompactedSummary = true;
+      }
+      renderConversationCompactionDivider(result.compactedMessageCount, current?.messageCount);
+    }
   } catch (error) {
     toast(`上下文压缩失败：${error.message}`, "error");
   } finally {
@@ -10709,6 +10934,30 @@ $("#ai-history-toggle").addEventListener("click", async () => {
     await ensureAiConversationsLoaded();
     setAiHistoryVisible(true);
   } catch (error) {
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-history-previous").addEventListener("click", async () => {
+  const targetPage = aiConversationHistoryPage.page - 1;
+  if (targetPage < 1) return;
+  $("#ai-history-previous").disabled = true;
+  $("#ai-history-next").disabled = true;
+  try {
+    await loadAiConversations(targetPage);
+  } catch (error) {
+    renderAiConversationHistory();
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-history-next").addEventListener("click", async () => {
+  const targetPage = aiConversationHistoryPage.nextPage;
+  if (!targetPage) return;
+  $("#ai-history-previous").disabled = true;
+  $("#ai-history-next").disabled = true;
+  try {
+    await loadAiConversations(targetPage);
+  } catch (error) {
+    renderAiConversationHistory();
     toast(`对话历史加载失败：${error.message}`, "error");
   }
 });

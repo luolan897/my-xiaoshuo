@@ -357,6 +357,59 @@ describe("作品、导入和章节版本 API", () => {
     ]);
   });
 
+  it("按作品与正文顺序分页列出所有章节评论", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "评论汇总作品" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
+    const firstChapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "第一章首行\n第一章次行"
+    }).expect(201);
+    const secondChapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第二章",
+      content: "第二章首行\n第二章次行"
+    }).expect(201);
+    const resolved = await request(runtime.app).post(`/api/chapters/${firstChapter.body.data.id}/annotations`).send({
+      kind: "note",
+      startLine: 1,
+      endLine: 1,
+      note: "第一章评论"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/chapter-annotations/${resolved.body.data.id}`).send({
+      status: "resolved",
+      expectedVersionNo: 1
+    }).expect(200);
+    await request(runtime.app).post(`/api/chapters/${secondChapter.body.data.id}/annotations`).send({
+      kind: "todo",
+      startLine: 2,
+      endLine: 2,
+      note: "第二章待办"
+    }).expect(201);
+
+    const page = await request(runtime.app)
+      .get(`/api/works/${work.body.data.id}/chapter-annotations?page=1&limit=1`)
+      .expect(200);
+    expect(page.body.data).toMatchObject({ page: 1, limit: 1, hasMore: true, nextPage: 2, total: 2 });
+    expect(page.body.data.items[0]).toMatchObject({
+      chapterId: secondChapter.body.data.id,
+      volumeTitle: "第一卷",
+      chapterTitle: "第二章",
+      status: "open",
+      note: "第二章待办"
+    });
+
+    const all = await request(runtime.app).get(`/api/works/${work.body.data.id}/chapter-annotations`).expect(200);
+    expect(all.body.data.map((item: { chapterTitle: string; status: string }) => [item.chapterTitle, item.status])).toEqual([
+      ["第二章", "open"],
+      ["第一章", "resolved"]
+    ]);
+
+    await request(runtime.app).delete(`/api/chapters/${secondChapter.body.data.id}`).send({ expectedVersionNo: 1 }).expect(204);
+    const active = await request(runtime.app).get(`/api/works/${work.body.data.id}/chapter-annotations`).expect(200);
+    expect(active.body.data).toEqual([expect.objectContaining({ chapterTitle: "第一章", status: "resolved" })]);
+  });
+
   it("保存写作目标并从正文版本重建字数趋势", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "写作目标作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);

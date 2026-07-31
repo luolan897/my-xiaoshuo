@@ -229,7 +229,8 @@ try {
   assert.match(page, /id="ai-tool-call-dialog"/u);
   assert.match(page, /id="ai-context-warning"/u);
   assert.match(application, /调用了 \$\{name\} 工具/u);
-  assert.match(application, /prepareAiConversationContext/u);
+  assert.match(application, /eventName === "context"/u);
+  assert.match(application, /eventName === "user_message"/u);
   checked("ui-assets", "tool detail dialog and context compaction controls are served by the real app");
 
   const work = await api<JsonObject>("POST", "/works", { title: "AI 工具 E2E" });
@@ -268,7 +269,7 @@ try {
   const model = await api<JsonObject>("POST", `/providers/${String(provider.id)}/models`, {
     displayName: "E2E Agent Model",
     modelId: "e2e-agent-model",
-    contextWindow: 4_096
+    contextWindow: 32_768
   });
   const modelId = String(model.id);
 
@@ -332,20 +333,20 @@ try {
   const compactConversation = await api<JsonObject>("POST", `/works/${workId}/ai-conversations`, { title: "压缩 E2E" });
   const conversationId = String(compactConversation.id);
   for (const [role, content] of [
-    ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(100)}`],
-    ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(100)}`],
+    ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(800)}`],
+    ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(800)}`],
     ["user", "最近问题：燃料状态如何？"],
     ["assistant", "最近回答：正文未明确燃料余量。"]
   ] as const) {
     await api("POST", `/ai-conversations/${conversationId}/messages`, { role, content });
   }
   const prepareBody = { modelId, scope: { type: "chapter", chapterId: chapterIds[0] }, instruction: "继续回答。" };
-  const contextUsage = await api<JsonObject>("POST", `/works/${workId}/ai-context-usage`, { ...prepareBody, taskType: "chat", conversationId });
-  assert.equal(contextUsage.compactRecommended, true);
-  assert.equal(Number(contextUsage.usagePercent) >= 50, true);
   const warned = await api<JsonObject>("POST", `/ai-conversations/${conversationId}/context/prepare`, prepareBody);
   assert.equal(warned.action, "warn");
-  assert.equal(object(warned.usage).contextWarningPending, true);
+  const contextUsage = object(warned.usage);
+  assert.equal(contextUsage.compactRecommended, true);
+  assert.equal(Number(contextUsage.usagePercent) >= 50, true);
+  assert.equal(contextUsage.contextWarningPending, true);
   const compacted = await api<JsonObject>("POST", `/ai-conversations/${conversationId}/context/prepare`, prepareBody);
   assert.equal(compacted.action, "compacted");
   assert.equal(object(compacted.compaction).compactedMessageCount, 2);

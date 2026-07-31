@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isKimiModelId, modelFormValues, modelPayload } from "../../src/public/model-config.js";
+import { isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload } from "../../src/public/model-config.js";
 
 describe("AI 模型配置", () => {
   it("新模型默认开启 thinking 并写入配置载荷", () => {
@@ -20,5 +20,13 @@ describe("AI 模型配置", () => {
     expect(modelFormValues({ modelId: "kimi-for-coding", preset: { temperature: 0.7 } }).temperature).toBe(0.7);
     const payload = modelPayload({ ...modelFormValues(), displayName: "Kimi", modelId: "KIMI-K2", temperature: 0.2 });
     expect((payload.preset as { temperature: number }).temperature).toBe(0.2);
+  });
+
+  it("区分禁止配置和建议使用更长上下文的模型", () => {
+    expect(modelContextWindowGuidance(32_767)).toEqual({ belowMinimum: true, showRecommendation: false });
+    expect(modelContextWindowGuidance(32_768)).toEqual({ belowMinimum: false, showRecommendation: true });
+    expect(modelContextWindowGuidance(127_999)).toEqual({ belowMinimum: false, showRecommendation: true });
+    expect(modelContextWindowGuidance(128_000)).toEqual({ belowMinimum: false, showRecommendation: false });
+    expect(modelContextWindowGuidance("")).toEqual({ belowMinimum: false, showRecommendation: false });
   });
 });

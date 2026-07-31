@@ -71,6 +71,10 @@ describe("AI 供应商、模型与建议 API", () => {
     return { providerId, modelId: model.body.data.id };
   }
 
+  function setLegacyModelContextWindow(modelId: string, contextWindow: number): void {
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", contextWindow, modelId);
+  }
+
   it("只有连接测试成功的启用供应商才能设置默认模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).put(`/api/works/${workId}/task-defaults/continue`).send({ modelId }).expect(409);
@@ -90,7 +94,47 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(409);
   });
 
-  it("连接测试必须用 max_tokens=10 收到真实助手回复", async () => {
+  it("聊天模型和历史列表通过独立接口返回", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    for (let index = 1; index <= 21; index += 1) {
+      await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: `初始化会话 ${index}` }).expect(201);
+    }
+
+    const models = await request(runtime.app).get(`/api/works/${workId}/models`).expect(200);
+    const firstPage = await request(runtime.app).get(`/api/works/${workId}/ai-conversations`).expect(200);
+    const secondPage = await request(runtime.app).get(`/api/works/${workId}/ai-conversations?page=2`).expect(200);
+
+    expect(models.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: modelId })]));
+    expect(firstPage.body.data).toMatchObject({ page: 1, limit: 20, hasMore: true, nextPage: 2 });
+    expect(firstPage.body.data.items).toHaveLength(20);
+    expect(secondPage.body.data).toMatchObject({ page: 2, limit: 20, hasMore: false, nextPage: null });
+    expect(secondPage.body.data.items).toHaveLength(1);
+  });
+
+  it("拒绝新增或改为低于 32K 上下文的模型", async () => {
+    const { providerId, modelId } = await configureAi();
+    const invalidCreate = await request(runtime.app).post(`/api/providers/${providerId}/models`).send({
+      displayName: "过小上下文模型",
+      modelId: "short-context-model",
+      contextWindow: 32_767
+    }).expect(400);
+    expect(invalidCreate.body.error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      details: [{ path: "contextWindow", message: "模型上下文不能低于 32768 Token" }]
+    });
+
+    const invalidUpdate = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 32_767 }).expect(400);
+    expect(invalidUpdate.body.error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      details: [{ path: "contextWindow", message: "模型上下文不能低于 32768 Token" }]
+    });
+
+    const minimum = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 32_768 }).expect(200);
+    expect(minimum.body.data.contextWindow).toBe(32_768);
+  });
+
+  it("连接测试必须用 max_tokens=10 收到正文或 thinking", async () => {
     const { providerId } = await configureAi();
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) {
@@ -107,6 +151,30 @@ describe("AI 供应商、模型与建议 API", () => {
     const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     expect(tested.body.data).toMatchObject({ ok: false, provider: { connectionStatus: "failed" } });
     expect(tested.body.data.error).toContain("响应缺少可用回复");
+  });
+
+  it("连接测试在只有 thinking 时也视为成功", async () => {
+    const { providerId } = await configureAi();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { max_tokens?: number };
+      expect(body.max_tokens).toBe(10);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "", reasoning_content: "正在确认连接。" } }]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({
+      ok: true,
+      availableModels: ["mock-novel-model"],
+      provider: { connectionStatus: "success" }
+    });
   });
 
   it("可以单独测试指定模型并使用该模型标识符", async () => {
@@ -255,17 +323,8 @@ describe("AI 供应商、模型与建议 API", () => {
 
     await request(runtime.app).patch("/api/platform/ai/settings").send({ systemPrompt: "平台追加：保持克制叙事。" }).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ systemPrompt: "本书追加：哥斯拉不得离开地球。" }).expect(200);
-    const updatedModel = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 4096 }).expect(200);
-    expect(updatedModel.body.data.contextWindow).toBe(4096);
-
-    const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({
-      modelId,
-      taskType: "chat",
-      scope: { type: "chapter", chapterId },
-      instruction: "概述本章"
-    }).expect(200);
-    expect(usage.body.data).toMatchObject({ modelId, contextWindow: 4096 });
-    expect(usage.body.data.inputTokens).toBeGreaterThan(0);
+    const updatedModel = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 32_768 }).expect(200);
+    expect(updatedModel.body.data.contextWindow).toBe(32_768);
 
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
@@ -275,12 +334,14 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(body.messages[0]?.content).toContain("本书追加：哥斯拉不得离开地球。");
       return new Response(JSON.stringify({ choices: [{ message: { content: "提示词已生效。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
-    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+    const measured = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
       instruction: "检查提示词",
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(201);
+    expect(measured.body.data.contextUsage).toMatchObject({ modelId, contextWindow: 32_768 });
+    expect(measured.body.data.contextUsage.inputTokens).toBeGreaterThan(0);
     await request(runtime.app).put(`/api/works/${secondWork.body.data.id}/task-defaults/chat`).send({ modelId }).expect(200);
     expect(secondChapter.body.data.title).toBe("第二章");
   });
@@ -309,7 +370,7 @@ describe("AI 供应商、模型与建议 API", () => {
   it("按模型上下文比例裁剪全书概要引用", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 1024 }).expect(200);
+    setLegacyModelContextWindow(modelId, 1_024);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ bookSummaryContextPercent: 25 }).expect(200);
     runtime.store.db.run(
       `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
@@ -606,6 +667,196 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "completed")).toBe(true);
   });
 
+  it("长工具结果按完整结构限制在一万字符内并通过游标续读", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    setLegacyModelContextWindow(modelId, 30_000);
+    const content = "长正文。".repeat(3_000);
+    runtime.store.saveChapter(chapterId, { content });
+    const fragments: string[] = [];
+    const maxTokens: number[] = [];
+    let compactRequestCount = 0;
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { max_tokens: number; messages: Array<{ role: string; tool_call_id?: string; content?: string }> };
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        compactRequestCount += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "已压缩先前分页正文，仍需继续读取剩余游标。" } }] }), { status: 200 });
+      }
+      maxTokens.push(body.max_tokens);
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "long-chapter-first",
+          type: "function",
+          function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
+        }] } }] }), { status: 200 });
+      }
+      const latest = body.messages.filter((message) => message.role === "tool").at(-1);
+      const result = JSON.parse(latest?.content ?? "{}") as {
+        data: { chapters: Array<{ content?: string; _fragment?: { index: number; total: number; path: string | null } }> };
+        pagination: { cursor: number; nextCursor: number | null; maxChars: number };
+      };
+      expect((latest?.content ?? "").length).toBeLessThanOrEqual(10_000);
+      expect(result.pagination.maxChars).toBe(10_000);
+      expect(result.data.chapters.every((chapter) => chapter._fragment)).toBe(true);
+      fragments.push(...result.data.chapters.map((chapter) => chapter.content ?? ""));
+      if (result.pagination.nextCursor !== null) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: `long-chapter-${result.pagination.nextCursor}`,
+          type: "function",
+          function: {
+            name: "read_chapters",
+            arguments: { chapterIds: [chapterId], include: "content", cursor: result.pagination.nextCursor }
+          }
+        }] } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取全部分页正文。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "分页读取当前章节。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("已读取全部分页正文。");
+    expect(response.body.data.toolCalls.length).toBeGreaterThan(1);
+    expect(response.body.data.toolCalls[1].arguments).toMatchObject({ cursor: expect.any(Number) });
+    expect(fragments.join("")).toBe(content);
+    expect(maxTokens.every((value) => value > 0)).toBe(true);
+    expect(compactRequestCount).toBeGreaterThan(0);
+  });
+
+  it("工具结果接近模型上限时先压缩旧工具上下文再拼入新结果", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    setLegacyModelContextWindow(modelId, 16_000);
+    runtime.store.saveChapter(chapterId, { content: "分页上下文证据。".repeat(2_500) });
+    let completionCount = 0;
+    let firstPageContent = "";
+    let compactedFirstPage = false;
+    let finalMessages: Array<{ role: string; content?: string }> = [];
+    const requestInputTokens: number[] = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content?: string }>;
+        tools?: unknown[];
+      };
+      requestInputTokens.push(estimateAiTokens(JSON.stringify(body.messages)));
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        expect(body.tools).toBeUndefined();
+        const prefix = "待压缩的工具调用上下文：\n";
+        const compactionInput = body.messages[1]?.content ?? "";
+        const compactedMessages = JSON.parse(compactionInput.slice(prefix.length)) as Array<{ role: string; content?: string }>;
+        compactedFirstPage = compactedMessages.some((message) => message.role === "tool" && message.content === firstPageContent);
+        return new Response(JSON.stringify({ choices: [{ message: { content: "已确认前一页包含章节正文证据，后续仍需按游标读取。" } }] }), { status: 200 });
+      }
+      const toolMessages = body.messages.filter((message) => message.role === "tool");
+      if (toolMessages.length === 0) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "context-page-1",
+          type: "function",
+          function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
+        }] } }] }), { status: 200 });
+      }
+      const joined = body.messages.map((message) => message.content ?? "").join("\n");
+      if (!joined.includes("已压缩的工具调用上下文")) {
+        firstPageContent = toolMessages[0]?.content ?? "";
+        const firstPage = JSON.parse(firstPageContent) as { pagination: { nextCursor: number | null } };
+        expect(firstPage.pagination.nextCursor).toEqual(expect.any(Number));
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "context-page-2",
+          type: "function",
+          function: {
+            name: "read_chapters",
+            arguments: { chapterIds: [chapterId], include: "content", cursor: firstPage.pagination.nextCursor }
+          }
+        }] } }] }), { status: 200 });
+      }
+      finalMessages = body.messages;
+      expect(toolMessages).toHaveLength(1);
+      expect(toolMessages[0]?.content).not.toBe(firstPageContent);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已结合压缩摘要和最新分页结果回答。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "读取章节后回答。",
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(response.text).toContain('event: delta\ndata: {"delta":"已结合压缩摘要和最新分页结果回答。"}');
+    expect(response.text).toContain("event: context_compacted");
+    expect(response.text).toContain('event: process_step\ndata: {"id":"process_');
+    expect(response.text).toContain('"type":"context_compaction"');
+    const compactPayload = JSON.parse(response.text.match(/event: context_compacted\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      contextUsage?: { inputTokens?: number; contextWindow?: number; usagePercent?: number };
+    };
+    expect(compactPayload.contextUsage?.inputTokens).toBeGreaterThan(0);
+    expect(compactPayload.contextUsage?.inputTokens).toBeLessThan(compactPayload.contextUsage?.contextWindow ?? 0);
+    expect(compactPayload.contextUsage?.usagePercent).toEqual(expect.any(Number));
+    const completePayload = JSON.parse(response.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      contextUsage?: { inputTokens?: number; contextWindow?: number };
+      toolCalls?: unknown[];
+    };
+    expect(completePayload.contextUsage?.inputTokens).toBeLessThan(completePayload.contextUsage?.contextWindow ?? 0);
+    expect(completePayload.toolCalls?.length).toBe(2);
+    expect(completionCount).toBe(4);
+    expect(compactedFirstPage).toBe(true);
+    const finalContext = finalMessages.map((message) => message.content ?? "").join("\n");
+    expect(finalContext).toContain("已压缩的工具调用上下文");
+    expect(finalContext).toContain("已确认前一页包含章节正文证据");
+    expect(finalContext).not.toContain(firstPageContent);
+    const firstUserMessageIndex = finalMessages.findIndex((message) => message.role === "user");
+    expect(firstUserMessageIndex).toBeGreaterThan(0);
+    expect(finalMessages.slice(0, firstUserMessageIndex).every((message) => message.role === "system")).toBe(true);
+    expect(finalMessages[firstUserMessageIndex]?.content).toContain("已压缩的工具调用上下文");
+    expect(finalMessages.filter((message) => message.role === "system").every((message) => !message.content?.includes("已压缩的工具调用上下文"))).toBe(true);
+    expect(requestInputTokens.every((tokens) => tokens < 16_000)).toBe(true);
+  });
+
+  it("模型上下文较小时按剩余预算缩小工具结果分页", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    setLegacyModelContextWindow(modelId, 6_000);
+    runtime.store.saveChapter(chapterId, { content: "小窗口分页正文。".repeat(2_000) });
+    let completionCount = 0;
+    const returnedPages: Array<{ pagination: { maxChars: number; nextCursor: number | null } }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      if (!toolMessage) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "small-context-page",
+          type: "function",
+          function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
+        }] } }] }), { status: 200 });
+      }
+      returnedPages.push(JSON.parse(toolMessage.content ?? "{}") as { pagination: { maxChars: number; nextCursor: number | null } });
+      expect(estimateAiTokens(JSON.stringify(body.messages))).toBeLessThan(6_000);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取适配小窗口的结构化分页。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "读取章节后回答。",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("已读取适配小窗口的结构化分页。");
+    expect(completionCount).toBe(2);
+    expect(returnedPages[0]?.pagination.maxChars).toBeLessThan(10_000);
+    expect(returnedPages[0]?.pagination.nextCursor).toEqual(expect.any(Number));
+  });
+
   it("把无效工具参数和未知工具作为英文错误结果反馈给模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -758,8 +1009,8 @@ describe("AI 供应商、模型与建议 API", () => {
       const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number; messages?: Array<{ content: string }>; thinking?: { type?: string } };
       expect(body).toMatchObject({ stream: true, max_tokens: 32_000 });
       expect(body.thinking).toEqual({ type: "enabled" });
-      expect(body.messages?.[1]?.content).toContain("[第一章 L1-L2]");
-      expect(body.messages?.[1]?.content).toContain("林舟启动了飞船。");
+      expect(body.messages?.some((message) => message.content.includes("[第一章 L1-L2]"))).toBe(true);
+      expect(body.messages?.some((message) => message.content.includes("林舟启动了飞船。"))).toBe(true);
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           const encoder = new TextEncoder();
@@ -841,22 +1092,18 @@ describe("AI 供应商、模型与建议 API", () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 });
     });
 
-    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
-    const userMessage = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
-      role: "user",
-      content: "请规划北港跃迁路线"
-    }).expect(201);
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
-      instruction: userMessage.body.data.content,
+      instruction: "请规划北港跃迁路线",
       scope: { type: "chapter", chapterId },
-      modelId,
-      conversationId: conversation.body.data.id,
-      currentMessageId: userMessage.body.data.id
+      modelId
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
 
+    expect(streamed.text).toContain("event: context");
+    expect(streamed.text).toContain("event: user_message");
     expect(streamed.text).toContain('"conversationTitle":"北港跃迁路线"');
     expect(completionBodies).toHaveLength(2);
-    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    const completePayload = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId?: string };
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
     expect(reloaded.body.data.title).toBe("北港跃迁路线");
     expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
     const settingsAfter = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
@@ -886,9 +1133,38 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: error");
     expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
     expect(streamed.text).toContain('"status":502');
+    expect(streamed.text).toContain('"providerName":"本地兼容服务"');
+    expect(streamed.text).toContain(`"providerId":"${providerId}"`);
+    expect(streamed.text).toContain('"modelId":"mock-novel-model"');
+    expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
     expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-s*****lue\\"}}"');
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
+  });
+
+  it("首轮上下文超限时不请求模型并提示减少上下文", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    setLegacyModelContextWindow(modelId, 1_024);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    fetchMock.mockClear();
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "必须保留的超长首轮指令。".repeat(1_000),
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(streamed.text).toContain("event: error");
+    expect(streamed.text).toContain('"code":"CONTEXT_WINDOW_EXCEEDED"');
+    expect(streamed.text).toContain('"status":400');
+    expect(streamed.text).toContain("首轮上下文约");
+    expect(streamed.text).toContain("本轮未进行上下文压缩，请减少选中的正文、设定、引用、对话历史或指令长度后重试");
+    expect(streamed.text).toContain('"providerName":"本地兼容服务"');
+    expect(streamed.text).toContain(`"providerId":"${providerId}"`);
+    expect(streamed.text).toContain('"modelId":"mock-novel-model"');
+    expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
   });
 
   it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {
@@ -931,6 +1207,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
     const processSteps = [
       { id: "process-thinking", type: "thinking", round: 1, content: "需要读取目录。", createdAt: "2026-07-17T12:34:55.000Z" },
+      { id: "process-compaction", type: "context_compaction", round: 1, sourceMessageCount: 2, sourceChars: 12000, summaryChars: 180, createdAt: "2026-07-17T12:34:55.500Z" },
       { id: "process-tool", type: "tool", round: 1, toolCall: toolCalls[0], createdAt: "2026-07-17T12:34:56.000Z" }
     ];
     await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({

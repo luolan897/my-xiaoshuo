@@ -21,6 +21,8 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('eventName === "process_step"');
     expect(application).toContain('`调用了 ${name} 工具`');
     expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null)");
+    expect(application).toContain('step?.type === "context_compaction"');
+    expect(application).toContain('compaction.setAttribute("role", "separator")');
     expect(application).toContain("function formatAiProcessDuration(value)");
     expect(application).toContain("function resolveAiProcessDuration(metadata, steps, completedAt)");
     expect(application).toContain('` · 耗时 ${duration}`');

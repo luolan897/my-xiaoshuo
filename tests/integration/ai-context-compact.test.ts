@@ -47,9 +47,10 @@ describe("AI 对话上下文压缩", () => {
     const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
       displayName: "压缩模型",
       modelId: "compact-model",
-      contextWindow: 4096
+      contextWindow: 32_768
     }).expect(201);
     modelId = model.body.data.id;
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 4_096, modelId);
     fetchMock.mockClear();
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ contextCompactThreshold: 50 }).expect(200);
   });
@@ -68,22 +69,20 @@ describe("AI 对话上下文压缩", () => {
     }
     const requestBody = { modelId, scope: { type: "chapter", chapterId }, instruction: "继续回答燃料问题。" };
 
-    const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({ ...requestBody, taskType: "chat", conversationId }).expect(200);
-    expect(usage.body.data).toMatchObject({ compactThreshold: 50, compactRecommended: true, contextWarningPending: false });
-    expect(usage.body.data.usagePercent).toBeGreaterThanOrEqual(50);
-    expect(usage.body.data.tokenDistribution).toEqual(expect.objectContaining({
+    const warned = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
+    const usage = warned.body.data.usage;
+    expect(warned.body.data).toMatchObject({ action: "warn", usage: { compactThreshold: 50, compactRecommended: true, contextWarningPending: true } });
+    expect(usage.usagePercent).toBeGreaterThanOrEqual(50);
+    expect(usage.tokenDistribution).toEqual(expect.objectContaining({
       systemPromptTokens: expect.any(Number),
       functionTokens: expect.any(Number),
       skillsTokens: 0,
       contextTokens: expect.any(Number),
       leftTokens: expect.any(Number)
     }));
-    expect(usage.body.data.tokenDistribution.systemPromptTokens + usage.body.data.tokenDistribution.functionTokens
-      + usage.body.data.tokenDistribution.skillsTokens + usage.body.data.tokenDistribution.contextTokens
-      + usage.body.data.tokenDistribution.leftTokens).toBe(usage.body.data.contextWindow);
-
-    const warned = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
-    expect(warned.body.data).toMatchObject({ action: "warn", usage: { contextWarningPending: true } });
+    expect(usage.tokenDistribution.systemPromptTokens + usage.tokenDistribution.functionTokens
+      + usage.tokenDistribution.skillsTokens + usage.tokenDistribution.contextTokens
+      + usage.tokenDistribution.leftTokens).toBe(usage.contextWindow);
     expect(fetchMock).not.toHaveBeenCalled();
 
     const compacted = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
@@ -129,6 +128,46 @@ describe("AI 对话上下文压缩", () => {
     expect(secondRetry.body.data.id).toBe(firstRetry.body.data.id);
   });
 
+  it("流式聊天在同一请求内完成预检和消息持久化", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (const [role, content] of [
+      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(90)}`],
+      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(90)}`],
+      ["user", "最近问题：当前燃料还剩多少？"],
+      ["assistant", "最近回答：燃料数据尚未在正文中明确。"]
+    ] as const) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
+    }
+    const body = {
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction: "继续回答燃料问题。",
+      conversationId
+    };
+    fetchMock.mockClear();
+
+    const warned = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send(body).expect(200);
+    expect(warned.text).toContain('event: context\ndata: {"action":"warn"');
+    expect(warned.text).not.toContain("event: user_message");
+    expect(warned.text).not.toContain("event: complete");
+    expect(fetchMock).not.toHaveBeenCalled();
+    const afterWarning = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(afterWarning.body.data).toMatchObject({ messageCount: 4, contextWarningPending: true });
+
+    const continued = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send(body).expect(200);
+    expect(continued.text).toContain('event: context\ndata: {"action":"compacted"');
+    expect(continued.text).toContain("event: user_message");
+    expect(continued.text).toContain("event: complete");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const afterCompletion = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(afterCompletion.body.data).toMatchObject({ messageCount: 6, contextWarningPending: false });
+    expect(afterCompletion.body.data.messages.slice(-2)).toEqual([
+      expect.objectContaining({ role: "user", content: body.instruction }),
+      expect.objectContaining({ role: "assistant", content: "已结合压缩摘要和最近对话回答。" })
+    ]);
+  });
+
   it("手动整理较长对话时优先保留最近八条原始消息", async () => {
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
@@ -156,30 +195,27 @@ describe("AI 对话上下文压缩", () => {
       await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
     }
 
-    const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({
+    const prepared = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send({
       modelId,
-      taskType: "chat",
       scope: { type: "chapter", chapterId },
-      instruction: "概括当前章节。",
-      conversationId
+      instruction: "概括当前章节。"
     }).expect(200);
+    const usage = prepared.body.data.usage;
 
-    expect(usage.body.data.compactRecommended).toBe(false);
-    expect(usage.body.data.degradedContextBlocks).toBeGreaterThan(0);
-    expect(usage.body.data.inputTokens).toBeLessThan(usage.body.data.contextWindow);
-    expect(usage.body.data).toMatchObject({ conversationTokens: expect.any(Number), conversationBudgetTokens: expect.any(Number) });
+    expect(usage.compactRecommended).toBe(false);
+    expect(usage.degradedContextBlocks).toBeGreaterThan(0);
+    expect(usage.inputTokens).toBeLessThan(usage.contextWindow);
+    expect(usage).toMatchObject({ conversationTokens: expect.any(Number), conversationBudgetTokens: expect.any(Number) });
   });
 
-  it("拒绝把其他作品的对话混入当前模型上下文", async () => {
+  it("拒绝把其他作品的章节混入当前对话上下文", async () => {
     const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
     const conversation = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/ai-conversations`).send({}).expect(201);
-    const response = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({
+    const response = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/context/prepare`).send({
       modelId,
-      taskType: "chat",
       scope: { type: "chapter", chapterId },
-      instruction: "越权读取",
-      conversationId: conversation.body.data.id
+      instruction: "越权读取"
     }).expect(400);
-    expect(response.body.error.code).toBe("CONVERSATION_WORK_MISMATCH");
+    expect(response.body.error.code).toBe("CHAPTER_WORK_MISMATCH");
   });
 });

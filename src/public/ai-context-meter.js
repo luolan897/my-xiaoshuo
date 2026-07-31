@@ -13,6 +13,13 @@ function tokenCount(value) {
   return Math.max(0, Math.round(Number(value) || 0));
 }
 
+export function formatAiContextUsagePercent(occupiedTokens, contextWindow) {
+  const occupied = tokenCount(occupiedTokens);
+  const window = tokenCount(contextWindow);
+  const percent = window > 0 ? Math.min(100, occupied / window * 100) : 0;
+  return `${percent.toFixed(1)}%`;
+}
+
 export function normalizeAiContextTokenDistribution(usage) {
   const contextWindow = tokenCount(usage?.contextWindow);
   const distribution = usage?.tokenDistribution ?? {};

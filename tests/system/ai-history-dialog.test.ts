@@ -29,10 +29,15 @@ describe("AI 对话历史弹窗", () => {
     expect(page.text).toContain('aria-controls="ai-history-dialog"');
     expect(page.text).toContain('id="ai-history-dialog" class="dialog wide-dialog ai-history-dialog"');
     expect(page.text).toContain('id="ai-history-list" class="ai-history-list"');
+    expect(page.text).toContain('id="ai-history-pagination" class="module-pagination ai-history-pagination hidden"');
+    expect(page.text).toContain('id="ai-history-previous"');
+    expect(page.text).toContain('id="ai-history-next"');
     expect(page.text).not.toContain('id="ai-history-panel"');
     expect(application.text).toContain('$("#ai-history-dialog").open');
     expect(application.text).toContain("dialog.showModal()");
     expect(application.text).toContain('$("#ai-history-close").addEventListener');
+    expect(application.text).toContain('$("#ai-history-previous").addEventListener');
+    expect(application.text).toContain('$("#ai-history-next").addEventListener');
     expect(styles.text).toContain(".ai-history-dialog-body");
     expect(styles.text).toContain(".ai-heading-action-icon");
     expect(styles.text).not.toContain(".ai-history-panel");

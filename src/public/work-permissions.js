@@ -1,6 +1,6 @@
 export const WORK_PERMISSION_MODULES = Object.freeze([
   { id: "prose", uiModule: "editor", label: "正文" },
-  { id: "drafts", uiModule: "drafts", label: "草稿" },
+  { id: "drafts", uiModule: "drafts", label: "想法" },
   { id: "settings", uiModule: "settings", label: "设定库" },
   { id: "characters", uiModule: "characters", label: "角色" },
   { id: "races", uiModule: "races", label: "种族" },

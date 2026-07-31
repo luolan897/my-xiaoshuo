@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("AI 错误详情界面", () => {
-  it("将错误码、服务端状态和上游失败原因写入助手消息", async () => {
+  it("将模型目标和上游失败详情写入带状态标识的助手消息", async () => {
     const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
     const sendAiSource = application.slice(
       application.indexOf("async function sendAi()"),
@@ -14,16 +14,27 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain("function formatAiFailureMessage(error)");
     expect(application).toContain("error.failure = typeof source.failure === \"string\" ? source.failure : undefined;");
     expect(application).toContain("error.callId = typeof source.callId === \"string\" ? source.callId : undefined;");
+    expect(application).toContain("error.providerName = typeof source.providerName === \"string\" ? source.providerName : undefined;");
+    expect(application).toContain("error.modelId = typeof source.modelId === \"string\" ? source.modelId : undefined;");
+    expect(application).toContain("lines.push(`模型供应商：${providerName || providerId}`)");
+    expect(application).toContain("lines.push(`模型 ID：${modelId}`)");
     expect(sendAiSource).toContain("const failureMessage = formatAiFailureMessage(error);");
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
     expect(application).toContain('const isFailure = role === "assistant" && text.startsWith("调用失败：");');
     expect(application).toContain('message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;');
     expect(application).toContain('<p class="ai-error-text">${esc(text)}</p>');
+    expect(application).toContain('message.dataset.status = "failed";');
+    expect(application).toContain('failureBadge.className = "ai-message-status is-error";');
+    expect(application).toContain('failureBadge.textContent = "失败";');
+    expect(application).toContain('failureBadge.setAttribute("aria-label", "消息状态：失败");');
   });
 
-  it("让错误正文继承正常助手消息的字体和字号", async () => {
+  it("突出失败卡片并让错误正文继承正常助手消息的字体和字号", async () => {
     const styles = await readFile(join(process.cwd(), "src", "public", "styles.css"), "utf8");
 
+    expect(styles).toContain(".assistant-message.is-error { border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-left: 3px solid var(--accent);");
+    expect(styles).toContain(".assistant-message.is-error > .message-heading { color: var(--accent-dark); opacity: 1; }");
+    expect(styles).toContain(".ai-message-status.is-error { border-color: var(--accent); background: var(--accent); color: #fff; }");
     expect(styles).toContain(".assistant-message.is-error .message-body { font-family: inherit; font-size: inherit; line-height: inherit; }");
     expect(styles).toContain(".assistant-message.is-error .ai-error-text { margin: 0; white-space: pre-wrap; font: inherit; }");
   });

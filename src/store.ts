@@ -45,6 +45,7 @@ type PlatformPageSizes = {
   timeline: number;
   outlines: number;
   relationships: number;
+  comments: number;
   reviews: number;
   analysisTasks: number;
   fileVersions: number;
@@ -59,6 +60,7 @@ const defaultPlatformPageSizes: PlatformPageSizes = {
   timeline: 30,
   outlines: 30,
   relationships: 30,
+  comments: 30,
   reviews: 30,
   analysisTasks: 30,
   fileVersions: 30
@@ -83,6 +85,7 @@ function platformPageSizes(value: unknown): PlatformPageSizes {
     timeline: pageSize("timeline"),
     outlines: pageSize("outlines"),
     relationships: pageSize("relationships"),
+    comments: pageSize("comments"),
     reviews: pageSize("reviews"),
     analysisTasks: pageSize("analysisTasks"),
     fileVersions: pageSize("fileVersions")
@@ -2320,6 +2323,58 @@ export class Store {
     ).map((row) => this.mapChapterAnnotation(row));
   }
 
+  listWorkChapterAnnotations(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT annotation.*, user.display_name AS actor_display_name, user.username AS actor_username,
+        chapter.title AS chapter_title, volume.title AS volume_title
+       FROM chapter_annotations annotation
+       JOIN chapters chapter ON chapter.id = annotation.chapter_id
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       LEFT JOIN users user ON user.id = annotation.updated_by_user_id
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL
+       ORDER BY CASE annotation.status WHEN 'open' THEN 0 ELSE 1 END,
+         volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at,
+         annotation.start_line, annotation.created_at`,
+      workId
+    ).map((row) => ({
+      ...this.mapChapterAnnotation(row),
+      volumeTitle: requiredString(row, "volume_title"),
+      chapterTitle: requiredString(row, "chapter_title")
+    }));
+  }
+
+  listWorkChapterAnnotationsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT annotation.*, user.display_name AS actor_display_name, user.username AS actor_username,
+        chapter.title AS chapter_title, volume.title AS volume_title
+       FROM chapter_annotations annotation
+       JOIN chapters chapter ON chapter.id = annotation.chapter_id
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       LEFT JOIN users user ON user.id = annotation.updated_by_user_id
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL
+       ORDER BY CASE annotation.status WHEN 'open' THEN 0 ELSE 1 END,
+         volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at,
+         annotation.start_line, annotation.created_at${page.sql}`,
+      workId,
+      ...page.params
+    );
+    const total = numberValue(this.db.get(
+      `SELECT COUNT(*) AS count
+       FROM chapter_annotations annotation
+       JOIN chapters chapter ON chapter.id = annotation.chapter_id
+       WHERE annotation.work_id = ? AND annotation.deleted_at IS NULL AND chapter.deleted_at IS NULL`,
+      workId
+    ) ?? {}, "count");
+    return paginated(rows.map((row) => ({
+      ...this.mapChapterAnnotation(row),
+      volumeTitle: requiredString(row, "volume_title"),
+      chapterTitle: requiredString(row, "chapter_title")
+    })), pagination, total);
+  }
+
   createChapterAnnotation(chapterId: string, input: { kind: "note" | "todo"; startLine: number; endLine: number; note: string }): Record<string, unknown> {
     const chapter = this.getChapter(chapterId);
     const lines = String(chapter.content).replace(/\r\n?/gu, "\n").split("\n");
@@ -3223,7 +3278,7 @@ export class Store {
         timestamp
       );
       this.syncMarkdownAttachmentReferences(workId, "draft", draftId, input.content);
-      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "建立创作草稿", timestamp);
+      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "建立创作想法", timestamp);
       this.audit(workId, source === "restore" ? "draft.restored" : "draft.created", "draft", draftId, {
         draftType: input.draftType,
         source,
@@ -3302,7 +3357,7 @@ export class Store {
 
   getDraft(draftId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM drafts WHERE id = ?", draftId);
-    if (!row) throw notFound("草稿");
+    if (!row) throw notFound("想法");
     return this.mapDraft(row, true);
   }
 
@@ -3317,7 +3372,7 @@ export class Store {
     const current = this.getDraft(draftId);
     const content = input.content ?? String(current.content);
     this.db.transaction(() => {
-      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "草稿");
+      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "想法");
       this.db.run(
         "UPDATE drafts SET draft_type = ?, title = ?, content = ?, updated_at = ? WHERE id = ?",
         input.draftType ?? String(current.draftType),
@@ -3327,7 +3382,7 @@ export class Store {
         draftId
       );
       this.syncMarkdownAttachmentReferences(String(current.workId), "draft", draftId, content);
-      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "更新创作草稿");
+      this.recordEntityVersion("draft", draftId, source, sourceRef, changeNote || "更新创作想法");
       this.audit(String(current.workId), "draft.updated", "draft", draftId, { fields: Object.keys(input), source, sourceRef });
     });
     return this.getDraft(draftId);
@@ -3336,8 +3391,8 @@ export class Store {
   deleteDraft(draftId: string, expectedVersionNo?: number): void {
     const current = this.getDraft(draftId);
     this.db.transaction(() => {
-      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "草稿");
-      this.recordEntityVersion("draft", draftId, "delete", null, "删除创作草稿");
+      this.assertExpectedVersion("draft", draftId, expectedVersionNo, "想法");
+      this.recordEntityVersion("draft", draftId, "delete", null, "删除创作想法");
       this.clearMarkdownAttachmentReferences("draft", draftId);
       this.db.run("DELETE FROM drafts WHERE id = ?", draftId);
       this.audit(String(current.workId), "draft.deleted", "draft", draftId);
@@ -5971,6 +6026,19 @@ export class Store {
       ...page.params
     );
     return paginated(rows.map((row) => this.mapAiConversation(row)), pagination);
+  }
+
+  getAiConversationSummary(conversationId: string): Record<string, unknown> {
+    const row = this.db.get(
+      `SELECT conversation.*,
+        (SELECT COUNT(*) FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id) AS message_count,
+        COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
+       FROM ai_conversations conversation
+       WHERE conversation.id = ?`,
+      conversationId
+    );
+    if (!row) throw notFound("AI 对话");
+    return this.mapAiConversation(row);
   }
 
   getAiConversation(conversationId: string): Record<string, unknown> {

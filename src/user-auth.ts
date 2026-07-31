@@ -870,7 +870,7 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/cli\/session$/u },
   { methods: ["GET", "POST"], path: /^\/api\/works$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/works\/[^/]+$/u },
-  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|search|export|audit-logs)$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|chapter-annotations|search|export|audit-logs)$/u },
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/writing-progress$/u },
   { methods: ["PUT"], path: /^\/api\/works\/[^/]+\/writing-goal$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
@@ -962,6 +962,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/presence$/u.test(pathname)) return {};
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
+  if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { anyRead: [...aiInteractionModules] };
   if (!write && /^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u.test(pathname)) {
     return { anyRead: [...aiInteractionModules] };
@@ -1071,11 +1072,8 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     const contextRead = aiContextReadModules(request);
     return write ? { read: contextRead, write: ["ai-chat"] } : { read: ["ai-chat"] };
   }
-  if (/^\/api\/(?:works\/[^/]+\/(?:suggestions|ai-context-usage)|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
+  if (/^\/api\/(?:works\/[^/]+\/suggestions|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
     const contextRead = aiContextReadModules(request);
-    if (/^\/api\/works\/[^/]+\/ai-context-usage$/u.test(pathname)) {
-      return { anyRead: [...aiInteractionModules], read: contextRead };
-    }
     return write
       ? { read: contextRead, anyWrite: [...aiInteractionModules] }
       : { anyRead: [...aiInteractionModules] };
