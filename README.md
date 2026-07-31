@@ -111,7 +111,7 @@ CLI 会按服务器保存登录凭据。所有连接服务的数据命令都可�
 | `HOST` | `127.0.0.1` | 监听地址；服务器部署时可设为 `0.0.0.0` |
 | `DATA_DIR` | `<项目目录>/.data` | 默认数据目录 |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite 数据库路径 |
-| `AI_NOVEL_MASTER_KEY` | 自动生成并保存在 `<DATA_DIR>/master.key` | 加密 AI 供应商密钥的主密钥 |
+| `AI_NOVEL_MASTER_KEY` | 自动生成并保存在 `<DATA_DIR>/master.key` | 加密 AI 供应商密钥的主密钥；手动配置时至少 32 个字符 |
 | `APP_AUTH_USERNAME` | 空 | 可选的部署网关账号；应用内用户系统始终启用 |
 | `APP_AUTH_PASSWORD` | 空 | 可选的部署网关密码，至少 12 个字符；必须通过 HTTPS 传输 |
 | `APP_TRUST_PROXY` | `false` | 位于可信反向代理后时设为代理跳数（通常为 `1`）或 `true` |

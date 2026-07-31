@@ -105,7 +105,7 @@ Run `scriverse --help` for all local server, default server, authentication, wor
 | `HOST` | `127.0.0.1` | Listen address; use `0.0.0.0` for a server deployment |
 | `DATA_DIR` | `<project>/.data` | Default data directory |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite database path |
-| `AI_NOVEL_MASTER_KEY` | Generated and stored at `<DATA_DIR>/master.key` | Master key used to encrypt AI provider credentials |
+| `AI_NOVEL_MASTER_KEY` | Generated and stored at `<DATA_DIR>/master.key` | Master key used to encrypt AI provider credentials; at least 32 characters when configured manually |
 | `APP_AUTH_USERNAME` | Empty | Optional deployment gateway username; the in-app user system is always enabled |
 | `APP_AUTH_PASSWORD` | Empty | Optional deployment gateway password, at least 12 characters; must be transported over HTTPS |
 | `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |

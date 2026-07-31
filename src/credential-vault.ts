@@ -12,7 +12,7 @@ export class CredentialVault {
   private readonly key: Buffer;
 
   constructor(masterSecret: string) {
-    if (masterSecret.length < 16) throw new Error("主密钥长度至少为 16 个字符");
+    if (masterSecret.length < 32) throw new Error("主密钥长度至少为 32 个字符");
     this.key = createHash("sha256").update(masterSecret).digest();
   }
 
