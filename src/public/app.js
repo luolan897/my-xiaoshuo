@@ -10,7 +10,7 @@ import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-s
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
-import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
+import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260801-retain-usage-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
@@ -1326,7 +1326,7 @@ function attachMessageHeading(message, label, createdAt = new Date().toISOString
   role.textContent = label;
   const time = document.createElement("time");
   time.dateTime = timestamp;
-  time.textContent = formatAiMessageTime(timestamp, previousCreatedAt);
+  time.textContent = formatAiMessageTime(timestamp);
   heading.append(role, time);
   message.prepend(heading);
   message.dataset.createdAt = timestamp;
@@ -1340,7 +1340,7 @@ function updateMessageCreatedAt(message, createdAt) {
   const time = message.querySelector(".message-heading time");
   if (!time) return;
   time.dateTime = createdAt;
-  time.textContent = formatAiMessageTime(createdAt, message.dataset.previousCreatedAt || null);
+  time.textContent = formatAiMessageTime(createdAt);
   message.dataset.createdAt = createdAt;
   if (message === $("#ai-feed").lastElementChild) state.aiLastMessageAt = createdAt;
 }
