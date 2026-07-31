@@ -1142,6 +1142,33 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
   });
 
+  it("流式成功响应不会向浏览器或记录回显供应商密钥", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    fetchMock.mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"安全前缀 sk-sensitive-"}}]}\n\n'));
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"test-value 安全后缀"},"finish_reason":"stop"}]}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "检查密钥回显",
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const suggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
+
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"安全前缀 "}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"sk-s*****lue 安全后缀"}');
+    expect(streamed.text).not.toContain("sk-sensitive-test-value");
+    expect(suggestions.body.data[0].content).toBe("安全前缀 sk-s*****lue 安全后缀");
+  });
+
   it("首轮上下文超限时不请求模型并提示减少上下文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

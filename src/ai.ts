@@ -475,6 +475,33 @@ function redactProviderSecrets(value: unknown, apiKey: string, depth = 0): unkno
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactProviderSecrets(item, apiKey, depth + 1)]));
 }
 
+class ProviderSecretStreamRedactor {
+  private pending = "";
+
+  constructor(private readonly apiKey: string) {}
+
+  push(value: string): string {
+    if (!this.apiKey) return value;
+    const combined = redactProviderSecret(`${this.pending}${value}`, this.apiKey);
+    let retainedLength = 0;
+    const maximumPrefixLength = Math.min(this.apiKey.length - 1, combined.length);
+    for (let length = maximumPrefixLength; length > 0; length -= 1) {
+      if (combined.endsWith(this.apiKey.slice(0, length))) {
+        retainedLength = length;
+        break;
+      }
+    }
+    this.pending = retainedLength > 0 ? combined.slice(-retainedLength) : "";
+    return retainedLength > 0 ? combined.slice(0, -retainedLength) : combined;
+  }
+
+  flush(): string {
+    const value = redactProviderSecret(this.pending, this.apiKey);
+    this.pending = "";
+    return value;
+  }
+}
+
 function sanitizeCompletionTraceResponse(value: unknown): Record<string, unknown> {
   const response = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const choices = Array.isArray(response.choices) ? response.choices : [];
@@ -4349,6 +4376,7 @@ export class AiManager {
                 response,
                 protocol,
                 estimateAiTokens(JSON.stringify(messages)),
+                apiKey,
                 (delta) => {
                   emitted = true;
                   onDelta(delta);
@@ -4456,6 +4484,7 @@ export class AiManager {
     response: Response,
     protocol: AiProviderProtocol,
     estimatedInputTokens: number,
+    apiKey: string,
     onDelta: (delta: string) => void,
     onThinkingDelta: (delta: string) => void
   ): Promise<{
@@ -4475,6 +4504,20 @@ export class AiManager {
     let reasoning = "";
     let finishReason = "unknown";
     let usage: unknown = null;
+    const contentRedactor = new ProviderSecretStreamRedactor(apiKey);
+    const reasoningRedactor = new ProviderSecretStreamRedactor(apiKey);
+    const appendContent = (value: string): void => {
+      const safe = contentRedactor.push(value);
+      if (!safe) return;
+      content += safe;
+      onDelta(safe);
+    };
+    const appendReasoning = (value: string): void => {
+      const safe = reasoningRedactor.push(value);
+      if (!safe) return;
+      reasoning += safe;
+      onThinkingDelta(safe);
+    };
     const anthropicBlocks = new Map<number, Record<string, unknown>>();
     const anthropicToolInputJson = new Map<number, string>();
     const eventIndex = (payload: Record<string, unknown>): number | null => {
@@ -4562,12 +4605,10 @@ export class AiManager {
         if (type === "content_block_stop" && index !== null) finalizeAnthropicToolInput(index);
         if (typeof eventDelta.stop_reason === "string") finishReason = eventDelta.stop_reason;
         if (eventDelta.type === "thinking_delta" && typeof eventDelta.thinking === "string" && eventDelta.thinking.length > 0) {
-          reasoning += eventDelta.thinking;
-          onThinkingDelta(eventDelta.thinking);
+          appendReasoning(eventDelta.thinking);
         }
         if (eventDelta.type === "text_delta" && typeof eventDelta.text === "string" && eventDelta.text.length > 0) {
-          content += eventDelta.text;
-          onDelta(eventDelta.text);
+          appendContent(eventDelta.text);
         }
         return;
       }
@@ -4585,13 +4626,11 @@ export class AiManager {
         : {};
       const thinkingDelta = deltaRecord.reasoning_content;
       if (typeof thinkingDelta === "string" && thinkingDelta.length > 0) {
-        reasoning += thinkingDelta;
-        onThinkingDelta(thinkingDelta);
+        appendReasoning(thinkingDelta);
       }
       const delta = deltaRecord.content;
       if (typeof delta === "string" && delta.length > 0) {
-        content += delta;
-        onDelta(delta);
+        appendContent(delta);
       }
     };
     while (true) {
@@ -4603,6 +4642,16 @@ export class AiManager {
       if (chunk.done) break;
     }
     if (buffer.trim()) consumeEvent(buffer);
+    const finalContent = contentRedactor.flush();
+    if (finalContent) {
+      content += finalContent;
+      onDelta(finalContent);
+    }
+    const finalReasoning = reasoningRedactor.flush();
+    if (finalReasoning) {
+      reasoning += finalReasoning;
+      onThinkingDelta(finalReasoning);
+    }
     if (!content.trim()) throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
     const cacheHitPercent = resolveCacheHitPercent(usage);
     const outputTokens = resolveOutputTokens(usage, content);
@@ -4611,7 +4660,7 @@ export class AiManager {
         .sort(([left], [right]) => left - right)
         .map(([index, block]) => {
           finalizeAnthropicToolInput(index);
-          return block;
+          return redactProviderSecrets(block, apiKey) as Record<string, unknown>;
         })
       : undefined;
     return {
