@@ -137,9 +137,31 @@ describe("人物 Markdown 章节与附件", () => {
     expect(restored.body.data.contentMarkdown).toContain(`attachment://${attachmentId}`);
     await request(runtime.app).patch(`/api/character-sections/${sectionId}`).send({ contentMarkdown: "无附件" });
 
-    const deleted = await request(runtime.app).delete(`/api/attachments/${attachmentId}`);
-    expect(deleted.status).toBe(204);
-    expect(existsSync(runtime.attachmentStorage.path(storageKey))).toBe(false);
+    runtime.database.run("UPDATE attachments SET created_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", attachmentId);
+    await runtime.cleanupAttachments();
+    expect(runtime.database.get("SELECT id FROM attachments WHERE id = ?", attachmentId)).toEqual({ id: attachmentId });
+    const retained = await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(409);
+    expect(retained.body.error.code).toBe("ATTACHMENT_IN_VERSION_HISTORY");
+    expect(existsSync(runtime.attachmentStorage.path(storageKey))).toBe(true);
+  });
+
+  it("自动回收超过保留期且未被当前或历史版本引用的附件", async () => {
+    const work = await createWork(runtime);
+    const image = await sharp({
+      create: { width: 64, height: 64, channels: 3, background: { r: 15, g: 30, b: 45 } }
+    }).png().toBuffer();
+    const upload = await request(runtime.app)
+      .post(`/api/works/${String(work.id)}/attachments`)
+      .attach("file", image, { filename: "未使用.png", contentType: "image/png" })
+      .expect(201);
+    const attachmentId = String(upload.body.data.id);
+    const storagePath = runtime.attachmentStorage.path(String(upload.body.data.storageKey));
+    runtime.database.run("UPDATE attachments SET created_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", attachmentId);
+
+    await runtime.cleanupAttachments();
+
+    expect(runtime.database.get("SELECT id FROM attachments WHERE id = ?", attachmentId)).toBeUndefined();
+    expect(existsSync(storagePath)).toBe(false);
   });
 
   it("拒绝在人物章节中引用其他作品的附件", async () => {
@@ -193,7 +215,8 @@ describe("人物 Markdown 章节与附件", () => {
     await request(runtime.app).patch(`/api/races/${String(race.body.data.id)}`).send({ settingsMarkdown: "无附件种族" }).expect(200);
     await request(runtime.app).patch(`/api/organizations/${String(organization.body.data.id)}`).send({ settingsMarkdown: "无附件组织" }).expect(200);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count).toBe(0);
-    await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(204);
+    const retained = await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(409);
+    expect(retained.body.error.code).toBe("ATTACHMENT_IN_VERSION_HISTORY");
   });
 
   it("按中文短词和正文片段检索人物 Markdown 章节", async () => {

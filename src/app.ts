@@ -775,6 +775,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
+      store.queueUnreferencedAttachments();
       for (const queued of store.listAttachmentCleanupQueue()) {
         if (!store.attachmentCleanupStillRequired(queued.storageKey)) {
           store.completeAttachmentCleanup(queued.storageKey);

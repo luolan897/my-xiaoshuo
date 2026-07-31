@@ -4808,10 +4808,54 @@ export class Store {
     );
   }
 
+  private attachmentHistoricalReferenceCount(attachmentId: string): number {
+    const needle = `attachment://${attachmentId}`;
+    const sources = [
+      ["entity_versions", "snapshot_json"],
+      ["character_profile_section_versions", "snapshot_json"],
+      ["character_versions", "snapshot_json"],
+      ["chapter_versions", "content"],
+      ["file_versions", "snapshot_json"]
+    ] as const;
+    return sources.reduce((count, [table, column]) => count + Number(
+      this.db.get(`SELECT COUNT(*) AS count FROM ${table} WHERE instr(${column}, ?) > 0`, needle)?.count ?? 0
+    ), 0);
+  }
+
+  queueUnreferencedAttachments(retentionMs = 24 * 60 * 60_000, limit = 100): number {
+    const cutoff = new Date(Date.now() - Math.max(0, retentionMs)).toISOString();
+    const candidates = this.db.all(
+      `SELECT attachment.* FROM attachments attachment
+       WHERE attachment.created_at <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM attachment_references reference WHERE reference.attachment_id = attachment.id
+         )
+       ORDER BY attachment.created_at, attachment.id LIMIT ?`,
+      cutoff,
+      Math.max(1, Math.min(1_000, Math.trunc(limit)))
+    );
+    let queued = 0;
+    for (const candidate of candidates) {
+      const attachmentId = requiredString(candidate, "id");
+      if (this.attachmentHistoricalReferenceCount(attachmentId) > 0) continue;
+      const storageKey = requiredString(candidate, "storage_key");
+      this.db.transaction(() => {
+        this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
+        this.audit(requiredString(candidate, "work_id"), "attachment.garbage-collected", "attachment", attachmentId, { storageKey });
+        if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
+      });
+      queued += 1;
+    }
+    return queued;
+  }
+
   deleteAttachment(attachmentId: string): { storageKey: string; cleanupQueued: boolean } {
     const attachment = this.getAttachment(attachmentId);
     const references = Number(this.db.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count ?? 0);
     if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被资料引用，无法删除");
+    if (this.attachmentHistoricalReferenceCount(attachmentId) > 0) {
+      throw new AppError(409, "ATTACHMENT_IN_VERSION_HISTORY", "附件仍被历史版本引用，无法删除");
+    }
     const storageKey = String(attachment.storageKey);
     this.db.transaction(() => {
       this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
