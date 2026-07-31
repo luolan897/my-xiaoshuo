@@ -417,6 +417,21 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     });
   });
 
+  it("删除包含多级种族树的作品时完整级联清理", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "待删除种族树作品" }).expect(201);
+    const workId = String(work.body.data.id);
+    const parent = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "父种族" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "子种族",
+      parentRaceId: parent.body.data.id
+    }).expect(201);
+
+    await request(runtime.app).delete(`/api/works/${workId}`).expect(204);
+    await request(runtime.app).get(`/api/works/${workId}`).expect(404);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM races WHERE work_id = ?", workId)?.count).toBe(0);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("记录并恢复种族父级，且兼容缺少父级字段的旧快照", async () => {
     const { workId } = await seedWork(runtime);
     const titan = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "泰坦" }).expect(201);
