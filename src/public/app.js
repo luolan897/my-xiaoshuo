@@ -4312,6 +4312,10 @@ function recordHistoryButton(type, id, title) {
   return `<button type="button" data-entity-history="${esc(type)}" data-entity-id="${esc(id)}" data-entity-title="${esc(title)}">版本历史</button>`;
 }
 
+function draftDeleteButton(item) {
+  return `<button class="danger-button" type="button" data-delete-draft="${esc(item.id)}" aria-label="删除想法“${esc(item.title)}”">删除</button>`;
+}
+
 function entityDialogManagementHtml({ typeLabel, canMerge, canDelete }) {
   return `<section class="entity-dialog-management" aria-label="${esc(typeLabel)}档案操作">
     <div><strong>档案操作</strong><small>版本历史和高风险操作集中在编辑面板内。</small></div>
@@ -4627,15 +4631,21 @@ function draftTypeLabel(draftType) {
   return draftType === "setting" ? "设定想法" : "正文想法";
 }
 
-async function deleteDraft(item) {
+async function deleteDraft(item, { reopenDialog = false } = {}) {
   if (!item || !canEditModule("drafts")) return;
-  const dialog = $("#form-dialog");
-  dialog.close();
+  if (reopenDialog) $("#form-dialog").close();
   if (!await confirmToast(`确认删除想法“${item.title}”吗？想法将从当前列表移除。`, {
     title: "删除想法",
+    confirmLabel: "继续删除"
+  })) {
+    if (reopenDialog) openDraftDialog(item);
+    return;
+  }
+  if (!await confirmToast(`删除想法“${item.title}”后将从想法列表移除，版本历史仍会保留。仍要删除吗？`, {
+    title: "删除操作需要再次确认",
     confirmLabel: "确认删除"
   })) {
-    openDraftDialog(item);
+    if (reopenDialog) openDraftDialog(item);
     return;
   }
   try {
@@ -4645,7 +4655,7 @@ async function deleteDraft(item) {
   } catch (error) {
     toast(error.message, "error");
     try {
-      openDraftDialog(await api(`/api/drafts/${encodeURIComponent(item.id)}`));
+      if (reopenDialog) openDraftDialog(await api(`/api/drafts/${encodeURIComponent(item.id)}`));
     } catch (reloadError) {
       toast(reloadError.message, "error");
     }
@@ -4694,7 +4704,7 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     });
   }
   $("#dialog-fields").querySelector("[data-dialog-draft-delete]")?.addEventListener("click", () => {
-    void deleteDraft(item);
+    void deleteDraft(item, { reopenDialog: true });
   });
 }
 
@@ -4720,7 +4730,7 @@ async function renderDrafts(page = moduleListPages.drafts) {
     ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>`}
   </section>`;
   const actions = (item) => canEditModule("drafts")
-    ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
+    ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}${draftDeleteButton(item)}`
     : recordHistoryButton("draft", item.id, item.title);
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
     <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
@@ -4763,6 +4773,10 @@ async function renderDrafts(page = moduleListPages.drafts) {
   });
   $("#module-content").querySelectorAll("[data-edit-draft]").forEach((button) => button.addEventListener("click", async () => {
     openDraftDialog(await api(`/api/drafts/${encodeURIComponent(button.dataset.editDraft)}`));
+  }));
+  $("#module-content").querySelectorAll("[data-delete-draft]").forEach((button) => button.addEventListener("click", () => {
+    const item = pageResult.items.find((draft) => draft.id === button.dataset.deleteDraft);
+    void deleteDraft(item);
   }));
   bindEntityHistoryButtons(() => renderDrafts(pageResult.page));
 }
