@@ -19,7 +19,11 @@ describe("本地服务运行时", () => {
     expect(resolveRuntimeSecurity({}).allowRegistration).toBe(false);
     expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "false" }).allowRegistration).toBe(false);
     expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "TRUE" }).allowRegistration).toBe(false);
-    expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "true" }).allowRegistration).toBe(true);
+    expect(() => resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "true" })).toThrow("APP_SETUP_TOKEN");
+    expect(resolveRuntimeSecurity({
+      APP_ALLOW_REGISTRATION: "true",
+      APP_SETUP_TOKEN: "server-runtime-setup-token-with-at-least-32-characters"
+    }).allowRegistration).toBe(true);
   });
 
   it("仅在非生产环境显式开启时允许开发免登录", () => {

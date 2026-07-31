@@ -21,7 +21,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { Store, versionedEntityTypes } from "./store.js";
 import { parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -66,6 +66,7 @@ const registrationSchema = z.object({
   username: usernameSchema,
   password: passwordSchema,
   passwordConfirmation: passwordSchema,
+  setupToken: z.string().max(500).optional(),
   ...captchaFields
 }).strict().refine((input) => input.password === input.passwordConfirmation, {
   path: ["passwordConfirmation"],
@@ -842,14 +843,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/auth/session", (request, response) => {
     const session = auth.authenticate(request);
     const registrationOpen = options.security?.allowRegistration === true;
+    const setupRequired = !auth.hasUsers();
+    const setupTokenRequired = setupRequired && Boolean(options.security?.setupToken);
     const developmentUser = getDevelopmentUser();
     if (!session && developmentUser) {
-      data(response, { authenticated: true, user: developmentUser, csrfToken: null, setupRequired: false, registrationOpen });
+      data(response, { authenticated: true, user: developmentUser, csrfToken: null, setupRequired: false, setupTokenRequired: false, registrationOpen });
       return;
     }
     data(response, session
-      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, registrationOpen }
-      : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers(), registrationOpen });
+      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, setupTokenRequired: false, registrationOpen }
+      : { authenticated: false, user: null, csrfToken: null, setupRequired, setupTokenRequired, registrationOpen });
   });
   app.get("/api/auth/captcha", (_request, response) => {
     data(response, captcha.create());
@@ -860,6 +863,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     const input = parse(registrationSchema, request.body);
     captcha.consume(input.captchaId, input.captchaAnswer);
+    if (!auth.hasUsers() && !verifySetupToken(options.security?.setupToken, input.setupToken)) {
+      throw new AppError(403, "SETUP_TOKEN_INVALID", "初始化令牌无效或未配置");
+    }
     const result = auth.register({ username: input.username, password: input.password });
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));

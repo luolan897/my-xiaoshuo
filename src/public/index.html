@@ -40,6 +40,7 @@
         </form>
         <form id="register-form" class="auth-form hidden">
           <label>用户名<input name="username" autocomplete="username" minlength="3" maxlength="40" pattern="[A-Za-z0-9_.\-\u4e00-\u9fff]+" required></label>
+          <label id="register-setup-token-field" class="hidden">初始化令牌<input name="setupToken" type="password" autocomplete="off" minlength="32" maxlength="500" aria-describedby="register-setup-token-hint"><small id="register-setup-token-hint">请输入服务端 APP_SETUP_TOKEN 的值。</small></label>
           <label>密码<span class="password-field"><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="200" required><button class="password-toggle" type="button" data-password-toggle="register-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg></button></span></label>
           <label>确认密码<span class="password-field"><input id="register-password-confirmation" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="10" maxlength="200" required><button class="password-toggle" type="button" data-password-toggle="register-password-confirmation" aria-label="显示确认密码" aria-pressed="false" title="显示确认密码"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg></button></span></label>
           <div class="auth-captcha">
@@ -895,6 +896,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260731-model-context-guidance-v1"></script>
+    <script type="module" src="/app.js?v=20260731-security-setup-token-v1"></script>
   </body>
 </html>

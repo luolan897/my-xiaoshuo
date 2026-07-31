@@ -14,6 +14,8 @@ type SessionCredentials = {
   user: { userId: string; username: string; displayName: string; role: "admin" | "user" };
 };
 
+const setupToken = "user-auth-test-setup-token-with-at-least-32-characters";
+
 const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
   "base64"
@@ -35,6 +37,7 @@ async function register(runtime: Runtime, username: string): Promise<SessionCred
     username,
     password: "secure-password-123",
     passwordConfirmation: "secure-password-123",
+    setupToken,
     ...captcha
   }).expect(201);
   expect(response.body.data.user.displayName).toBe(username);
@@ -54,7 +57,7 @@ function createUserAuthTestRuntime(allowRegistration = true): Runtime {
     masterSecret: "user-auth-test-master-secret-with-enough-length",
     serveUi: false,
     revealCaptchaAnswer: true,
-    security: { allowRegistration, enforceSameOrigin: true }
+    security: { allowRegistration, enforceSameOrigin: true, setupToken }
   });
   activeRuntimeApp = runtime.app;
   return {
@@ -230,7 +233,22 @@ describe("用户、作品权限与操作者追踪 API", () => {
   it("首个用户成为管理员，并完成作品邀请、共同编辑与越权拦截", async () => {
     await request(runtime.app).get("/api/works").expect(401);
     const initialSession = await request(runtime.app).get("/api/auth/session").expect(200);
-    expect(initialSession.body.data).toMatchObject({ authenticated: false, setupRequired: true, registrationOpen: true });
+    expect(initialSession.body.data).toMatchObject({
+      authenticated: false,
+      setupRequired: true,
+      setupTokenRequired: true,
+      registrationOpen: true
+    });
+
+    const invalidSetupCaptcha = await solveCaptcha(runtime.app);
+    const invalidSetup = await request(runtime.app).post("/api/auth/register").send({
+      username: "attacker",
+      password: "secure-password-123",
+      passwordConfirmation: "secure-password-123",
+      setupToken: "incorrect-setup-token-with-at-least-32-characters",
+      ...invalidSetupCaptcha
+    }).expect(403);
+    expect(invalidSetup.body.error.code).toBe("SETUP_TOKEN_INVALID");
 
     const admin = await register(runtime, "admin");
     const writer = await register(runtime, "writer");
@@ -346,7 +364,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         masterSecret: "user-auth-restart-test-master-secret-with-enough-length",
         serveUi: false,
         revealCaptchaAnswer: true,
-        security: { allowRegistration: true, enforceSameOrigin: true }
+        security: { allowRegistration: true, enforceSameOrigin: true, setupToken }
       });
       const user = await register(firstRuntime, "restart_user");
       await user.agent.get("/api/auth/session").expect(200);
@@ -358,7 +376,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         masterSecret: "user-auth-restart-test-master-secret-with-enough-length",
         serveUi: false,
         revealCaptchaAnswer: true,
-        security: { allowRegistration: true, enforceSameOrigin: true }
+        security: { allowRegistration: true, enforceSameOrigin: true, setupToken }
       });
       const expiredSession = await request(restartedRuntime.app)
         .get("/api/auth/session")
@@ -433,7 +451,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         masterSecret: "login-lock-restart-test-master-secret-with-enough-length",
         serveUi: false,
         revealCaptchaAnswer: true,
-        security: { allowRegistration: true, enforceSameOrigin: true }
+        security: { allowRegistration: true, enforceSameOrigin: true, setupToken }
       });
       await register(firstRuntime, "persistent_lock_user");
       for (let index = 0; index < 5; index += 1) {
@@ -448,7 +466,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         masterSecret: "login-lock-restart-test-master-secret-with-enough-length",
         serveUi: false,
         revealCaptchaAnswer: true,
-        security: { allowRegistration: true, enforceSameOrigin: true }
+        security: { allowRegistration: true, enforceSameOrigin: true, setupToken }
       });
       const stillLocked = await submitLogin(restartedRuntime, "persistent_lock_user", "secure-password-123");
       expect(stillLocked.status).toBe(429);

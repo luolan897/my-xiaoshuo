@@ -23,12 +23,17 @@ export type RuntimeSecurityOptions = {
   enforceSameOrigin?: boolean;
   allowPrivateAiEndpoints?: boolean;
   allowRegistration?: boolean;
+  setupToken?: string;
 };
 
 type RateEntry = { count: number; resetAt: number };
 
 const digest = (value: string): Buffer => createHash("sha256").update(value).digest();
 const constantTimeEqual = (left: string, right: string): boolean => timingSafeEqual(digest(left), digest(right));
+
+export function verifySetupToken(expected: string | undefined, provided: string | undefined): boolean {
+  return Boolean(expected && provided) && constantTimeEqual(expected ?? "", provided ?? "");
+}
 
 function requestKey(request: Request): string {
   return request.ip || request.socket.remoteAddress || "unknown";
@@ -297,12 +302,16 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
   const trustProxyValue = environment.APP_TRUST_PROXY?.trim() ?? "";
   const trustProxy = trustProxyValue === "true" ? true : /^\d+$/u.test(trustProxyValue) ? Number(trustProxyValue) : false;
   if (typeof trustProxy === "number" && (trustProxy < 0 || trustProxy > 10)) throw new Error("APP_TRUST_PROXY 只能是 true 或 0-10 的整数");
+  const allowRegistration = environment.APP_ALLOW_REGISTRATION === "true";
+  const setupToken = environment.APP_SETUP_TOKEN ?? "";
+  if (allowRegistration && setupToken.length < 32) throw new Error("开放注册时 APP_SETUP_TOKEN 至少需要 32 个字符");
   return {
     ...(username ? { auth: { username, password } } : {}),
     trustProxy,
     enforceSameOrigin: true,
     allowPrivateAiEndpoints: environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS === "true" || !production,
-    allowRegistration: environment.APP_ALLOW_REGISTRATION === "true"
+    allowRegistration,
+    ...(setupToken ? { setupToken } : {})
   };
 }
 

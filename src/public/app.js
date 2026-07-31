@@ -2484,7 +2484,7 @@ async function refreshAuthCaptcha(target = "login") {
   if (answerInput) answerInput.value = "";
 }
 
-function showAuth(setupRequired, registrationOpen = false) {
+function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = false) {
   if (state.user) return;
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
@@ -2501,6 +2501,10 @@ function showAuth(setupRequired, registrationOpen = false) {
   registerTab.disabled = !canRegister;
   registerTab.setAttribute("aria-disabled", String(!canRegister));
   registerTab.textContent = canRegister ? "注册" : "注册已禁用";
+  const setupTokenField = $("#register-setup-token-field");
+  const setupTokenInput = setupTokenField.querySelector('input[name="setupToken"]');
+  setupTokenField.classList.toggle("hidden", !setupTokenRequired);
+  setupTokenInput.required = setupTokenRequired;
   selectAuthMode(setupRequired && canRegister ? "register" : "login");
 }
 
@@ -2579,7 +2583,7 @@ async function initializeAuthentication() {
   if (!session.authenticated) {
     // 未登录时一律转到登录页路由；登录页本身则保持原样
     if (route.view !== "login") window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-    showAuth(session.setupRequired, session.registrationOpen === true);
+    showAuth(session.setupRequired, session.registrationOpen === true, session.setupTokenRequired === true);
     return false;
   }
   // 已登录却停在登录页路由时，回到书架首页
@@ -10381,6 +10385,7 @@ $("#register-form").addEventListener("submit", async (event) => {
         username: form.get("username"),
         password: form.get("password"),
         passwordConfirmation: form.get("passwordConfirmation"),
+        setupToken: form.get("setupToken") || undefined,
         captchaId: form.get("captchaId"),
         captchaAnswer: form.get("captchaAnswer")
       }
