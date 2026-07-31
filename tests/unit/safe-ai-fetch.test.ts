@@ -17,7 +17,7 @@ describe("assertSafeAiEndpoint", () => {
   });
 
   it("允许公网 HTTPS 地址", async () => {
-    await expect(assertSafeAiEndpoint("https://example.com/v1")).resolves.toEqual(expect.arrayContaining([
+    await expect(assertSafeAiEndpoint("https://93.184.216.34/v1")).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ family: expect.any(Number) })
     ]));
   });
