@@ -1777,22 +1777,24 @@ export class Store {
   }
 
   createChapter(workId: string, input: { volumeId: string; title: string; content?: string; chapterType?: ChapterType }): Record<string, unknown> {
-    this.getWork(workId);
-    const volume = this.getVolume(input.volumeId);
-    if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
-    const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId);
-    const chapterId = this.insertChapter(
-      workId,
-      input.volumeId,
-      input.title,
-      input.content ?? "",
-      numberValue(last ?? {}, "value") + 1,
-      "manual",
-      null,
-      input.chapterType ?? "正文"
-    );
-    this.audit(workId, "chapter.created", "chapter", chapterId);
-    return this.getChapter(chapterId);
+    return this.db.transaction(() => {
+      this.getWork(workId);
+      const volume = this.getVolume(input.volumeId);
+      if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
+      const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId);
+      const chapterId = this.insertChapter(
+        workId,
+        input.volumeId,
+        input.title,
+        input.content ?? "",
+        numberValue(last ?? {}, "value") + 1,
+        "manual",
+        null,
+        input.chapterType ?? "正文"
+      );
+      this.audit(workId, "chapter.created", "chapter", chapterId);
+      return this.getChapter(chapterId);
+    });
   }
 
   getChapter(chapterId: string): Record<string, unknown> {
