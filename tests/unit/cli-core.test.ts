@@ -72,6 +72,7 @@ describe("Scriverse CLI 核心", () => {
     expect(cliResourceDefinitions.race.update.properties.parentRaceId).toBe("新父种族 ID 或 null");
     expect(cliResourceDefinitions.draft.create.required).toEqual(["draftType", "title"]);
     expect(cliResourceDefinitions.draft.create.properties.draftType).toBe("prose | setting");
+    expect(cliResourceDefinitions.draft.create.properties.volumeId).toContain("分卷 ID");
     expect(cliResourceDefinitions.draft.actions).toEqual(["list", "get", "create", "update", "history", "restore"]);
   });
 

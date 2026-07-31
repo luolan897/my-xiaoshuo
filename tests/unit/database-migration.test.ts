@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 59 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 60 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -88,8 +88,9 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "change_note")).toBe(true);
     expect(first.all("PRAGMA table_info(audit_logs)").some((column) => column.name === "user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(entity_versions)").map((column) => column.name)).toEqual(expect.arrayContaining(["entity_type", "entity_id", "version_no", "snapshot_json"]));
-    expect(first.all("PRAGMA table_info(drafts)").map((column) => column.name)).toEqual(expect.arrayContaining(["work_id", "draft_type", "title", "content"]));
+    expect(first.all("PRAGMA table_info(drafts)").map((column) => column.name)).toEqual(expect.arrayContaining(["work_id", "draft_type", "volume_id", "setting_module", "title", "content"]));
     expect(first.all("PRAGMA index_list(drafts)").some((index) => index.name === "idx_drafts_work")).toBe(true);
+    expect(first.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'drafts'").map((row) => row.name)).toEqual(expect.arrayContaining(["drafts_binding_insert", "drafts_binding_update"]));
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);

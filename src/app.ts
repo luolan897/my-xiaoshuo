@@ -14,7 +14,7 @@ import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
-import { TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
+import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
@@ -167,6 +167,8 @@ const settingSchema = z.object({
 
 const draftSchema = z.object({
   draftType: z.enum(["prose", "setting"]),
+  volumeId: identifier.nullable().optional(),
+  settingModule: z.enum(DRAFT_SETTING_MODULES).nullable().optional(),
   title: nonEmpty.max(200),
   content: z.string().max(200_000)
 }).strict();
