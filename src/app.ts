@@ -21,7 +21,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -938,6 +938,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
   app.use(createAuthenticationRateLimitMiddleware());
+  app.use(createCaptchaRateLimitMiddleware());
   app.use(createApiRateLimitMiddleware(options.security?.apiRateLimit, options.security?.apiRateWindowMs));
   if (options.security?.enforceSameOrigin ?? true) app.use(createSameOriginMiddleware());
   app.use(express.json({ limit: "2mb" }));
@@ -988,6 +989,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     resolveBypassUser: getDevelopmentUser
   }));
   app.use(createUploadRateLimitMiddleware());
+  app.use(createExpensiveApiRateLimitMiddleware());
   app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
   app.get("/api/cli/session", (request, response) => {

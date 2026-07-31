@@ -192,6 +192,55 @@ export function createUploadRateLimitMiddleware(limit = 30, windowMs = 10 * 60_0
   };
 }
 
+export function createCaptchaRateLimitMiddleware(limit = 20, windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    if (request.method !== "GET" || request.path !== "/api/auth/captcha") return next();
+    const rate = consumeRate(entries, requestKey(request), limit, windowMs, entryLimit);
+    if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "captcha_rate_limit", retryAfterSeconds: rate.retryAfter });
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "CAPTCHA_RATE_LIMITED", message: "验证码请求过于频繁，请稍后重试" } });
+  };
+}
+
+type ExpensiveApiKind = "ai" | "export" | "search";
+
+function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null {
+  if (method === "GET" && /^\/api\/works\/[^/]+\/export$/u.test(path)) return "export";
+  if (method === "GET" && /^\/api\/works\/[^/]+\/search$/u.test(path)) return "search";
+  if (method !== "POST") return null;
+  if (
+    /^\/api\/works\/[^/]+\/(?:suggestions|chat\/stream|tasks)(?:\/|$)/u.test(path)
+    || /^\/api\/suggestions\/[^/]+\/guard$/u.test(path)
+    || /^\/api\/ai-conversations\/[^/]+\/(?:compact|context\/prepare)$/u.test(path)
+    || /^\/api\/tasks\/[^/]+\/(?:retry|cancel|relationship-changes\/apply)$/u.test(path)
+  ) {
+    return "ai";
+  }
+  return null;
+}
+
+const expensiveApiLimits: Record<ExpensiveApiKind, number> = {
+  ai: 30,
+  export: 10,
+  search: 60
+};
+
+export function createExpensiveApiRateLimitMiddleware(windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    const kind = expensiveApiKind(request.method, request.path);
+    if (!kind) return next();
+    const actorKey = request.authUser?.userId ?? requestKey(request);
+    const rate = consumeRate(entries, `${kind}:${actorKey}`, expensiveApiLimits[kind], windowMs, entryLimit);
+    if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "expensive_api_rate_limit", kind, retryAfterSeconds: rate.retryAfter });
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "EXPENSIVE_API_RATE_LIMITED", message: "该操作请求过于频繁，请稍后重试" } });
+  };
+}
+
 function parseIpv4(address: string): number[] | null {
   if (isIP(address) !== 4) return null;
   return address.split(".").map(Number);
