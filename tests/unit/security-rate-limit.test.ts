@@ -5,13 +5,14 @@ import {
   createApiRateLimitMiddleware,
   createCaptchaRateLimitMiddleware,
   createExpensiveApiRateLimitMiddleware,
-  createUploadRateLimitMiddleware
+  createUploadRateLimitMiddleware,
+  resolveTrustProxySetting
 } from "../../src/security.js";
 
 describe("安全限速器", () => {
   it("达到来源状态上限后淘汰最早条目", async () => {
     const app = express();
-    app.set("trust proxy", true);
+    app.set("trust proxy", 1);
     app.use(createApiRateLimitMiddleware(1, 60_000, 2));
     app.get("/api/test", (_request, response) => response.json({ ok: true }));
 
@@ -20,6 +21,16 @@ describe("安全限速器", () => {
     await request(app).get("/api/test").set("X-Forwarded-For", "192.0.2.2").expect(200);
     await request(app).get("/api/test").set("X-Forwarded-For", "192.0.2.3").expect(200);
     await request(app).get("/api/test").set("X-Forwarded-For", "192.0.2.1").expect(200);
+  });
+
+  it("未启用 trust proxy 时忽略可伪造的 X-Forwarded-For", async () => {
+    const app = express();
+    app.use(createApiRateLimitMiddleware(1, 60_000));
+    app.get("/api/test", (_request, response) => response.json({ ok: true }));
+
+    await request(app).get("/api/test").set("X-Forwarded-For", "198.51.100.1").expect(200);
+    const blocked = await request(app).get("/api/test").set("X-Forwarded-For", "198.51.100.2").expect(429);
+    expect(blocked.body.error.code).toBe("API_RATE_LIMITED");
   });
 
   it("对高成本上传路由应用独立限额", async () => {
@@ -63,5 +74,14 @@ describe("安全限速器", () => {
     }
     const blockedExport = await request(expensiveApp).get("/api/works/work_1/export").expect(429);
     expect(blockedExport.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
+  });
+});
+
+describe("trust proxy 解析", () => {
+  it("将 trust proxy=true 收敛为单跳", () => {
+    expect(resolveTrustProxySetting(true)).toBe(1);
+    expect(resolveTrustProxySetting(2)).toBe(2);
+    expect(resolveTrustProxySetting(false)).toBe(false);
+    expect(resolveTrustProxySetting(undefined)).toBeUndefined();
   });
 });

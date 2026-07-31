@@ -37,7 +37,22 @@ export function verifySetupToken(expected: string | undefined, provided: string 
 }
 
 function requestKey(request: Request): string {
-  return request.ip || request.socket.remoteAddress || "unknown";
+  const peer = request.socket.remoteAddress || "unknown";
+  const trustProxy = request.app?.get?.("trust proxy");
+  const trustsForwarded = trustProxy === true
+    || (typeof trustProxy === "number" && trustProxy > 0)
+    || (Array.isArray(trustProxy) && trustProxy.length > 0)
+    || (typeof trustProxy === "string" && trustProxy !== "false" && trustProxy.length > 0);
+  // 未启用 trust proxy 时忽略 X-Forwarded-For，始终按直连对端计限速。
+  if (!trustsForwarded) return peer;
+  return request.ip || peer;
+}
+
+/** 禁止 trust proxy=true（信任整条转发链）；至少收敛为单跳。 */
+export function resolveTrustProxySetting(trustProxy: boolean | number | undefined): boolean | number | undefined {
+  if (trustProxy === undefined) return undefined;
+  if (trustProxy === true) return 1;
+  return trustProxy;
 }
 
 function consumeRate(entries: Map<string, RateEntry>, key: string, limit: number, windowMs: number, entryLimit = maximumRateEntries): { allowed: boolean; retryAfter: number } {

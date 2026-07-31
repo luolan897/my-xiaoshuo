@@ -21,7 +21,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -921,7 +921,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.disable("x-powered-by");
-  if (options.security?.trustProxy !== undefined) app.set("trust proxy", options.security.trustProxy);
+  const trustProxy = resolveTrustProxySetting(options.security?.trustProxy);
+  if (options.security?.trustProxy === true) {
+    logger.warn("security.trust_proxy.coerced", { from: true, to: 1 });
+  }
+  if (trustProxy !== undefined) app.set("trust proxy", trustProxy);
   app.use(createRequestLoggingMiddleware());
   app.use(createSecurityHeadersMiddleware());
 
