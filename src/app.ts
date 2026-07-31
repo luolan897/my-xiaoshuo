@@ -345,7 +345,7 @@ const modelSchema = z.object({
   modelId: nonEmpty.max(300),
   purposes: optionalStrings,
   contextNote: z.string().max(10_000).optional(),
-  contextWindow: z.number().int().min(1_024).max(2_000_000).optional(),
+  contextWindow: z.number().int().min(32_768, "模型上下文不能低于 32768 Token").max(2_000_000).optional(),
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
   thinkingEnabled: z.boolean().optional(),
