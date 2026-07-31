@@ -47,6 +47,7 @@ describe("想法模块界面", () => {
     expect(styles.text).toContain('.draft-filter-toolbar { display: flex; align-items: center;');
     expect(styles.text).toContain('.draft-filter-toolbar select { min-width: 180px; min-height: 38px;');
     expect(styles.text).toContain('font-size: 11px; }');
+    expect(styles.text).toContain('.card-actions .record-card-edit { position: static; padding: 0; }');
     expect(styles.text).toContain('.editor-dialog { width: min(1180px, 94vw); max-height: calc(100dvh - 16px); }');
     expect(styles.text).toContain('.editor-dialog .dialog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 76dvh;');
     expect(styles.text).toContain('.editor-dialog .markdown-editor-field .vditor-editor-host.vditor { min-height: clamp(420px, 56dvh, 640px) !important; }');
