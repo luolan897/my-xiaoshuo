@@ -760,6 +760,37 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
   return restricted ? { ...result, restricted: true } : result;
 }
 
+/** SSE 错误事件只暴露 AppError 的公开信息，避免透传内部异常 message。 */
+export function publicAiStreamError(error: unknown): {
+  code: string;
+  message: string;
+  status?: number;
+  failure?: string;
+  callId?: string;
+  providerName?: string;
+  providerId?: string;
+  modelId?: string;
+  modelRecordId?: string;
+} {
+  if (error instanceof AppError) {
+    const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+      ? error.details as Record<string, unknown>
+      : null;
+    return {
+      code: error.code,
+      message: error.message,
+      status: error.status,
+      ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
+      ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
+      ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
+      ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
+      ...(typeof details?.modelId === "string" ? { modelId: details.modelId } : {}),
+      ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {})
+    };
+  }
+  return { code: "AI_STREAM_FAILED", message: "AI 流式调用失败" };
+}
+
 function redactMergeRecords(
   value: unknown,
   mapper: (record: Record<string, unknown>) => Record<string, unknown>
@@ -2219,20 +2250,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       });
     } catch (error) {
       if (!controller.signal.aborted) {
-        const details = error instanceof AppError && error.details && typeof error.details === "object" && !Array.isArray(error.details)
-          ? error.details as Record<string, unknown>
-          : null;
-        sendEvent("error", {
-          code: error instanceof AppError ? error.code : "AI_STREAM_FAILED",
-          message: error instanceof Error ? error.message : "AI 流式调用失败",
-          ...(error instanceof AppError ? { status: error.status } : {}),
-          ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
-          ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
-          ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
-          ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
-          ...(typeof details?.modelId === "string" ? { modelId: details.modelId } : {}),
-          ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {})
+        logger.error("ai.stream.failed", {
+          workId: request.params.workId,
+          error: sanitizeError(error)
         });
+        sendEvent("error", publicAiStreamError(error));
       }
     } finally {
       if (!response.writableEnded && !response.destroyed) response.end();
