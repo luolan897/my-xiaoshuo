@@ -4698,8 +4698,7 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     <div><strong>想法操作</strong><small>删除后将从想法列表移除，版本历史仍会保留。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除想法</button></div>
   </section>` : "";
-  const fields = `<p class="form-field-note">这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
-    + field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
+  const fields = field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
     + `<div class="draft-binding-field" data-draft-binding-field="prose">${field("volumeId", "绑定分卷", "select", item?.volumeId ?? "", volumeOptions)}</div>`
     + `<div class="draft-binding-field" data-draft-binding-field="setting">${field("settingModule", "绑定设定模块", "select", item?.settingModule ?? "", settingModuleOptions)}</div>`
     + field("title", "标题", "text", item?.title ?? "")
@@ -4731,7 +4730,8 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     submitLabel: viewOnly ? "关闭" : "保存想法",
     hideCancel: viewOnly,
     editor: true,
-    errorPrefix: "想法保存失败："
+    errorPrefix: "想法保存失败：",
+    meta: "这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。"
   });
   const draftTypeSelect = $("#dialog-fields").querySelector('select[name="draftType"]');
   const syncDraftBindingFields = () => {
