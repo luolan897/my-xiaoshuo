@@ -344,6 +344,15 @@ const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 const maximumAvatarFileSize = 5 * 1024 * 1024;
 
+function setAiAssistantStatus(status) {
+  const failed = status === "error";
+  const label = failed ? "创作助手状态：执行失败" : "创作助手状态：正常";
+  const dot = $("#ai-status-dot");
+  dot.classList.toggle("is-error", failed);
+  dot.setAttribute("aria-label", label);
+  dot.title = label;
+}
+
 function userAvatarInitial(user) {
   return Array.from(String(user?.displayName || user?.username || "作"))[0] ?? "作";
 }
@@ -9370,6 +9379,7 @@ async function sendAi() {
   try {
     await ensureAiModelsLoaded();
   } catch (error) {
+    setAiAssistantStatus("error");
     return toast(`创作助手加载失败：${error.message}`, "error");
   }
   const modelId = $("#ai-model").value;
@@ -9380,12 +9390,14 @@ async function sendAi() {
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
+  setAiAssistantStatus("ready");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   let persistedUserMessage = null;
   if (taskType !== "chat") {
     try {
       persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
     } catch (error) {
+      setAiAssistantStatus("error");
       return toast(`对话记录创建失败：${error.message}`, "error");
     }
     state.aiPromptSent = true;
@@ -9411,6 +9423,10 @@ async function sendAi() {
       applyAiConversationTitle(streamed.conversationTitle);
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
+      const suggestionFailed = suggestion.guard?.status === "failed"
+        || suggestion.toolCalls?.some((toolCall) => toolCall.status === "failed")
+        || suggestion.processSteps?.some((step) => step?.toolCall?.status === "failed");
+      if (suggestionFailed) setAiAssistantStatus("error");
       setAiContextMeter(suggestion.contextUsage);
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
@@ -9433,10 +9449,12 @@ async function sendAi() {
         } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id);
       }
     } catch (error) {
+      setAiAssistantStatus("error");
       if (suggestion) appendSuggestion(suggestion);
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
   } catch (error) {
+    setAiAssistantStatus("error");
     const failureMessage = formatAiFailureMessage(error);
     let persistedFailureMessage = null;
     try { persistedFailureMessage = await persistAiConversationMessage("assistant", failureMessage); } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
@@ -9564,6 +9582,7 @@ async function streamChat(body) {
         const toolCall = { ...payload };
         const round = toolCall.round;
         delete toolCall.round;
+        if (toolCall.status === "failed") setAiAssistantStatus("error");
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
         renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
@@ -9591,6 +9610,7 @@ async function streamChat(body) {
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
       } else if (eventName === "error") {
+        setAiAssistantStatus("error");
         streamError = createClientError(payload, "AI 流式调用失败", response.status);
       }
     };
