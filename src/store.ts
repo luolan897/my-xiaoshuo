@@ -1306,6 +1306,7 @@ export class Store {
       this.recordEntityVersion("work", workId, "delete", null, "删除作品");
       this.audit(null, "work.deleted", "work", workId, { title: work.title });
       this.db.run("DELETE FROM characters WHERE work_id = ?", workId);
+      this.db.run("DELETE FROM organizations WHERE work_id = ?", workId);
       this.db.run("UPDATE races SET parent_race_id = NULL WHERE work_id = ? AND parent_race_id IS NOT NULL", workId);
       this.db.run("DELETE FROM races WHERE work_id = ?", workId);
       this.db.run("DELETE FROM works WHERE id = ?", workId);
