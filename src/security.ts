@@ -27,6 +27,7 @@ export type RuntimeSecurityOptions = {
 };
 
 type RateEntry = { count: number; resetAt: number };
+const maximumRateEntries = 10_000;
 
 const digest = (value: string): Buffer => createHash("sha256").update(value).digest();
 const constantTimeEqual = (left: string, right: string): boolean => timingSafeEqual(digest(left), digest(right));
@@ -39,15 +40,20 @@ function requestKey(request: Request): string {
   return request.ip || request.socket.remoteAddress || "unknown";
 }
 
-function consumeRate(entries: Map<string, RateEntry>, key: string, limit: number, windowMs: number): { allowed: boolean; retryAfter: number } {
+function consumeRate(entries: Map<string, RateEntry>, key: string, limit: number, windowMs: number, entryLimit = maximumRateEntries): { allowed: boolean; retryAfter: number } {
   const currentTime = Date.now();
   const existing = entries.get(key);
   const entry = !existing || existing.resetAt <= currentTime ? { count: 0, resetAt: currentTime + windowMs } : existing;
   entry.count += 1;
-  entries.set(key, entry);
-  if (entries.size > 10_000) {
+  if (!existing && entries.size >= entryLimit) {
     for (const [candidate, value] of entries) if (value.resetAt <= currentTime) entries.delete(candidate);
+    while (entries.size >= entryLimit) {
+      const oldest = entries.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      entries.delete(oldest);
+    }
   }
+  entries.set(key, entry);
   return { allowed: entry.count <= limit, retryAfter: Math.max(1, Math.ceil((entry.resetAt - currentTime) / 1000)) };
 }
 
@@ -143,11 +149,11 @@ export function createSameOriginMiddleware(): RequestHandler {
   };
 }
 
-export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000): RequestHandler {
+export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
     if (!request.path.startsWith("/api/") || request.path === "/api/health") return next();
-    const rate = consumeRate(entries, requestKey(request), limit, windowMs);
+    const rate = consumeRate(entries, requestKey(request), limit, windowMs, entryLimit);
     if (rate.allowed) return next();
     logger.warn("security.request.blocked", { control: "api_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
@@ -165,6 +171,24 @@ export function createAuthenticationRateLimitMiddleware(limit = 10, windowMs = 1
     logger.warn("security.request.blocked", { control: "authentication_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
     response.status(429).json({ error: { code: "AUTH_RATE_LIMITED", message: "登录或注册尝试过于频繁，请稍后重试" } });
+  };
+}
+
+export function createUploadRateLimitMiddleware(limit = 30, windowMs = 10 * 60_000, entryLimit = maximumRateEntries): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    const uploadWrite = (request.method === "POST" || request.method === "PUT") && (
+      request.path === "/api/auth/avatar"
+      || request.path === "/api/works/import"
+      || /^\/api\/works\/[^/]+\/(?:import|cover|attachments)$/u.test(request.path)
+    );
+    if (!uploadWrite) return next();
+    const actorKey = request.authUser?.userId ?? requestKey(request);
+    const rate = consumeRate(entries, actorKey, limit, windowMs, entryLimit);
+    if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "upload_rate_limit", retryAfterSeconds: rate.retryAfter });
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "UPLOAD_RATE_LIMITED", message: "文件上传过于频繁，请稍后重试" } });
   };
 }
 
