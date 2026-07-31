@@ -19,7 +19,7 @@ describe("想法模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">想法</button>");
-    expect(page.text).toContain('/app.js?v=20260731-model-context-guidance-v1');
+    expect(page.text).toContain('/app.js?v=20260731-draft-delete-v2');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
     expect(application.text).toContain('field("content", "内容", "markdown"');
@@ -39,11 +39,15 @@ describe("想法模块界面", () => {
     expect(application.text).toContain('formDialogVditors.forEach(destroyVditorEditor)');
     expect(application.text).toContain('data-dialog-draft-delete');
     expect(application.text).not.toContain('data-delete-draft');
+    expect(application.text).toContain('title: "删除操作需要再次确认"');
+    expect(application.text).toContain('confirmLabel: "继续删除"');
+    expect(application.text).toContain('confirmLabel: "确认删除"');
     expect(application.text).toContain('editor: true');
     expect(application.text).toContain('dialog.classList.toggle("editor-dialog", Boolean(options.editor))');
     expect(styles.text).toContain('.draft-filter-toolbar { display: flex; align-items: center;');
     expect(styles.text).toContain('.draft-filter-toolbar select { min-width: 180px; min-height: 38px;');
     expect(styles.text).toContain('font-size: 11px; }');
+    expect(styles.text).toContain('.card-actions .record-card-edit { position: static; padding: 0; }');
     expect(styles.text).toContain('.editor-dialog { width: min(1180px, 94vw); max-height: calc(100dvh - 16px); }');
     expect(styles.text).toContain('.editor-dialog .dialog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 76dvh;');
     expect(styles.text).toContain('.editor-dialog .markdown-editor-field .vditor-editor-host.vditor { min-height: clamp(420px, 56dvh, 640px) !important; }');

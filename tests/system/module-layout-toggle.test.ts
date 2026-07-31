@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260731-model-context-guidance-v1');
-    expect(page.text).toContain('/app.js?v=20260731-model-context-guidance-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260731-model-context-guidance-v1"></script>');
+    expect(page.text).toContain('/styles.css?v=20260731-card-edit-placement-v1');
+    expect(page.text).toContain('/app.js?v=20260731-draft-delete-v2');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260731-draft-delete-v2"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -177,7 +177,7 @@ describe("知识模块布局切换", () => {
     expect(styles.text).toContain(".module-pagination { display: flex;");
     expect(styles.text).toContain(".module-pagination button { min-width: 58px; min-height: 28px;");
     expect(styles.text).toContain('.entity-editor-page.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"]');
-    expect(styles.text).toContain(".card-actions .record-card-edit { padding: 0; }");
+    expect(styles.text).toContain(".card-actions .record-card-edit { position: static; padding: 0; }");
     expect(styles.text).toContain("body.work-viewer-mode #timeline-multi-select-toggle");
   });
 });
