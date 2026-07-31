@@ -87,6 +87,34 @@ const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
+/** 出站 AI 响应体上限，防止恶意或故障供应商推送超大响应拖垮进程。 */
+export const AI_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+
+export async function readResponseTextLimited(
+  response: Response,
+  maximumBytes = AI_RESPONSE_MAX_BYTES
+): Promise<string> {
+  const declared = response.headers.get("content-length");
+  if (declared && /^\d+$/u.test(declared) && Number(declared) > maximumBytes) {
+    throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${maximumBytes} 字节上限`);
+  }
+  if (!response.body) return response.text();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value?.byteLength) continue;
+    total += value.byteLength;
+    if (total > maximumBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${maximumBytes} 字节上限`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
 const AUTO_RUN_FATAL_CODES = new Set([
   "CREDENTIAL_DECRYPT_FAILED",
   "MODEL_REQUIRED",
@@ -1936,7 +1964,7 @@ export class AiManager {
       })),
       signal
     });
-    const body = await response.text();
+    const body = await readResponseTextLimited(response);
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${body.slice(0, 300)}`);
     let payload: CompletionPayload;
     try {
@@ -2079,7 +2107,7 @@ export class AiManager {
           payload = (await response.json()) as { data?: Array<{ id?: string }> };
           break;
         }
-        const message = await response.text();
+        const message = await readResponseTextLimited(response);
         lastFailure = `HTTP ${response.status}: ${message.slice(0, 300)}`;
         if (response.status !== 404 || index === endpoints.length - 1) break;
       }
@@ -3939,7 +3967,7 @@ export class AiManager {
                 })),
                   signal: controller.signal
                 });
-                return { ok: response.ok, status: response.status, body: await response.text() };
+                return { ok: response.ok, status: response.status, body: await readResponseTextLimited(response) };
               } finally {
                 clearTimeout(timeout);
                 input.signal?.removeEventListener("abort", forwardAbort);
@@ -4376,7 +4404,7 @@ export class AiManager {
                 })),
                 signal: controller.signal
               });
-              if (!response.ok) return { ok: false as const, status: response.status, body: await response.text() };
+              if (!response.ok) return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
               const streamed = await this.readCompletionStream(
                 response,
                 protocol,
@@ -4638,8 +4666,16 @@ export class AiManager {
         appendContent(delta);
       }
     };
+    let receivedBytes = 0;
     while (true) {
       const chunk = await reader.read();
+      if (chunk.value?.byteLength) {
+        receivedBytes += chunk.value.byteLength;
+        if (receivedBytes > AI_RESPONSE_MAX_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${AI_RESPONSE_MAX_BYTES} 字节上限`);
+        }
+      }
       buffer += decoder.decode(chunk.value, { stream: !chunk.done });
       const events = buffer.split(/\r?\n\r?\n/u);
       buffer = events.pop() ?? "";

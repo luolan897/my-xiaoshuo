@@ -65,7 +65,22 @@ export function verifySetupToken(expected: string | undefined, provided: string 
 }
 
 function requestKey(request: Request): string {
-  return request.ip || request.socket.remoteAddress || "unknown";
+  const peer = request.socket.remoteAddress || "unknown";
+  const trustProxy = request.app?.get?.("trust proxy");
+  const trustsForwarded = trustProxy === true
+    || (typeof trustProxy === "number" && trustProxy > 0)
+    || (Array.isArray(trustProxy) && trustProxy.length > 0)
+    || (typeof trustProxy === "string" && trustProxy !== "false" && trustProxy.length > 0);
+  // 未启用 trust proxy 时忽略 X-Forwarded-For，始终按直连对端计限速。
+  if (!trustsForwarded) return peer;
+  return request.ip || peer;
+}
+
+/** 禁止 trust proxy=true（信任整条转发链）；至少收敛为单跳。 */
+export function resolveTrustProxySetting(trustProxy: boolean | number | undefined): boolean | number | undefined {
+  if (trustProxy === undefined) return undefined;
+  if (trustProxy === true) return 1;
+  return trustProxy;
 }
 
 function consumeRate(entries: Map<string, RateEntry>, key: string, limit: number, windowMs: number, entryLimit = maximumRateEntries): { allowed: boolean; retryAfter: number } {
@@ -220,6 +235,55 @@ export function createUploadRateLimitMiddleware(limit = 30, windowMs = 10 * 60_0
     logger.warn("security.request.blocked", { control: "upload_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
     response.status(429).json({ error: { code: "UPLOAD_RATE_LIMITED", message: "文件上传过于频繁，请稍后重试" } });
+  };
+}
+
+export function createCaptchaRateLimitMiddleware(limit = 20, windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    if (request.method !== "GET" || normalizeApiPath(request.path) !== "/api/auth/captcha") return next();
+    const rate = consumeRate(entries, requestKey(request), limit, windowMs, entryLimit);
+    if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "captcha_rate_limit", retryAfterSeconds: rate.retryAfter });
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "CAPTCHA_RATE_LIMITED", message: "验证码请求过于频繁，请稍后重试" } });
+  };
+}
+
+type ExpensiveApiKind = "ai" | "export" | "search";
+
+function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null {
+  if (method === "GET" && /^\/api\/works\/[^/]+\/export$/u.test(path)) return "export";
+  if (method === "GET" && /^\/api\/works\/[^/]+\/search$/u.test(path)) return "search";
+  if (method !== "POST") return null;
+  if (
+    /^\/api\/works\/[^/]+\/(?:suggestions|chat\/stream|tasks)(?:\/|$)/u.test(path)
+    || /^\/api\/suggestions\/[^/]+\/guard$/u.test(path)
+    || /^\/api\/ai-conversations\/[^/]+\/(?:compact|context\/prepare)$/u.test(path)
+    || /^\/api\/tasks\/[^/]+\/(?:retry|cancel|relationship-changes\/apply)$/u.test(path)
+  ) {
+    return "ai";
+  }
+  return null;
+}
+
+const expensiveApiLimits: Record<ExpensiveApiKind, number> = {
+  ai: 30,
+  export: 10,
+  search: 60
+};
+
+export function createExpensiveApiRateLimitMiddleware(windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    const kind = expensiveApiKind(request.method, normalizeApiPath(request.path));
+    if (!kind) return next();
+    const actorKey = request.authUser?.userId ?? requestKey(request);
+    const rate = consumeRate(entries, `${kind}:${actorKey}`, expensiveApiLimits[kind], windowMs, entryLimit);
+    if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "expensive_api_rate_limit", kind, retryAfterSeconds: rate.retryAfter });
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "EXPENSIVE_API_RATE_LIMITED", message: "该操作请求过于频繁，请稍后重试" } });
   };
 }
 
