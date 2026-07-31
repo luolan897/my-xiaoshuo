@@ -753,6 +753,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     sameOriginEnforced: options.security?.enforceSameOrigin ?? true
   });
   const database = new Database(options.databasePath);
+  const bootId = randomUUID();
   const temporaryAttachmentRoot = options.databasePath === ":memory:" && !options.attachmentDirectory
     ? mkdtempSync(join(tmpdir(), "scriverse-attachments-"))
     : null;
@@ -856,6 +857,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/health", (_request, response) => {
     data(response, {
       status: "ok",
+      bootId,
       version: APP_VERSION,
       protocol: "openai-chat-completions",
       protocols: ["openai-chat-completions", "anthropic-messages"],
@@ -876,12 +878,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const setupTokenRequired = setupRequired && Boolean(options.security?.setupToken);
     const developmentUser = getDevelopmentUser();
     if (!session && developmentUser) {
-      data(response, { authenticated: true, user: developmentUser, csrfToken: null, setupRequired: false, setupTokenRequired: false, registrationOpen });
+      data(response, { authenticated: true, user: developmentUser, csrfToken: null, bootId, setupRequired: false, setupTokenRequired: false, registrationOpen });
       return;
     }
     data(response, session
-      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, setupTokenRequired: false, registrationOpen }
-      : { authenticated: false, user: null, csrfToken: null, setupRequired, setupTokenRequired, registrationOpen });
+      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, bootId, setupRequired: false, setupTokenRequired: false, registrationOpen }
+      : { authenticated: false, user: null, csrfToken: null, bootId, setupRequired, setupTokenRequired, registrationOpen });
   });
   app.get("/api/auth/captcha", (_request, response) => {
     data(response, captcha.create());

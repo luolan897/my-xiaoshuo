@@ -42,6 +42,7 @@ describe("产品信息页脚", () => {
     expect(styles.text).toContain(".product-footer-meta { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }");
     expect(styles.text).toContain(".product-footer-development {");
     expect(health.body.data).toMatchObject({ version: APP_VERSION, development: true });
+    expect(health.body.data.bootId).toMatch(/^[0-9a-f-]{36}$/u);
   });
 
   it("缓存带版本静态资源并保持页面和接口不可缓存", async () => {
