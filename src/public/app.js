@@ -11,7 +11,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260731-skills-description-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260801-retain-usage-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -401,6 +401,7 @@ let aiReferencesLoadPromise = null;
 let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
+let latestAiContextUsage = null;
 const aiConversationHistoryPageLimit = 20;
 let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
@@ -1765,6 +1766,7 @@ async function openAiConversation(conversationId, hideHistory = true) {
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
+  resetAiContextMeter();
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
@@ -1792,7 +1794,7 @@ async function createNewAiConversation() {
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   hideAiContextWarning();
-  setAiContextMeter(null);
+  resetAiContextMeter();
   renderAiQuickActions();
   setAiHistoryVisible(false);
 }
@@ -3717,7 +3719,7 @@ function resetWorkScopedUiCaches() {
   resetAiFeed();
   $("#ai-conversation-title").textContent = "新对话";
   $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
-  setAiContextMeter(null);
+  resetAiContextMeter();
   renderAiConversationHistory();
 }
 
@@ -4764,8 +4766,7 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     <div><strong>想法操作</strong><small>删除后将从想法列表移除，版本历史仍会保留。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除想法</button></div>
   </section>` : "";
-  const fields = `<p class="form-field-note">这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
-    + field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
+  const fields = field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
     + `<div class="draft-binding-field" data-draft-binding-field="prose">${field("volumeId", "绑定分卷", "select", item?.volumeId ?? "", volumeOptions)}</div>`
     + `<div class="draft-binding-field" data-draft-binding-field="setting">${field("settingModule", "绑定设定模块", "select", item?.settingModule ?? "", settingModuleOptions)}</div>`
     + field("title", "标题", "text", item?.title ?? "")
@@ -4797,7 +4798,8 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     submitLabel: viewOnly ? "关闭" : "保存想法",
     hideCancel: viewOnly,
     editor: true,
-    errorPrefix: "想法保存失败："
+    errorPrefix: "想法保存失败：",
+    meta: "这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。"
   });
   const draftTypeSelect = $("#dialog-fields").querySelector('select[name="draftType"]');
   const syncDraftBindingFields = () => {
@@ -6983,10 +6985,12 @@ function renderAiContextDistribution(usage) {
 }
 
 function setAiContextMeter(usage) {
+  const displayUsage = resolveAiContextUsage(latestAiContextUsage, usage);
+  latestAiContextUsage = displayUsage;
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
-  renderAiContextDistribution(usage);
-  if (!usage) {
+  renderAiContextDistribution(displayUsage);
+  if (!displayUsage) {
     meter.classList.add("is-empty");
     meter.classList.remove("is-warning", "is-danger");
     meter.style.setProperty("--context-usage", "0");
@@ -6996,15 +7000,20 @@ function setAiContextMeter(usage) {
     meter.setAttribute("aria-label", tooltip);
     return;
   }
-  const percent = Math.max(0, Math.min(100, Number(usage.usagePercent) || 0));
+  const percent = Math.max(0, Math.min(100, Number(displayUsage.usagePercent) || 0));
   meter.classList.remove("is-empty");
   meter.classList.toggle("is-warning", percent >= 70 && percent < 90);
   meter.classList.toggle("is-danger", percent >= 90);
   meter.style.setProperty("--context-usage", String(percent));
   value.textContent = `${percent}%`;
-  const tooltip = formatAiContextUsageTooltip(usage);
+  const tooltip = formatAiContextUsageTooltip(displayUsage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
+}
+
+function resetAiContextMeter() {
+  latestAiContextUsage = null;
+  setAiContextMeter(null);
 }
 
 function setAiContextDistributionVisible(visible) {

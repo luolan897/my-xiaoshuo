@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "../../src/public/ai-context-meter.js";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "../../src/public/ai-context-meter.js";
 
 describe("AI 上下文用量提示", () => {
   it("按实际占用量显示一位小数百分比", () => {
@@ -17,6 +17,16 @@ describe("AI 上下文用量提示", () => {
       conversationBudgetTokens: 30_000,
       outputReserveTokens: 32_000
     })).toBe("总输入 12,345 / 128,000 tok · 作品上下文 6,000 tok · 对话历史 2,500 / 30,000 tok · 输出预留 32,000 tok");
+  });
+
+  it("下一轮用量返回前保留上一轮结果", () => {
+    const previousUsage = { inputTokens: 12_345, contextWindow: 128_000, usagePercent: 9.6 };
+    const nextUsage = { inputTokens: 18_000, contextWindow: 128_000, usagePercent: 14.1 };
+
+    expect(resolveAiContextUsage(previousUsage, null)).toBe(previousUsage);
+    expect(resolveAiContextUsage(previousUsage, undefined)).toBe(previousUsage);
+    expect(resolveAiContextUsage(previousUsage, nextUsage)).toBe(nextUsage);
+    expect(resolveAiContextUsage(null, null)).toBeNull();
   });
 
   it("按上下文窗口归一化五类 Token 分布", () => {

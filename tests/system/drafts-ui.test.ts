@@ -19,14 +19,15 @@ describe("想法模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">想法</button>");
-    expect(page.text).toContain('/app.js?v=20260801-system-restart-dialog-v1');
+    expect(page.text).toContain('/app.js?v=20260801-system-restart-dialog-v2');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
     expect(application.text).toContain('field("volumeId", "绑定分卷"');
     expect(application.text).toContain('field("settingModule", "绑定设定模块"');
     expect(application.text).toContain('field("content", "内容", "markdown"');
     expect(application.text).toContain('data-vditor-editor');
-    expect(application.text).toContain("可能采用，也可能永远不会写入正文或正式设定");
+    expect(application.text).toContain('meta: "这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。"');
+    expect(application.text).not.toContain('<p class="form-field-note">这里记录未确认的临时想法');
     expect(application.text).toContain('value="search_drafts"');
     expect(application.text).toContain('id="draft-type-filter"');
     expect(application.text).toContain('function mountDraftFilterToggle()');

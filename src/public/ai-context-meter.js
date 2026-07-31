@@ -13,6 +13,10 @@ function tokenCount(value) {
   return Math.max(0, Math.round(Number(value) || 0));
 }
 
+export function resolveAiContextUsage(previousUsage, nextUsage) {
+  return nextUsage && typeof nextUsage === "object" ? nextUsage : previousUsage ?? null;
+}
+
 export function formatAiContextUsagePercent(occupiedTokens, contextWindow) {
   const occupied = tokenCount(occupiedTokens);
   const window = tokenCount(contextWindow);
