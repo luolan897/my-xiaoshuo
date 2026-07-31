@@ -12,6 +12,7 @@ import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stre
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260801-retain-usage-v1";
+import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -1542,8 +1543,10 @@ function openAiToolCallDetail(toolCall) {
   time.textContent = formatAiToolCallTime(calledAt);
   if (calledAt && !Number.isNaN(new Date(calledAt).getTime())) time.dateTime = new Date(calledAt).toISOString();
   else time.removeAttribute("datetime");
+  const resultDetails = formatAiToolCallResult(toolCall?.result);
   $("#ai-tool-call-arguments").textContent = JSON.stringify(toolCall?.arguments ?? {}, null, 2);
-  $("#ai-tool-call-result").textContent = JSON.stringify(toolCall?.result ?? {}, null, 2);
+  $("#ai-tool-call-result-length").textContent = `${resultDetails.characterCount.toLocaleString("zh-CN")} 字符`;
+  $("#ai-tool-call-result").textContent = resultDetails.text;
   $("#ai-tool-call-dialog").showModal();
 }
 
