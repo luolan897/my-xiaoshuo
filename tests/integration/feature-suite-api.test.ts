@@ -425,6 +425,10 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
       name: "子种族",
       parentRaceId: parent.body.data.id
     }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "待删除角色",
+      raceId: parent.body.data.id
+    }).expect(201);
 
     await request(runtime.app).delete(`/api/works/${workId}`).expect(204);
     await request(runtime.app).get(`/api/works/${workId}`).expect(404);
