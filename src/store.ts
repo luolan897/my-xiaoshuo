@@ -1,6 +1,7 @@
 import { DRAFT_SETTING_MODULES, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
@@ -1353,11 +1354,21 @@ export class Store {
   }
 
   getWorkCover(workId: string): { mimeType: string; content: Buffer; byteLength: number; sha256: string; updatedAt: string } {
+    const cover = this.findWorkCover(workId);
+    if (!cover) throw notFound("作品封面");
+    return cover;
+  }
+
+  findWorkCover(workId: string): { mimeType: "image/jpeg" | "image/png" | "image/webp"; content: Buffer; byteLength: number; sha256: string; updatedAt: string } | null {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_covers WHERE work_id = ?", workId);
-    if (!row) throw notFound("作品封面");
+    if (!row) return null;
+    const mimeType = requiredString(row, "mime_type");
+    if (mimeType !== "image/jpeg" && mimeType !== "image/png" && mimeType !== "image/webp") {
+      throw new AppError(500, "INVALID_COVER_MIME", "作品封面类型无效");
+    }
     return {
-      mimeType: requiredString(row, "mime_type"),
+      mimeType,
       content: Buffer.from(row.content as Uint8Array),
       byteLength: numberValue(row, "byte_length"),
       sha256: requiredString(row, "sha256"),
@@ -7966,6 +7977,23 @@ export class Store {
       }
     }
     return lines.join("\n").trimEnd() + "\n";
+  }
+
+  async exportDocx(workId: string): Promise<Buffer> {
+    const tree = this.getWorkTree(workId);
+    const cover = this.findWorkCover(workId);
+    const volumes = (tree.volumes as Record<string, unknown>[]).map((volume) => ({
+      title: String(volume.title),
+      chapters: (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
+        title: String(chapter.title),
+        content: String(chapter.content ?? "")
+      }))
+    }));
+    return exportWorkDocx({
+      title: String(tree.title),
+      volumes,
+      cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
+    });
   }
 
   listAuditLogs(workId: string): Record<string, unknown>[] {
