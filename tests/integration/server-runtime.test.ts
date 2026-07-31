@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity } from "../../src/security.js";
-import { isDevelopmentServer, startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
+import { isDevelopmentServer, isLoopbackHost, startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
 import { APP_VERSION } from "../../src/version.js";
 
 const roots: string[] = [];
@@ -35,6 +35,23 @@ describe("本地服务运行时", () => {
     expect(isDevelopmentServer({ NODE_ENV: "production", npm_lifecycle_event: "start" })).toBe(false);
     expect(isDevelopmentServer({ NODE_ENV: "development" })).toBe(true);
     expect(isDevelopmentServer({ npm_lifecycle_event: "dev" })).toBe(true);
+  });
+
+  it("开发免登录仅允许绑定回环地址", async () => {
+    expect(isLoopbackHost("localhost")).toBe(true);
+    expect(isLoopbackHost("127.0.0.2")).toBe(true);
+    expect(isLoopbackHost("::1")).toBe(true);
+    expect(isLoopbackHost("0.0.0.0")).toBe(false);
+
+    const root = mkdtempSync(join(tmpdir(), "scriverse-dev-auth-host-"));
+    roots.push(root);
+    await expect(startLocalServer({
+      host: "0.0.0.0",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: { NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true" }
+    })).rejects.toThrow("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
   });
 
   it("使用隔离数据目录启动 API 和完整网页", async () => {
