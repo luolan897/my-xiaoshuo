@@ -36,6 +36,9 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('compaction.dataset.testid = "ai-process-context-compaction"');
     expect(application).toContain('compaction.innerHTML = "<span>已压缩上下文</span>"');
     expect(application).toContain('setAiContextMeter(payload.contextUsage);');
+    expect(application).toContain("const displayUsage = resolveAiContextUsage(latestAiContextUsage, usage);");
+    expect(application).toContain("latestAiContextUsage = displayUsage;");
+    expect(application).toContain("function resetAiContextMeter()");
     expect(application).toContain("normalizeAiContextTokenDistribution");
     expect(application).toContain("formatAiContextUsagePercent");
     expect(application).toContain("setAiContextDistributionVisible");
