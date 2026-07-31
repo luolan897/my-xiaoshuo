@@ -1,10 +1,54 @@
 export const AGENT_TOOL_RESULT_MAX_CHARS = 10_000;
+export const AGENT_TOOL_CALL_SOFT_WARNING_REMAINING = 6;
 
 export type AgentToolResultPagination = {
   cursor: number;
   nextCursor: number | null;
   maxChars: number;
 };
+
+export type AgentToolCallQuotaNotice = {
+  level: "warning" | "critical";
+  remaining: number;
+  message: string;
+};
+
+export function buildAgentToolCallQuotaNotice(remaining: number): AgentToolCallQuotaNotice | null {
+  if (!Number.isFinite(remaining) || remaining <= 0) return null;
+  if (remaining === 1) {
+    return {
+      level: "critical",
+      remaining: 0,
+      message: "重要提示：现在没有可用的工具调用次数了。请立即根据已有工具结果直接总结作答，不得再请求任何工具。若继续发起工具调用，系统将拒绝并报错。"
+    };
+  }
+  if (remaining <= AGENT_TOOL_CALL_SOFT_WARNING_REMAINING) {
+    return {
+      level: "warning",
+      remaining,
+      message: `提醒：本轮工具调用配额即将用尽，当前剩余 ${remaining} 次。请尽快收敛并准备最终答案，避免继续大规模检索。`
+    };
+  }
+  return null;
+}
+
+export function withAgentToolCallQuotaNotice(
+  result: Record<string, unknown>,
+  remaining: number
+): Record<string, unknown> {
+  const notice = buildAgentToolCallQuotaNotice(remaining);
+  if (!notice) return result;
+  return { ...result, toolCallQuotaNotice: notice };
+}
+
+export function shouldRejectAgentToolCalls(executedCount: number, requestedCount: number, limit: number): boolean {
+  if (!Number.isFinite(executedCount) || !Number.isFinite(requestedCount) || !Number.isFinite(limit)) return true;
+  if (requestedCount <= 0) return false;
+  if (executedCount + requestedCount > limit) return true;
+  // 最后一档配额保留给硬拒绝：在倒数第一次配额注入 critical 后，再请求工具即失败。
+  if (limit > 1 && executedCount >= limit - 1) return true;
+  return false;
+}
 
 type StructuralFragment = {
   value: unknown;

@@ -14,7 +14,9 @@ import {
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   paginateToolResultRecords,
-  structuralToolResultRecords
+  shouldRejectAgentToolCalls,
+  structuralToolResultRecords,
+  withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
@@ -4170,7 +4172,7 @@ export class AiManager {
         const round = toolRound + 1;
         recordChoiceProcess(choice, round, true);
         const toolCalls = choice.message.tool_calls;
-        if (executedToolCalls.length + toolCalls.length > agentToolCallLimit) {
+        if (shouldRejectAgentToolCalls(executedToolCalls.length, toolCalls.length, agentToolCallLimit)) {
           throw new Error(`AI requested more than ${agentToolCallLimit} tool calls in one response cycle.`);
         }
         const normalizedToolCalls = toolCalls.map((toolCall) => ({
@@ -4203,6 +4205,8 @@ export class AiManager {
             maximumResultChars
           });
           executedToolCalls.push(execution);
+          const remainingToolCalls = Math.max(0, agentToolCallLimit - executedToolCalls.length);
+          execution.result = withAgentToolCallQuotaNotice(execution.result, remainingToolCalls);
           toolTraceRound?.toolExecutions.push(execution);
           saveTrace();
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });
