@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260801-system-restart-dialog-v2');
-    expect(page.text).toContain('/styles.css?v=20260801-system-restart-dialog-v2');
+    expect(page.text).toContain('/app.js?v=20260801-usage-calendar-tooltip-v1');
+    expect(page.text).toContain('/styles.css?v=20260801-usage-calendar-tooltip-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -329,6 +329,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
+    expect(application.text).toContain('class="usage-calendar-tooltip" role="tooltip" hidden');
+    expect(application.text).toContain('cell.addEventListener("mouseenter", () => showTooltip(cell))');
+    expect(application.text).toContain('cell.addEventListener("click", () => showTooltip(cell))');
+    expect(styles.text).toContain('.usage-calendar-tooltip { position: absolute;');
     expect(aiUsage.text).toContain("export function buildUsageCalendar");
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
