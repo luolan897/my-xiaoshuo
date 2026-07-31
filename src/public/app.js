@@ -10203,8 +10203,11 @@ function hasUnsavedEditorChanges() {
   return state.dirty || entityEditorDirty || characterSectionEditorDirty;
 }
 
-$("#system-restart-confirm").addEventListener("click", () => {
-  if (hasUnsavedEditorChanges() && !window.confirm("检测到尚未保存的编辑内容。确定放弃这些内容并重新登录吗？")) return;
+$("#system-restart-confirm").addEventListener("click", async () => {
+  if (hasUnsavedEditorChanges() && !(await confirmToast(
+    "检测到尚未保存的编辑内容。确定放弃这些内容并重新登录吗？",
+    { title: "放弃未保存修改", confirmLabel: "放弃并重新登录", cancelLabel: "继续编辑" }
+  ))) return;
   systemRestartReloading = true;
   window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
   window.location.reload();

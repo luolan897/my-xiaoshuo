@@ -47,7 +47,8 @@ describe("系统重启登录提示", () => {
     expect(page.text).not.toContain('aria-label="关闭系统重启提示"');
     expect(application.text).toContain('$("#system-restart-dialog").addEventListener("cancel", (event) => {');
     expect(application.text).toContain("function hasUnsavedEditorChanges()");
-    expect(application.text).toContain('!window.confirm("检测到尚未保存的编辑内容。确定放弃这些内容并重新登录吗？")');
+    expect(application.text).toContain('hasUnsavedEditorChanges() && !(await confirmToast(');
+    expect(application.text).toContain('{ title: "放弃未保存修改", confirmLabel: "放弃并重新登录", cancelLabel: "继续编辑" }');
     expect(application.text).toContain("if (!systemRestartReloading && hasUnsavedEditorChanges()) event.preventDefault();");
     expect(application.text).toContain('window.history.replaceState(null, "", serializePageRoute({ view: "login" }));');
     expect(application.text).toContain("window.location.reload();");
