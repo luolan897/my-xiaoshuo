@@ -1,5 +1,5 @@
 import { analysisTasks, works as sourceWorks } from "./data.js";
-import { buildBrowserAiMessages, createBrowserAiStore, normalizeProviderBaseUrl, publicProvider, requestBrowserAi, testBrowserAiProvider } from "./browser-ai.js";
+import { buildBrowserAiMessages, createBrowserAiStore, normalizeProviderBaseUrl, publicProvider, requestBrowserAi, testBrowserAiModel, testBrowserAiProvider } from "./browser-ai.js";
 import { DEMO_CREDENTIALS as demoCredentials, isValidDemoLogin } from "./demo-auth.js";
 import { DEMO_COVER_VERSIONS, DEMO_VERSION } from "./demo-version.js";
 
@@ -141,6 +141,11 @@ function buildWork(source) {
     members: [],
     versionNo: 1
   }));
+  races.forEach((race) => {
+    const parent = races.find((candidate) => candidate.name === race.parentName);
+    race.parentId = parent?.id ?? null;
+    race.path = parent ? [parent.name, race.name] : [race.name];
+  });
   const organizations = source.organizations.map((organization, index) => ({
     id: `${id}-organization-${index + 1}`,
     workId: id,
@@ -263,6 +268,27 @@ function buildWork(source) {
     createdAt: now,
     updatedAt: now
   }));
+  const chapterAnnotations = chapters.slice(0, 3).map((chapter, index) => {
+    const lines = chapter.content.replace(/\r\n?/gu, "\n").split("\n");
+    const startLine = Math.min(lines.length, index + 1);
+    const endLine = Math.min(lines.length, startLine + (index === 1 ? 1 : 0));
+    return {
+      id: `${id}-chapter-annotation-${index + 1}`,
+      workId: id,
+      chapterId: chapter.id,
+      kind: index === 1 ? "todo" : "note",
+      startLine,
+      endLine,
+      quote: lines.slice(startLine - 1, endLine).join("\n"),
+      note: ["确认这里的时间线与前一章衔接。", "补充角色进入场景时的动作。", "这句氛围很好，可以在后文形成呼应。"][index],
+      status: index === 2 ? "resolved" : "open",
+      versionNo: 1,
+      actor: demoUser.displayName,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null
+    };
+  });
   const wordTotal = chapters.reduce((total, chapter) => total + chapter.wordCount, 0);
   return {
     id,
@@ -290,7 +316,18 @@ function buildWork(source) {
     relationships,
     reviews: [],
     tasks,
-    chapterAnnotations: [],
+    chapterAnnotations,
+    relationshipSearchIndex: {
+      workId: id,
+      status: "ready",
+      generation: 1,
+      queuedSourceCount: 0,
+      queuedSources: [],
+      indexedSourceCount: settings.length + characters.length + organizations.length + timeline.length + relationships.length,
+      indexedParagraphCount: chapters.reduce((total, chapter) => total + chapter.content.replace(/\r\n?/gu, "\n").split(/\n{2,}/u).length, 0),
+      error: "",
+      updatedAt: now
+    },
     auditLogs: [
       { id: `${id}-audit-work`, action: "work.created", entityType: "work", entityId: id, actor: "体验作者", userId: "demo-user", detail: {}, createdAt: now },
       { id: `${id}-audit-import`, action: "work.imported", entityType: "work", entityId: id, actor: "体验作者", userId: "demo-user", detail: { chapters: chapters.length }, createdAt: now }
@@ -445,11 +482,38 @@ function writingProgress(work) {
 
 const demoId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 const defaultWorkAiSettings = () => ({ systemPrompt: "", bookSummaryContextPercent: 20, contextCompactThreshold: 80, agentTools: [], autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 });
+const minimumModelContextWindow = 32_768;
 const modelWithProvider = (model, providers) => {
   const provider = providers.find((item) => item.id === model.providerId);
   return { ...model, providerName: provider?.name ?? "未找到供应商", providerStatus: provider?.status ?? "disabled", providerConnectionStatus: provider?.connectionStatus ?? "untested" };
 };
-const contextUsage = (model) => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, contextWindow: Number(model?.contextWindow ?? 128000), usagePercent: 0, conversationUsagePercent: 0, compactThreshold: 80 });
+
+function contextUsage(model, conversation = null) {
+  const contextWindow = Math.max(minimumModelContextWindow, Number(model?.contextWindow ?? 128_000));
+  const systemPromptTokens = 320;
+  const functionTokens = 180;
+  const skillsTokens = 0;
+  const contextTokens = 1_200;
+  const conversationTokens = (conversation?.messages ?? []).reduce((total, message) => total + Math.ceil(Array.from(String(message.content ?? "")).length / 2), 0);
+  const conversationBudgetTokens = Math.max(1, Math.floor(contextWindow * 0.45));
+  const outputReserveTokens = Math.min(32_000, Number(model?.preset?.max_tokens ?? 32_000));
+  const inputTokens = systemPromptTokens + functionTokens + contextTokens + conversationTokens;
+  const occupiedTokens = inputTokens + outputReserveTokens;
+  return {
+    inputTokens,
+    outputTokens: 0,
+    totalTokens: inputTokens,
+    contextTokens,
+    conversationTokens,
+    conversationBudgetTokens,
+    outputReserveTokens,
+    contextWindow,
+    usagePercent: Math.min(100, Math.round(occupiedTokens / contextWindow * 100)),
+    conversationUsagePercent: Math.min(100, Math.round(conversationTokens / conversationBudgetTokens * 100)),
+    compactThreshold: 80,
+    tokenDistribution: { systemPromptTokens, functionTokens, skillsTokens, contextTokens: contextTokens + conversationTokens }
+  };
+}
 
 function conversationSummaries(state, workId) {
   return [...(state.conversations[workId] ?? [])]
@@ -459,6 +523,80 @@ function conversationSummaries(state, workId) {
 
 function findConversation(state, conversationId) {
   return Object.values(state.conversations).flat().find((item) => item.id === conversationId);
+}
+
+function createConversationRecord(workId, title = "新对话") {
+  const createdAt = new Date().toISOString();
+  return { id: demoId("conversation"), workId, title, messages: [], createdAt, updatedAt: createdAt, contextWarningPending: false, compactedMessageCount: 0, hasCompactedSummary: false };
+}
+
+function conversationSummary(conversation) {
+  const { messages, ...summary } = conversation;
+  return { ...summary, messageCount: messages.length, preview: messages.at(-1)?.content ?? "" };
+}
+
+function appendConversationMessage(conversation, { role, content, citations = [], metadata = {} }) {
+  const createdAt = new Date().toISOString();
+  const message = { id: demoId("message"), conversationId: conversation.id, role, content: String(content ?? ""), citations, metadata, createdAt };
+  conversation.messages.push(message);
+  conversation.updatedAt = createdAt;
+  if (conversation.title === "新对话" && role === "user") conversation.title = Array.from(message.content.replace(/\s+/gu, " ").trim()).slice(0, 15).join("") || "新对话";
+  return message;
+}
+
+function demoTokenUsage(workId = null, includeWorks = false) {
+  const state = browserAiStore.read();
+  const targetWorks = workId ? works.filter((work) => work.id === workId) : works;
+  const workRows = targetWorks.map((work) => {
+    const messages = (state.conversations[work.id] ?? []).flatMap((conversation) => conversation.messages ?? []);
+    const inputTokens = messages.filter((message) => message.role === "user").reduce((total, message) => total + Math.ceil(Array.from(String(message.content ?? "")).length / 2), 0);
+    const outputTokens = messages.filter((message) => message.role === "assistant").reduce((total, message) => total + Number(message.metadata?.outputTokens ?? Math.ceil(Array.from(String(message.content ?? "")).length / 2)), 0);
+    const timestamps = messages.map((message) => String(message.createdAt ?? "")).filter(Boolean).sort();
+    return {
+      workId: work.id,
+      workTitle: work.title,
+      totalTokens: inputTokens + outputTokens,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens: 0,
+      cacheEligibleInputTokens: 0,
+      cacheHitRate: null,
+      requestCount: messages.filter((message) => message.role === "assistant").length,
+      estimatedRequestCount: messages.filter((message) => message.role === "assistant").length,
+      firstUsedAt: timestamps[0] ?? null,
+      lastUsedAt: timestamps.at(-1) ?? null
+    };
+  });
+  const summary = workRows.reduce((total, row) => ({
+    ...total,
+    totalTokens: total.totalTokens + row.totalTokens,
+    inputTokens: total.inputTokens + row.inputTokens,
+    outputTokens: total.outputTokens + row.outputTokens,
+    requestCount: total.requestCount + row.requestCount,
+    estimatedRequestCount: total.estimatedRequestCount + row.estimatedRequestCount,
+    firstUsedAt: [total.firstUsedAt, row.firstUsedAt].filter(Boolean).sort()[0] ?? null,
+    lastUsedAt: [total.lastUsedAt, row.lastUsedAt].filter(Boolean).sort().at(-1) ?? null
+  }), { totalTokens: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheEligibleInputTokens: 0, cacheHitRate: null, requestCount: 0, estimatedRequestCount: 0, firstUsedAt: null, lastUsedAt: null });
+  const dailyByDate = new Map();
+  for (const work of targetWorks) {
+    for (const conversation of state.conversations[work.id] ?? []) {
+      for (const message of conversation.messages ?? []) {
+        const date = String(message.createdAt ?? new Date().toISOString()).slice(0, 10);
+        const row = dailyByDate.get(date) ?? { date, totalTokens: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheEligibleInputTokens: 0, cacheHitRate: null, requestCount: 0, estimatedRequestCount: 0 };
+        const tokens = Number(message.metadata?.outputTokens ?? Math.ceil(Array.from(String(message.content ?? "")).length / 2));
+        if (message.role === "assistant") {
+          row.outputTokens += tokens;
+          row.requestCount += 1;
+          row.estimatedRequestCount += 1;
+        } else if (message.role === "user") {
+          row.inputTokens += tokens;
+        }
+        row.totalTokens += tokens;
+        dailyByDate.set(date, row);
+      }
+    }
+  }
+  return { summary, daily: [...dailyByDate.values()].sort((left, right) => left.date.localeCompare(right.date)), ...(includeWorks ? { works: workRows.sort((left, right) => right.totalTokens - left.totalTokens || left.workTitle.localeCompare(right.workTitle, "zh-CN")) } : {}), timezoneOffset: 0 };
 }
 
 async function runBrowserAi(body, workId) {
@@ -484,11 +622,53 @@ async function runBrowserAi(body, workId) {
   return { ...result, model: modelWithProvider(model, state.providers) };
 }
 
+async function runBrowserChat(body, workId) {
+  let conversationId = "";
+  let contextConversation;
+  let userMessage = null;
+  browserAiStore.update((state) => {
+    let conversation = body.conversationId ? findConversation(state, body.conversationId) : null;
+    if (!conversation) {
+      conversation = createConversationRecord(workId);
+      state.conversations[workId] = [conversation, ...(state.conversations[workId] ?? [])];
+    }
+    conversationId = conversation.id;
+    contextConversation = conversationSummary(conversation);
+    if (!body.currentMessageId) {
+      userMessage = appendConversationMessage(conversation, { role: "user", content: body.instruction, citations: body.citations ?? [] });
+    }
+  });
+  const result = await runBrowserAi({ ...body, conversationId }, workId);
+  let assistantMessage;
+  let completedConversation;
+  browserAiStore.update((state) => {
+    const conversation = findConversation(state, conversationId);
+    if (!conversation) return;
+    assistantMessage = appendConversationMessage(conversation, {
+      role: "assistant",
+      content: result.content,
+      metadata: { modelDisplayName: result.model.displayName, outputTokens: result.outputTokens }
+    });
+    completedConversation = conversation;
+  });
+  return {
+    ...result,
+    conversationId,
+    contextConversation,
+    userMessage,
+    assistantMessage,
+    conversationTitle: completedConversation?.title ?? "新对话",
+    contextUsage: contextUsage(result.model, completedConversation)
+  };
+}
+
 function aiStreamResponse(result) {
   const outputTokens = result.outputTokens || Math.max(1, Math.ceil(Array.from(result.content).length / 2));
   const events = [
+    `event: context\ndata: ${JSON.stringify({ action: "ready", usage: result.contextUsage, conversation: result.contextConversation })}`,
+    ...(result.userMessage ? [`event: user_message\ndata: ${JSON.stringify({ message: result.userMessage })}`] : []),
     `event: delta\ndata: ${JSON.stringify({ delta: result.content })}`,
-    `event: complete\ndata: ${JSON.stringify({ model: { id: result.model.id, displayName: result.model.displayName }, outputTokens, toolCalls: [], processSteps: [] })}`
+    `event: complete\ndata: ${JSON.stringify({ model: { id: result.model.id, displayName: result.model.displayName }, outputTokens, toolCalls: [], processSteps: [], contextUsage: result.contextUsage, conversationId: result.conversationId, conversationTitle: result.conversationTitle, messageId: result.assistantMessage?.id, messageCreatedAt: result.assistantMessage?.createdAt })}`
   ];
   return new Response(`${events.join("\n\n")}\n\n`, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
 }
@@ -532,6 +712,7 @@ async function mockApi(input, init = {}) {
     const provider = {
       id: demoId("provider"),
       name: String(body.name ?? "").trim(),
+      protocol: body.protocol === "anthropic-messages" ? "anthropic-messages" : "openai-chat-completions",
       baseUrl: normalizeProviderBaseUrl(body.baseUrl),
       apiKey: String(body.apiKey ?? "").trim(),
       concurrencyLimit: Number(body.concurrencyLimit ?? 10),
@@ -539,7 +720,7 @@ async function mockApi(input, init = {}) {
       maxTokens: Number(body.maxTokens ?? 32000),
       note: String(body.note ?? ""),
       status: body.status === "disabled" ? "disabled" : "enabled",
-      connectionStatus: "untested",
+      connectionStatus: "unchecked",
       lastError: null
     };
     browserAiStore.update((state) => { state.providers.push(provider); });
@@ -556,6 +737,7 @@ async function mockApi(input, init = {}) {
     browserAiStore.update((current) => { current.platformSettings = { ...current.platformSettings, ...body }; });
     return success({ ...state.platformSettings, ...body });
   }
+  if (path === "/api/platform/ai/usage") return success(demoTokenUsage(null, true));
   let match = path.match(/^\/api\/providers\/([^/]+)$/u);
   if (match) {
     const providerId = decodeURIComponent(match[1]);
@@ -566,7 +748,7 @@ async function mockApi(input, init = {}) {
       if (!provider) return;
       const connectionChanged = body.baseUrl !== undefined || String(body.apiKey ?? "").trim();
       Object.assign(provider, body, body.baseUrl !== undefined ? { baseUrl: normalizeProviderBaseUrl(body.baseUrl) } : {}, String(body.apiKey ?? "").trim() ? { apiKey: String(body.apiKey).trim() } : {});
-      if (connectionChanged) Object.assign(provider, { connectionStatus: "untested", lastError: null });
+      if (connectionChanged) Object.assign(provider, { connectionStatus: "unchecked", lastError: null });
       updated = provider;
     });
     return updated ? success(publicProvider(updated)) : failure("未找到 AI 供应商");
@@ -577,9 +759,9 @@ async function mockApi(input, init = {}) {
     const provider = browserAiStore.read().providers.find((item) => item.id === providerId);
     if (!provider) return failure("未找到 AI 供应商");
     try {
-      await testBrowserAiProvider({ fetchImpl: nativeFetch, provider });
+      const result = await testBrowserAiProvider({ fetchImpl: nativeFetch, provider });
       browserAiStore.update((state) => { Object.assign(state.providers.find((item) => item.id === providerId), { connectionStatus: "success", lastError: null }); });
-      return success({ ok: true });
+      return success({ ...result, provider: publicProvider(browserAiStore.read().providers.find((item) => item.id === providerId)) });
     } catch (error) {
       const message = error instanceof TypeError ? "浏览器无法直连该地址，请确认服务商支持 CORS" : error.message;
       browserAiStore.update((state) => { Object.assign(state.providers.find((item) => item.id === providerId), { connectionStatus: "failed", lastError: message }); });
@@ -592,6 +774,7 @@ async function mockApi(input, init = {}) {
     const body = await bodyOf(init);
     const state = browserAiStore.read();
     if (!state.providers.some((item) => item.id === providerId)) return failure("未找到 AI 供应商");
+    if (Number(body.contextWindow ?? 128_000) < minimumModelContextWindow) return failure("模型上下文不能低于 32768 Token", 400);
     const model = { id: demoId("model"), providerId, displayName: String(body.displayName ?? "").trim(), modelId: String(body.modelId ?? "").trim(), purposes: body.purposes ?? ["chat"], contextWindow: Number(body.contextWindow ?? 128000), preset: body.preset ?? { temperature: 0.7, max_tokens: 32000 }, thinkingEnabled: body.thinkingEnabled !== false, enabled: body.enabled !== false };
     browserAiStore.update((current) => { current.models.push(model); });
     return success(modelWithProvider(model, state.providers), 201);
@@ -600,6 +783,7 @@ async function mockApi(input, init = {}) {
   if (match) {
     const modelId = decodeURIComponent(match[1]);
     const body = await bodyOf(init);
+    if (body.contextWindow !== undefined && Number(body.contextWindow) < minimumModelContextWindow) return failure("模型上下文不能低于 32768 Token", 400);
     let updated;
     browserAiStore.update((state) => {
       const model = state.models.find((item) => item.id === modelId);
@@ -608,6 +792,25 @@ async function mockApi(input, init = {}) {
       updated = modelWithProvider(model, state.providers);
     });
     return updated ? success(updated) : failure("未找到模型");
+  }
+  match = path.match(/^\/api\/models\/([^/]+)\/test$/u);
+  if (match) {
+    const modelId = decodeURIComponent(match[1]);
+    const state = browserAiStore.read();
+    const model = state.models.find((item) => item.id === modelId);
+    const provider = state.providers.find((item) => item.id === model?.providerId);
+    if (!model) return failure("未找到模型");
+    if (!provider) return failure("未找到 AI 供应商");
+    try {
+      const result = await testBrowserAiModel({ fetchImpl: nativeFetch, provider, model });
+      browserAiStore.update((current) => { Object.assign(current.providers.find((item) => item.id === provider.id), { connectionStatus: "success", lastError: null }); });
+      const current = browserAiStore.read();
+      return success({ ...result, model: modelWithProvider(model, current.providers), provider: publicProvider(current.providers.find((item) => item.id === provider.id)) });
+    } catch (error) {
+      const message = error instanceof TypeError ? "浏览器无法直连该地址，请确认服务商支持 CORS" : error.message;
+      browserAiStore.update((current) => { Object.assign(current.providers.find((item) => item.id === provider.id), { connectionStatus: "failed", lastError: message }); });
+      return success({ ok: false, error: message, model: modelWithProvider(model, browserAiStore.read().providers) });
+    }
   }
   match = path.match(/^\/api\/works\/([^/]+)\/models$/u);
   if (match) {
@@ -622,6 +825,12 @@ async function mockApi(input, init = {}) {
     if (method === "GET") return success(settings);
     browserAiStore.update((state) => { state.workSettings[workId] = { ...settings, ...body }; });
     return success({ ...settings, ...body });
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/ai-settings\/usage$/u);
+  if (match) {
+    const workId = decodeURIComponent(match[1]);
+    if (!findWork(workId)) return failure("未找到作品");
+    return success(demoTokenUsage(workId));
   }
   match = path.match(/^\/api\/works\/([^/]+)\/task-defaults$/u);
   if (match) {
@@ -640,14 +849,45 @@ async function mockApi(input, init = {}) {
     browserAiStore.update((state) => { state.taskDefaults[workId] = { ...(state.taskDefaults[workId] ?? {}), [taskType]: body.modelId }; });
     return success({ taskType, modelId: body.modelId });
   }
+  match = path.match(/^\/api\/works\/([^/]+)\/ai-settings\/relationship-search-index(?:\/(sync|rebuild))?$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const action = match[2];
+    if (!action || method === "GET") return success({ ...work.relationshipSearchIndex });
+    if (action === "sync" && work.relationshipSearchIndex.queuedSourceCount === 0) return success({ ...work.relationshipSearchIndex }, 202);
+    const queuedSources = action === "rebuild"
+      ? [
+          { sourceType: "chapter", count: work.chapters.filter((chapter) => !chapter.deletedAt).length, oldestQueuedAt: new Date().toISOString() },
+          { sourceType: "setting", count: work.settings.length, oldestQueuedAt: new Date().toISOString() }
+        ].filter((item) => item.count > 0)
+      : work.relationshipSearchIndex.queuedSources;
+    work.relationshipSearchIndex = {
+      ...work.relationshipSearchIndex,
+      status: "queued",
+      queuedSources,
+      queuedSourceCount: queuedSources.reduce((total, item) => total + item.count, 0),
+      updatedAt: new Date().toISOString()
+    };
+    window.setTimeout(() => {
+      work.relationshipSearchIndex = {
+        ...work.relationshipSearchIndex,
+        status: "ready",
+        generation: work.relationshipSearchIndex.generation + 1,
+        queuedSourceCount: 0,
+        queuedSources: [],
+        updatedAt: new Date().toISOString()
+      };
+    }, 80);
+    return success({ ...work.relationshipSearchIndex }, 202);
+  }
   match = path.match(/^\/api\/works\/([^/]+)\/ai-conversations$/u);
   if (match) {
     const workId = decodeURIComponent(match[1]);
     if (method === "GET") return success(page(conversationSummaries(browserAiStore.read(), workId), url));
-    const createdAt = new Date().toISOString();
-    const conversation = { id: demoId("conversation"), workId, title: "新对话", messages: [], createdAt, updatedAt: createdAt, contextWarningPending: false };
+    const conversation = createConversationRecord(workId);
     browserAiStore.update((state) => { state.conversations[workId] = [conversation, ...(state.conversations[workId] ?? [])]; });
-    return success({ ...conversation, messageCount: 0 }, 201);
+    return success(conversationSummary(conversation), 201);
   }
   match = path.match(/^\/api\/ai-conversations\/([^/]+)$/u);
   if (match) {
@@ -658,34 +898,71 @@ async function mockApi(input, init = {}) {
   if (match) {
     const conversationId = decodeURIComponent(match[1]);
     const body = await bodyOf(init);
-    const message = { id: demoId("message"), role: body.role, content: String(body.content ?? ""), citations: body.citations ?? [], metadata: body.metadata ?? {}, createdAt: new Date().toISOString() };
+    let message;
     let found = false;
     browserAiStore.update((state) => {
       const conversation = findConversation(state, conversationId);
       if (!conversation) return;
-      conversation.messages.push(message);
-      conversation.updatedAt = message.createdAt;
-      if (conversation.title === "新对话" && message.role === "user") conversation.title = Array.from(message.content).slice(0, 18).join("") || "新对话";
+      message = appendConversationMessage(conversation, body);
       found = true;
     });
     return found ? success(message, 201) : failure("未找到 AI 对话");
   }
+  match = path.match(/^\/api\/ai-conversations\/([^/]+)\/fork$/u);
+  if (match) {
+    const sourceId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    let forked;
+    browserAiStore.update((state) => {
+      const source = findConversation(state, sourceId);
+      if (!source) return;
+      const boundary = source.messages.findIndex((message) => message.id === body.messageId);
+      if (boundary < 0) return;
+      forked = createConversationRecord(source.workId, String(body.title ?? `${source.title}（分支）`));
+      forked.messages = source.messages.slice(0, boundary + 1).map((message) => ({ ...message, id: demoId("message"), conversationId: forked.id }));
+      forked.updatedAt = forked.messages.at(-1)?.createdAt ?? forked.createdAt;
+      state.conversations[source.workId] = [forked, ...(state.conversations[source.workId] ?? [])];
+    });
+    return forked ? success(conversationSummary(forked), 201) : failure("未找到可分支的对话消息");
+  }
   match = path.match(/^\/api\/ai-conversations\/([^/]+)\/context\/prepare$/u);
   if (match) {
+    const conversation = findConversation(browserAiStore.read(), decodeURIComponent(match[1]));
+    if (!conversation) return failure("未找到 AI 对话");
     const body = await bodyOf(init);
     const model = browserAiStore.read().models.find((item) => item.id === body.modelId);
-    return success({ action: "ready", usage: contextUsage(model) });
+    return success({ action: "ready", usage: contextUsage(model, conversation) });
+  }
+  match = path.match(/^\/api\/ai-conversations\/([^/]+)\/compact$/u);
+  if (match) {
+    const conversationId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    let compacted;
+    browserAiStore.update((state) => {
+      const conversation = findConversation(state, conversationId);
+      if (!conversation) return;
+      const compactedMessageCount = Math.max(0, conversation.messages.length - 4);
+      const changed = compactedMessageCount > Number(conversation.compactedMessageCount ?? 0);
+      conversation.compactedMessageCount = Math.max(Number(conversation.compactedMessageCount ?? 0), compactedMessageCount);
+      conversation.hasCompactedSummary = conversation.compactedMessageCount > 0;
+      conversation.contextWarningPending = false;
+      const model = state.models.find((item) => item.id === body.modelId);
+      compacted = { changed, compactedMessageCount: conversation.compactedMessageCount, usage: contextUsage(model, conversation) };
+    });
+    return compacted ? success(compacted) : failure("未找到 AI 对话");
   }
   match = path.match(/^\/api\/works\/([^/]+)\/ai-context-usage$/u);
   if (match) {
     const body = await bodyOf(init);
-    const model = browserAiStore.read().models.find((item) => item.id === body.modelId);
-    return success(contextUsage(model));
+    const state = browserAiStore.read();
+    const model = state.models.find((item) => item.id === body.modelId);
+    const conversation = body.conversationId ? findConversation(state, body.conversationId) : null;
+    return success(contextUsage(model, conversation));
   }
   match = path.match(/^\/api\/works\/([^/]+)\/chat\/stream$/u);
   if (match) {
     try {
-      return aiStreamResponse(await runBrowserAi(await bodyOf(init), decodeURIComponent(match[1])));
+      return aiStreamResponse(await runBrowserChat(await bodyOf(init), decodeURIComponent(match[1])));
     } catch (error) {
       const message = error instanceof TypeError ? "浏览器直连失败，请确认接口地址、网络与 CORS 配置" : error.message;
       return failure(message, 502);
@@ -697,7 +974,8 @@ async function mockApi(input, init = {}) {
       const body = await bodyOf(init);
       const result = await runBrowserAi(body, decodeURIComponent(match[1]));
       const chapter = allChapters().find((item) => item.id === body.scope?.chapterId);
-      return success({ id: demoId("suggestion"), content: result.content, action: "note", chapterVersion: chapter?.versionNo ?? 1, outputTokens: result.outputTokens || Math.max(1, Math.ceil(Array.from(result.content).length / 2)), model: { id: result.model.id, displayName: result.model.displayName } }, 201);
+      const conversation = body.conversationId ? findConversation(browserAiStore.read(), body.conversationId) : null;
+      return success({ id: demoId("suggestion"), content: result.content, action: "note", chapterVersion: chapter?.versionNo ?? 1, outputTokens: result.outputTokens || Math.max(1, Math.ceil(Array.from(result.content).length / 2)), model: { id: result.model.id, displayName: result.model.displayName }, contextUsage: contextUsage(result.model, conversation) }, 201);
     } catch (error) {
       const message = error instanceof TypeError ? "浏览器直连失败，请确认接口地址、网络与 CORS 配置" : error.message;
       return failure(message, 502);
@@ -724,6 +1002,20 @@ async function mockApi(input, init = {}) {
   if (match) {
     const work = findWork(decodeURIComponent(match[1]));
     return work ? success(page(work.auditLogs, url)) : failure("未找到作品");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/chapter-annotations$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const annotations = work.chapterAnnotations
+      .filter((annotation) => !annotation.deletedAt && work.chapters.some((chapter) => chapter.id === annotation.chapterId && !chapter.deletedAt))
+      .map((annotation) => {
+        const chapter = work.chapters.find((item) => item.id === annotation.chapterId);
+        const volume = work.volumes.find((item) => item.id === chapter?.volumeId);
+        return { ...annotation, chapterTitle: chapter?.title ?? "未找到章节", volumeTitle: volume?.title ?? "正文" };
+      })
+      .sort((left, right) => Number(left.status === "resolved") - Number(right.status === "resolved") || String(right.createdAt).localeCompare(String(left.createdAt)));
+    return success(page(annotations, url));
   }
   match = path.match(/^\/api\/works\/([^/]+)\/writing-progress$/u);
   if (match) {
@@ -863,6 +1155,13 @@ async function mockApi(input, init = {}) {
     recordAudit(work, "chapter.annotation.updated", "chapter-annotation", annotation.id, { status: annotation.status, versionNo: annotation.versionNo });
     return success(annotation);
   }
+  match = path.match(/^\/api\/volumes\/([^/]+)\/chapters$/u);
+  if (match) {
+    const volumeId = decodeURIComponent(match[1]);
+    const work = works.find((item) => item.volumes.some((volume) => volume.id === volumeId));
+    const volume = work?.volumes.find((item) => item.id === volumeId);
+    return volume ? success(page(volume.chapters.filter((chapter) => !chapter.deletedAt), url)) : failure("未找到分卷");
+  }
   match = path.match(/^\/api\/works\/([^/]+)\/volumes$/u);
   if (match && method === "POST") {
     const work = findWork(decodeURIComponent(match[1]));
@@ -985,6 +1284,12 @@ async function mockApi(input, init = {}) {
     const work = findWork(decodeURIComponent(match[1]));
     if (!work) return failure("未找到作品");
     const key = ({ "timeline-tracks": "timelineTracks", "ai-conversations": "aiConversations" })[match[2]] ?? match[2];
+    if (match[2] === "races") {
+      const scope = url.searchParams.get("scope");
+      if (scope === "roots") return success({ items: work.races.filter((race) => !race.parentId), total: work.races.length });
+      if (scope === "descendants") return success(work.races.filter((race) => race.parentId));
+      if (!url.searchParams.has("page") && !url.searchParams.has("limit")) return success(work.races);
+    }
     return success(page(work[key] ?? [], url));
   }
   match = path.match(/^\/api\/works\/([^/]+)\/presence$/u);
