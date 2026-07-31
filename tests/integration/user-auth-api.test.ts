@@ -1443,6 +1443,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(promoted.body.data.role).toBe("admin");
     const disabled = await admin.agent.patch(`/api/users/${writer.user.userId}`).set("X-CSRF-Token", admin.csrfToken).send({ status: "disabled" }).expect(200);
     expect(disabled.body.data.status).toBe("disabled");
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM user_sessions WHERE user_id = ? AND revoked_at IS NULL",
+      writer.user.userId
+    )).toEqual({ count: 0 });
     await writer.agent.get("/api/works").expect(401);
   });
 

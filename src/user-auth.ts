@@ -474,9 +474,17 @@ export class UserAuthService {
       const activeAdmins = Number(this.database.get("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND status = 'active'")?.count ?? 0);
       if (activeAdmins <= 1) throw new AppError(409, "LAST_ADMIN_REQUIRED", "系统至少需要保留一名可用管理员");
     }
-    this.database.run("UPDATE users SET role = ?, status = ?, updated_at = ? WHERE id = ?", nextRole, nextStatus, new Date().toISOString(), userId);
-    if (nextStatus === "disabled") this.database.run("UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL", new Date().toISOString(), userId);
-    return this.getUser(userId);
+    return this.database.transaction(() => {
+      this.database.run("UPDATE users SET role = ?, status = ?, updated_at = ? WHERE id = ?", nextRole, nextStatus, new Date().toISOString(), userId);
+      if (nextStatus === "disabled") {
+        this.database.run(
+          "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+          new Date().toISOString(),
+          userId
+        );
+      }
+      return this.getUser(userId);
+    });
   }
 
   updateProfile(userId: string, displayName: string): AuthUser {
