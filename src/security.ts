@@ -29,6 +29,34 @@ export type RuntimeSecurityOptions = {
 type RateEntry = { count: number; resetAt: number };
 const maximumRateEntries = 10_000;
 
+/**
+ * Express 默认路由大小写不敏感，但 request.path 保留原始大小写。
+ * 安全中间件统一用小写路径做匹配，避免 /API/... 一类变体绕过鉴权与限速。
+ */
+export function normalizeApiPath(pathname: string): string {
+  return pathname.toLocaleLowerCase("en-US");
+}
+
+/** 强制保持大小写不敏感路由，并拒绝后续改成大小写敏感。 */
+export function enforceCaseInsensitiveRouting(app: { set: (setting: string, value?: unknown) => unknown }): void {
+  app.set("case sensitive routing", false);
+  const originalSet = app.set.bind(app) as {
+    (setting: string): unknown;
+    (setting: string, value: unknown): unknown;
+  };
+  app.set = function lockedCaseInsensitiveRouting(setting: string, value?: unknown) {
+    // Express 用单参数 app.set(name) 读取配置；不能把它改写成写入。
+    if (arguments.length < 2) return originalSet(setting);
+    if (String(setting).toLocaleLowerCase("en-US") === "case sensitive routing") {
+      if (value) {
+        throw new Error("Case-sensitive routing is disabled; API security matches paths case-insensitively");
+      }
+      return originalSet(setting, false);
+    }
+    return originalSet(setting, value);
+  } as typeof app.set;
+}
+
 const digest = (value: string): Buffer => createHash("sha256").update(value).digest();
 const constantTimeEqual = (left: string, right: string): boolean => timingSafeEqual(digest(left), digest(right));
 
@@ -96,7 +124,7 @@ export function createBasicAuthMiddleware(options: BasicAuthOptions): RequestHan
   const failureWindowMs = options.failureWindowMs ?? 15 * 60_000;
   const failures = new Map<string, RateEntry>();
   return (request, response, next) => {
-    if (request.path === "/api/health") return next();
+    if (normalizeApiPath(request.path) === "/api/health") return next();
     const key = requestKey(request);
     const credentials = parseBasicCredentials(request.get("authorization"));
     const valid = credentials
@@ -129,7 +157,7 @@ export function createSecurityHeadersMiddleware(): RequestHandler {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("X-Frame-Options", "DENY");
     response.setHeader("X-Permitted-Cross-Domain-Policies", "none");
-    response.setHeader("Cache-Control", request.path.startsWith("/api/") ? "no-store" : "private, no-cache");
+    response.setHeader("Cache-Control", normalizeApiPath(request.path).startsWith("/api/") ? "no-store" : "private, no-cache");
     response.vary("Authorization");
     if (request.secure) response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     next();
@@ -167,7 +195,8 @@ export function createSameOriginMiddleware(): RequestHandler {
 export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
-    if (!request.path.startsWith("/api/") || request.path === "/api/health") return next();
+    const path = normalizeApiPath(request.path);
+    if (!path.startsWith("/api/") || path === "/api/health") return next();
     const rate = consumeRate(entries, requestKey(request), limit, windowMs, entryLimit);
     if (rate.allowed) return next();
     logger.warn("security.request.blocked", { control: "api_rate_limit", retryAfterSeconds: rate.retryAfter });
@@ -179,9 +208,10 @@ export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000, ent
 export function createAuthenticationRateLimitMiddleware(limit = 10, windowMs = 15 * 60_000): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
-    const authenticationWrite = request.method === "POST" && ["/api/auth/login", "/api/auth/register"].includes(request.path);
+    const path = normalizeApiPath(request.path);
+    const authenticationWrite = request.method === "POST" && ["/api/auth/login", "/api/auth/register"].includes(path);
     if (!authenticationWrite) return next();
-    const rate = consumeRate(entries, `${requestKey(request)}:${request.path}`, limit, windowMs);
+    const rate = consumeRate(entries, `${requestKey(request)}:${path}`, limit, windowMs);
     if (rate.allowed) return next();
     logger.warn("security.request.blocked", { control: "authentication_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
@@ -192,10 +222,11 @@ export function createAuthenticationRateLimitMiddleware(limit = 10, windowMs = 1
 export function createUploadRateLimitMiddleware(limit = 30, windowMs = 10 * 60_000, entryLimit = maximumRateEntries): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
+    const path = normalizeApiPath(request.path);
     const uploadWrite = (request.method === "POST" || request.method === "PUT") && (
-      request.path === "/api/auth/avatar"
-      || request.path === "/api/works/import"
-      || /^\/api\/works\/[^/]+\/(?:import|cover|attachments)$/u.test(request.path)
+      path === "/api/auth/avatar"
+      || path === "/api/works/import"
+      || /^\/api\/works\/[^/]+\/(?:import|cover|attachments)$/u.test(path)
     );
     if (!uploadWrite) return next();
     const actorKey = request.authUser?.userId ?? requestKey(request);
@@ -210,7 +241,7 @@ export function createUploadRateLimitMiddleware(limit = 30, windowMs = 10 * 60_0
 export function createCaptchaRateLimitMiddleware(limit = 20, windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
-    if (request.method !== "GET" || request.path !== "/api/auth/captcha") return next();
+    if (request.method !== "GET" || normalizeApiPath(request.path) !== "/api/auth/captcha") return next();
     const rate = consumeRate(entries, requestKey(request), limit, windowMs, entryLimit);
     if (rate.allowed) return next();
     logger.warn("security.request.blocked", { control: "captcha_rate_limit", retryAfterSeconds: rate.retryAfter });
@@ -245,7 +276,7 @@ const expensiveApiLimits: Record<ExpensiveApiKind, number> = {
 export function createExpensiveApiRateLimitMiddleware(windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
-    const kind = expensiveApiKind(request.method, request.path);
+    const kind = expensiveApiKind(request.method, normalizeApiPath(request.path));
     if (!kind) return next();
     const actorKey = request.authUser?.userId ?? requestKey(request);
     const rate = consumeRate(entries, `${kind}:${actorKey}`, expensiveApiLimits[kind], windowMs, entryLimit);

@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260801-system-restart-dialog-v2">
+    <link rel="stylesheet" href="/styles.css?v=20260801-compact-divider-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -74,7 +74,7 @@
         <button id="mobile-module-tab" class="mobile-module-tab" type="button" aria-label="打开作品模块" aria-expanded="false">模块</button>
         <div id="work-meta" class="work-meta">尚未选择作品</div>
         <div class="top-actions">
-          <span id="save-state" class="save-state">就绪</span>
+          <span id="save-state" class="save-state" role="status" aria-live="polite" aria-label="系统状态：检测中">检测中</span>
           <div id="presence-control" class="presence-control hidden">
             <button id="presence-button" class="presence-button" type="button" aria-expanded="false" aria-controls="presence-panel"><span class="presence-status-dot" aria-hidden="true"></span><span id="presence-count">1 人</span></button>
             <section id="presence-panel" class="presence-panel hidden" aria-label="当前作品在线协作者">
@@ -908,6 +908,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-system-restart-dialog-v2"></script>
+    <script type="module" src="/app.js?v=20260801-system-health-ai-message-date-compact-divider-v1"></script>
   </body>
 </html>

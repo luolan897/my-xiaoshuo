@@ -1544,6 +1544,37 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await writer.agent.get("/api/works").expect(401);
   });
 
+  it("大小写变体 API 路径不能绕过鉴权、作品授权或管理员校验", async () => {
+    const admin = await register(runtime, "case_admin");
+    const writer = await register(runtime, "case_writer");
+    const outsider = await register(runtime, "case_outsider");
+    const work = await admin.agent.post("/api/works").set("X-CSRF-Token", admin.csrfToken).send({ title: "大小写作品" }).expect(201);
+    const workId = work.body.data.id as string;
+    await admin.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", admin.csrfToken).send({
+      userId: writer.user.userId,
+      role: "editor"
+    }).expect(201);
+
+    await request(runtime.app).get(`/API/WORKS/${workId}`).expect(401);
+    await request(runtime.app).get(`/api/WORKS/${workId}`).expect(401);
+    await outsider.agent.get(`/API/WORKS/${workId}`).expect(403);
+    await outsider.agent.get(`/api/WORKS/${workId}`).expect(403);
+    await writer.agent.get(`/API/WORKS/${workId}`).expect(200);
+    await writer.agent.get(`/api/WORKS/${workId}`).expect(200);
+
+    const escalateUpper = await writer.agent.patch(`/API/USERS/${writer.user.userId}`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({ role: "admin" })
+      .expect(403);
+    expect(escalateUpper.body.error.code).toBe("ADMIN_REQUIRED");
+    const escalateMixed = await writer.agent.patch(`/api/USERS/${writer.user.userId}`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({ role: "admin" })
+      .expect(403);
+    expect(escalateMixed.body.error.code).toBe("ADMIN_REQUIRED");
+    expect(runtime.database.get("SELECT role FROM users WHERE id = ?", writer.user.userId)?.role).toBe("user");
+  });
+
   it("管理员可统一设置界面与分模块分页，普通用户只能读取", async () => {
     const admin = await register(runtime, "ui_admin");
     const writer = await register(runtime, "ui_writer");

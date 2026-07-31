@@ -6,6 +6,7 @@ import { sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
+import { normalizeApiPath } from "./security.js";
 import {
   canReadWorkModule,
   canWriteWorkModule,
@@ -167,8 +168,10 @@ function workIdFromPath(database: Database, pathname: string): string | null {
   const decoded = pathname.split("/").map((part) => {
     try { return decodeURIComponent(part); } catch { return part; }
   });
-  if (decoded[1] !== "api") return null;
-  if (decoded[2] === "works" && decoded[3] && decoded[3] !== "import") return decoded[3];
+  const root = (decoded[1] ?? "").toLocaleLowerCase("en-US");
+  const resource = (decoded[2] ?? "").toLocaleLowerCase("en-US");
+  if (root !== "api") return null;
+  if (resource === "works" && decoded[3] && decoded[3].toLocaleLowerCase("en-US") !== "import") return decoded[3];
   const tableByResource: Record<string, string> = {
     volumes: "volumes",
     chapters: "chapters",
@@ -189,7 +192,7 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     "ai-conversations": "ai_conversations",
     suggestions: "ai_suggestions"
   };
-  const table = tableByResource[decoded[2] ?? ""];
+  const table = tableByResource[resource];
   if (table && decoded[3]) {
     const row = database.get<{ work_id: string }>(`SELECT work_id FROM ${table} WHERE id = ?`, decoded[3]);
     if (row) return row.work_id;
@@ -216,7 +219,7 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     }
     throw notFound("记录");
   }
-  if (decoded[2] === "foreshadow-occurrences" && decoded[3]) {
+  if (resource === "foreshadow-occurrences" && decoded[3]) {
     const row = database.get<{ work_id: string }>(
       `SELECT foreshadow.work_id FROM foreshadow_occurrences occurrence
        JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id WHERE occurrence.id = ?`,
@@ -225,10 +228,10 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     if (!row) throw notFound("伏笔出现点");
     return row.work_id;
   }
-  if (decoded[2] === "entity-versions" && decoded[3] && decoded[4]) {
+  if (resource === "entity-versions" && decoded[3] && decoded[4]) {
     const row = database.get<{ work_id: string }>(
       "SELECT work_id FROM entity_versions WHERE entity_type = ? AND entity_id = ? LIMIT 1",
-      decoded[3],
+      decoded[3].toLocaleLowerCase("en-US"),
       decoded[4]
     );
     if (!row) throw notFound("版本记录");
@@ -464,6 +467,7 @@ export class UserAuthService {
   }
 
   updateUser(actor: AuthUser, userId: string, input: { role?: "admin" | "user"; status?: "active" | "disabled" }): AuthUser {
+    if (actor.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
     const current = this.getUser(userId);
     const nextRole = input.role ?? current.role;
     const nextStatus = input.status ?? current.status;
@@ -764,17 +768,18 @@ export function createUserSessionMiddleware(
       request.authUser = session.user;
       request.authMethod = "session";
     }
-    const isPublic = request.path === "/api/health"
-      || request.path === "/api/auth/session"
-      || (request.path === "/api/auth/register" && request.method === "POST")
-      || (request.path === "/api/auth/login" && request.method === "POST")
-      || !request.path.startsWith("/api/");
+    const path = normalizeApiPath(request.path);
+    const isPublic = path === "/api/health"
+      || path === "/api/auth/session"
+      || (path === "/api/auth/register" && request.method === "POST")
+      || (path === "/api/auth/login" && request.method === "POST")
+      || !path.startsWith("/api/");
     if (!session && !apiKey && !isPublic) {
       logger.warn("auth.request.rejected", { reason: "authentication_required", method: request.method, path: sanitizeRequestPath(request.path) });
       response.status(401).json({ error: { code: "AUTH_REQUIRED", message: "请先登录" } });
       return;
     }
-    if (session && !["GET", "HEAD", "OPTIONS"].includes(request.method) && request.path !== "/api/auth/login" && request.path !== "/api/auth/register") {
+    if (session && !["GET", "HEAD", "OPTIONS"].includes(request.method) && path !== "/api/auth/login" && path !== "/api/auth/register") {
       const csrf = request.get("x-csrf-token") ?? "";
       if (!safeEqual(csrf, session.csrfToken)) {
         logger.warn("auth.request.rejected", { reason: "invalid_csrf", method: request.method, path: sanitizeRequestPath(request.path), actorRef: accountReference(session.user.userId) });
@@ -816,7 +821,8 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
 export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
   return (request, response, next) => {
     if (disabled || request.authMethod !== "api-key") return next();
-    if (cliApiRules.some((rule) => rule.methods.includes(request.method) && rule.path.test(request.path))) return next();
+    const path = normalizeApiPath(request.path);
+    if (cliApiRules.some((rule) => rule.methods.includes(request.method) && rule.path.test(path))) return next();
     logger.warn("auth.request.rejected", { reason: "cli_scope_denied", method: request.method, path: sanitizeRequestPath(request.path) });
     response.status(403).json({ error: { code: "CLI_SCOPE_DENIED", message: "API Key 不能访问用户管理、系统管理或未开放给 CLI 的接口" } });
   };
@@ -884,7 +890,7 @@ function aiContextReadModules(request: Request): WorkPermissionModule[] {
 }
 
 function workModuleRequirements(request: Request, write: boolean): WorkAuthorizationRequirements {
-  const pathname = request.path;
+  const pathname = normalizeApiPath(request.path);
   const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
     write ? { write: [module, ...extraWrite] } : { read: [module] }
   );
@@ -1025,18 +1031,19 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
 
 export function createWorkAuthorizationMiddleware(auth: UserAuthService, disabled = false): RequestHandler {
   return (request, _response, next) => {
-    if (disabled || !request.path.startsWith("/api/") || request.path.startsWith("/api/auth/") || request.path === "/api/health") return next();
+    const path = normalizeApiPath(request.path);
+    if (disabled || !path.startsWith("/api/") || path.startsWith("/api/auth/") || path === "/api/health") return next();
     const user = request.authUser;
     if (!user) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
-    if (request.path.startsWith("/api/platform/") || request.path.startsWith("/api/providers/") || request.path.startsWith("/api/models/")) {
+    if (path.startsWith("/api/platform/") || path.startsWith("/api/providers/") || path.startsWith("/api/models/")) {
       if (user.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
       return next();
     }
-    if (/^\/api\/works\/[^/]+\/providers/u.test(request.path)) {
+    if (/^\/api\/works\/[^/]+\/providers/u.test(path)) {
       if (user.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
       return next();
     }
-    if (request.path.startsWith("/api/users") && !request.path.startsWith("/api/users/directory")) {
+    if (path.startsWith("/api/users") && !path.startsWith("/api/users/directory")) {
       if (user.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
       return next();
     }

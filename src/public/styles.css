@@ -2052,7 +2052,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .quick-actions button { min-width: 0; min-height: 30px; border: 1px solid var(--line); background: transparent; border-radius: 3px; padding: 5px 3px; color: var(--muted); font-size: 10px; white-space: nowrap; }
 .quick-actions button:hover { color: var(--ink); background: var(--paper-deep); }
 .ai-feed { flex: 1; min-height: 0; overflow-y: auto; margin: 10px -5px 12px; padding: 0 5px; }
-.ai-context-compaction-divider { display: grid; grid-template-columns: minmax(16px, 1fr) auto minmax(16px, 1fr); gap: 9px; align-items: center; margin: 4px 0 16px; color: var(--muted); font-size: 9px; line-height: 1; text-align: center; }
+.ai-context-compaction-divider { display: grid; grid-template-columns: minmax(16px, 1fr) auto minmax(16px, 1fr); gap: 9px; align-items: center; min-width: 0; color: var(--muted); font-size: 9px; line-height: 1; text-align: center; }
+.ai-feed > .ai-context-compaction-divider { margin: 4px 0 16px; }
+.ai-process-list > .ai-context-compaction-divider { padding: 2px 0; }
 .ai-context-compaction-divider::before, .ai-context-compaction-divider::after { height: 1px; background: color-mix(in srgb, var(--muted) 36%, transparent); content: ""; }
 .ai-context-compaction-divider span { letter-spacing: .08em; white-space: nowrap; }
 .assistant-message, .user-message { position: relative; margin-bottom: 12px; padding: 12px 13px; border-radius: 5px; font-size: 12px; line-height: 1.55; }
@@ -2116,9 +2118,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-process-step-body { max-height: 220px; overflow: auto; padding: 8px 9px; border-left: 2px solid color-mix(in srgb, var(--accent) 46%, var(--line)); background: var(--paper-deep); color: var(--muted); font-size: 10px; }
 .ai-process-intermediate-step .ai-process-step-body { border-left-color: var(--muted); }
 .ai-process-tool-step { padding-top: 1px; }
-.ai-process-context-compaction { display: grid; grid-template-columns: minmax(12px, 1fr) auto minmax(12px, 1fr); gap: 8px; align-items: center; min-width: 0; padding: 2px 0; color: var(--muted); font-size: 8px; line-height: 1; text-align: center; }
-.ai-process-context-compaction::before, .ai-process-context-compaction::after { height: 1px; background: color-mix(in srgb, var(--muted) 38%, transparent); content: ""; }
-.ai-process-context-compaction span { letter-spacing: .08em; white-space: nowrap; }
 @keyframes ai-process-pulse { 0%, 100% { opacity: .45; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) { .is-streaming .ai-process-details[open] > summary::before { animation: none; } }
 .ai-tool-call-list { display: grid; gap: 5px; margin-top: 10px; }

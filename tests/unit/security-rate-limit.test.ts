@@ -3,9 +3,12 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import {
   createApiRateLimitMiddleware,
+  createAuthenticationRateLimitMiddleware,
   createCaptchaRateLimitMiddleware,
   createExpensiveApiRateLimitMiddleware,
   createUploadRateLimitMiddleware,
+  enforceCaseInsensitiveRouting,
+  normalizeApiPath,
   resolveTrustProxySetting
 } from "../../src/security.js";
 
@@ -50,7 +53,7 @@ describe("安全限速器", () => {
     captchaApp.use(createCaptchaRateLimitMiddleware(1, 60_000));
     captchaApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
     await request(captchaApp).get("/api/auth/captcha").expect(200);
-    const blockedCaptcha = await request(captchaApp).get("/api/auth/captcha").expect(429);
+    const blockedCaptcha = await request(captchaApp).get("/API/AUTH/CAPTCHA").expect(429);
     expect(blockedCaptcha.body.error.code).toBe("CAPTCHA_RATE_LIMITED");
 
     const expensiveApp = express();
@@ -65,7 +68,7 @@ describe("安全限速器", () => {
     for (let index = 0; index < 29; index += 1) {
       await request(expensiveApp).post("/api/works/work_1/suggestions").expect(200);
     }
-    const blockedAi = await request(expensiveApp).post("/api/works/work_1/tasks").expect(429);
+    const blockedAi = await request(expensiveApp).post("/API/WORKS/work_1/TASKS").expect(429);
     expect(blockedAi.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
 
     await request(expensiveApp).get("/api/works/work_1/export").expect(200);
@@ -74,6 +77,42 @@ describe("安全限速器", () => {
     }
     const blockedExport = await request(expensiveApp).get("/api/works/work_1/export").expect(429);
     expect(blockedExport.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
+  });
+
+  it("API 路径匹配忽略大小写，避免大小写变体绕过限速", async () => {
+    const apiApp = express();
+    enforceCaseInsensitiveRouting(apiApp);
+    apiApp.use(createApiRateLimitMiddleware(1, 60_000));
+    apiApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
+
+    await request(apiApp).get("/api/works/demo").expect(200);
+    await request(apiApp).get("/API/WORKS/demo").expect(429);
+
+    const authApp = express();
+    enforceCaseInsensitiveRouting(authApp);
+    authApp.use(createAuthenticationRateLimitMiddleware(1, 60_000));
+    authApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
+
+    await request(authApp).post("/api/auth/login").expect(200);
+    const blockedLogin = await request(authApp).post("/API/AUTH/LOGIN").expect(429);
+    expect(blockedLogin.body.error.code).toBe("AUTH_RATE_LIMITED");
+  });
+});
+
+describe("API 路径规范化", () => {
+  it("将路径规范为小写供安全匹配使用", () => {
+    expect(normalizeApiPath("/API/WORKS/abc")).toBe("/api/works/abc");
+    expect(normalizeApiPath("/api/Users/Directory")).toBe("/api/users/directory");
+  });
+
+  it("强制保持大小写不敏感路由并拒绝开启", () => {
+    const app = express();
+    enforceCaseInsensitiveRouting(app);
+    expect(app.get("case sensitive routing")).toBe(false);
+    expect(() => app.set("case sensitive routing", true)).toThrow(/Case-sensitive routing is disabled/u);
+    expect(app.get("case sensitive routing")).toBe(false);
+    app.set("case sensitive routing", false);
+    expect(app.get("case sensitive routing")).toBe(false);
   });
 });
 
