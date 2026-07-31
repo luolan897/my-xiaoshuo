@@ -10,7 +10,8 @@ import {
   emptyWorkModulePermissions,
   fullWorkModulePermissions,
   storedWorkModulePermissions,
-  type WorkModulePermissions
+  type WorkModulePermissions,
+  type WorkPermissionModule
 } from "./work-permissions.js";
 import {
   countWords,
@@ -35,6 +36,9 @@ type WorkInput = {
 
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
+
+export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
 
 type PlatformPageSizes = {
   drafts: number;
@@ -4666,10 +4670,18 @@ export class Store {
     };
   }
 
-  createAttachment(workId: string, input: AttachmentInput): { attachment: Record<string, unknown>; created: boolean } {
+  createAttachment(workId: string, input: AttachmentInput, accessModule: AttachmentPermissionModule = "settings"): { attachment: Record<string, unknown>; created: boolean } {
     this.getWork(workId);
     const existing = this.db.get("SELECT * FROM attachments WHERE work_id = ? AND stored_sha256 = ?", workId, input.storedSha256);
-    if (existing) return { attachment: this.mapAttachment(existing), created: false };
+    if (existing) {
+      this.db.run(
+        "INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
+        requiredString(existing, "id"),
+        accessModule,
+        now()
+      );
+      return { attachment: this.mapAttachment(existing), created: false };
+    }
     const attachmentId = id("attachment");
     const timestamp = now();
     this.db.transaction(() => {
@@ -4694,6 +4706,12 @@ export class Store {
         input.animated ? 1 : 0,
         timestamp,
         currentRequestActor()?.userId ?? null
+      );
+      this.db.run(
+        "INSERT INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
+        attachmentId,
+        accessModule,
+        timestamp
       );
       this.audit(workId, "attachment.created", "attachment", attachmentId, {
         originalMimeType: input.originalMimeType,
@@ -4722,6 +4740,28 @@ export class Store {
     const row = this.db.get("SELECT * FROM attachments WHERE id = ?", attachmentId);
     if (!row) throw notFound("附件");
     return this.mapAttachment(row);
+  }
+
+  attachmentModules(attachmentId: string): AttachmentPermissionModule[] {
+    this.getAttachment(attachmentId);
+    const modules = new Set<AttachmentPermissionModule>();
+    for (const row of this.db.all("SELECT module FROM attachment_access_modules WHERE attachment_id = ?", attachmentId)) {
+      const module = String(row.module);
+      if ((attachmentPermissionModules as readonly string[]).includes(module)) modules.add(module as AttachmentPermissionModule);
+    }
+    const referenceModules: Record<string, AttachmentPermissionModule> = {
+      chapter: "prose",
+      draft: "drafts",
+      setting: "settings",
+      "character-section": "characters",
+      race: "races",
+      organization: "organizations"
+    };
+    for (const row of this.db.all("SELECT DISTINCT entity_type FROM attachment_references WHERE attachment_id = ?", attachmentId)) {
+      const module = referenceModules[String(row.entity_type)];
+      if (module) modules.add(module);
+    }
+    return [...modules];
   }
 
   deleteAttachment(attachmentId: string): { storageKey: string; removeStoredFile: boolean } {

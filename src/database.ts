@@ -2384,6 +2384,43 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(58)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS attachment_access_modules (
+          attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+          module TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(attachment_id, module)
+        ) WITHOUT ROWID`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_attachment_access_modules_module ON attachment_access_modules(module, attachment_id)");
+        const timestamp = new Date().toISOString();
+        this.run(`INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at)
+          SELECT attachment_id,
+            CASE entity_type
+              WHEN 'draft' THEN 'drafts'
+              WHEN 'setting' THEN 'settings'
+              WHEN 'race' THEN 'races'
+              WHEN 'organization' THEN 'organizations'
+              WHEN 'character-section' THEN 'characters'
+              WHEN 'chapter' THEN 'prose'
+              ELSE 'settings'
+            END,
+            ?
+          FROM attachment_references`, timestamp);
+        this.run(`INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at)
+          SELECT attachment.id, 'settings', ? FROM attachments attachment
+          WHERE NOT EXISTS (
+            SELECT 1 FROM attachment_access_modules access WHERE access.attachment_id = attachment.id
+          )`, timestamp);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (58, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {
