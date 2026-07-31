@@ -359,11 +359,13 @@ describe("Scriverse CLI 核心", () => {
     const updatePath = jsonFile(root, "annotation-update.json", { status: "resolved", expectedVersionNo: 1 });
 
     expect(await run(["annotation", "list", "chapter-1"])).toBe(0);
+    expect(await run(["annotation", "list-work", "work-1"])).toBe(0);
     expect(await run(["annotation", "create", "chapter-1", "--input", createPath])).toBe(0);
     expect(await run(["annotation", "update", "annotation-1", "--input", updatePath])).toBe(0);
     expect(await run(["annotation", "delete", "annotation-1", "--expected-version", "2"])).toBe(0);
     expect(calls).toEqual([
       { url: "http://127.0.0.1:13210/api/chapters/chapter-1/annotations", method: "GET", body: null },
+      { url: "http://127.0.0.1:13210/api/works/work-1/chapter-annotations", method: "GET", body: null },
       { url: "http://127.0.0.1:13210/api/chapters/chapter-1/annotations", method: "POST", body: createBody },
       { url: "http://127.0.0.1:13210/api/chapter-annotations/annotation-1", method: "PATCH", body: { status: "resolved", expectedVersionNo: 1 } },
       { url: "http://127.0.0.1:13210/api/chapter-annotations/annotation-1", method: "DELETE", body: { expectedVersionNo: 2 } }
