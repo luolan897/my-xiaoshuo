@@ -786,6 +786,11 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(finalContext).toContain("已压缩的工具调用上下文");
     expect(finalContext).toContain("已确认前一页包含章节正文证据");
     expect(finalContext).not.toContain(firstPageContent);
+    const firstUserMessageIndex = finalMessages.findIndex((message) => message.role === "user");
+    expect(firstUserMessageIndex).toBeGreaterThan(0);
+    expect(finalMessages.slice(0, firstUserMessageIndex).every((message) => message.role === "system")).toBe(true);
+    expect(finalMessages[firstUserMessageIndex]?.content).toContain("已压缩的工具调用上下文");
+    expect(finalMessages.filter((message) => message.role === "system").every((message) => !message.content?.includes("已压缩的工具调用上下文"))).toBe(true);
     expect(requestInputTokens.every((tokens) => tokens < 16_000)).toBe(true);
   });
 

@@ -3912,10 +3912,18 @@ export class AiManager {
       };
       const processSteps: AiProcessStep[] = [];
       const baseMessageCount = messages.length;
+      const firstUserMessageIndex = messages.findIndex((message) => message.role !== "system");
+      const compactedMessageIndex = firstUserMessageIndex < 0 ? messages.length : firstUserMessageIndex;
+      let toolContextStartIndex = baseMessageCount;
+      let compactedToolContextMessage: CompletionMessage | null = null;
       const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
       const compactToolContext = async (additionalMessages: CompletionMessage[] = [], round = 1): Promise<void> => {
-        const existingToolContext = completionMessages.slice(baseMessageCount);
-        const sourceMessages = [...existingToolContext, ...additionalMessages];
+        const existingToolContext = completionMessages.slice(toolContextStartIndex);
+        const sourceMessages = [
+          ...(compactedToolContextMessage ? [compactedToolContextMessage] : []),
+          ...existingToolContext,
+          ...additionalMessages
+        ];
         if (sourceMessages.length === 0) return;
         const baseInputTokens = estimateAiTokens(JSON.stringify(messages));
         const summaryMaxTokens = Math.max(128, Math.min(
@@ -3952,10 +3960,18 @@ export class AiManager {
         });
         const summary = compacted.choices?.[0]?.message?.content?.trim();
         if (!summary) throw new Error("Tool context compaction returned empty content.");
-        completionMessages.splice(baseMessageCount, completionMessages.length - baseMessageCount, {
-          role: "system",
+        compactedToolContextMessage = {
+          role: "user",
           content: `已压缩的工具调用上下文：\n${summary}`
-        });
+        };
+        completionMessages.splice(
+          0,
+          completionMessages.length,
+          ...messages.slice(0, compactedMessageIndex),
+          compactedToolContextMessage,
+          ...messages.slice(compactedMessageIndex)
+        );
+        toolContextStartIndex = completionMessages.length;
         const sourceChars = JSON.stringify(sourceMessages).length;
         const contextUsage = this.completionContextUsage(effectiveInput, model, completionMessages, tools);
         logger.info("ai.tool_context.compacted", {
@@ -3990,7 +4006,7 @@ export class AiManager {
         return Math.max(1_000, Math.min(AGENT_TOOL_RESULT_MAX_CHARS, Math.floor(perToolTokens / 1.25)));
       };
       const shouldCompactBeforeToolRound = (assistantMessage: CompletionMessage, toolCallCount: number): boolean => {
-        const hasRawToolResults = completionMessages.slice(baseMessageCount).some((message) => message.role === "tool");
+        const hasRawToolResults = completionMessages.slice(toolContextStartIndex).some((message) => message.role === "tool");
         if (!hasRawToolResults) return false;
         const currentTokens = estimateAiTokens(JSON.stringify([...completionMessages, assistantMessage]))
           + estimateAiTokens(JSON.stringify(tools));
