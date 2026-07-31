@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
-import { estimateAiTokens } from "../../src/ai.js";
+import { AI_RESPONSE_MAX_BYTES, estimateAiTokens } from "../../src/ai.js";
 import { createTestRuntime } from "../helpers.js";
 
 describe("AI 供应商、模型与建议 API", () => {
@@ -177,6 +177,21 @@ describe("AI 供应商、模型与建议 API", () => {
       availableModels: ["mock-novel-model"],
       provider: { connectionStatus: "success" }
     });
+  });
+
+  it("连接测试拒绝成功状态下的超大模型列表响应", async () => {
+    const { providerId } = await configureAi();
+    fetchMock.mockImplementation(async () => new Response("{}", {
+      status: 200,
+      headers: { "Content-Length": String(AI_RESPONSE_MAX_BYTES + 1) }
+    }));
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({
+      ok: false,
+      provider: { connectionStatus: "failed" }
+    });
+    expect(tested.body.data.error).toContain("AI 供应商响应超过");
   });
 
   it("可以单独测试指定模型并使用该模型标识符", async () => {
