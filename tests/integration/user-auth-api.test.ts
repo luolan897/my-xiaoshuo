@@ -5,6 +5,7 @@ import { join } from "node:path";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
+import { runWithRequestActor } from "../../src/request-context.js";
 
 type SessionCredentials = {
   agent: ReturnType<typeof request.agent>;
@@ -1297,6 +1298,70 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const protectedTraceFull = await analysisOnly.agent.get(`/api/tasks/${taskId}/trace/calls/call_permission_trace?full=true`).expect(403);
     expect(protectedTraceFull.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     expect(JSON.stringify(protectedTraceFull.body)).not.toContain("TOP_SECRET_PROSE");
+  });
+
+  it("AI 工具按当前成员模块权限限制正文读取", async () => {
+    const owner = await register(runtime, "ai_tool_owner");
+    const collaborator = await register(runtime, "ai_tool_collaborator");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 工具权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "第一卷" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "机密章", content: "TOP_SECRET_PROSE_TOOL" })
+      .expect(201);
+    const permissions = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "write",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions })
+      .expect(201);
+    await owner.agent.patch(`/api/works/${workId}/ai-settings`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"] })
+      .expect(200);
+
+    const internalAi = runtime.ai as unknown as {
+      enabledAgentToolIds: (candidateWorkId: string, taskType: "chat") => string[];
+      executeAgentTool: (candidateWorkId: string, toolCall: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    };
+    const result = await runWithRequestActor({ ...collaborator.user, authentication: "session" }, async () => ({
+      enabledTools: internalAi.enabledAgentToolIds(workId, "chat"),
+      execution: await internalAi.executeAgentTool(workId, {
+        id: "permission-check",
+        type: "function",
+        function: {
+          name: "read_chapters",
+          arguments: JSON.stringify({ chapterIds: [chapter.body.data.id], include: "content", cursor: 0 })
+        }
+      })
+    }));
+
+    expect(result.enabledTools).toEqual([]);
+    expect(result.execution).toMatchObject({
+      status: "failed",
+      result: { ok: false, error: { code: "TOOL_NOT_AVAILABLE" } }
+    });
+    expect(JSON.stringify(result)).not.toContain("TOP_SECRET_PROSE_TOOL");
   });
 
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {

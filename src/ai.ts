@@ -33,6 +33,7 @@ import { paginated, paginationSql, type PaginatedResult, type Pagination } from 
 import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
+import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
@@ -303,6 +304,24 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
 
 const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
+const AGENT_TOOL_READ_MODULES: Record<Exclude<AgentToolId, "search_story_entities">, readonly WorkPermissionModule[]> = {
+  story_index: ["prose"],
+  read_chapters: ["prose"],
+  grep: ["prose"],
+  read_character_sections: ["characters"],
+  search_drafts: ["drafts"]
+};
+const AGENT_ENTITY_CATEGORY_MODULES = {
+  setting: "settings",
+  character: "characters",
+  race: "races",
+  organization: "organizations",
+  timeline: "timeline",
+  relationship: "relationships",
+  outline: "outlines",
+  foreshadow: "outlines"
+} as const satisfies Record<string, WorkPermissionModule>;
+type AgentEntityCategory = keyof typeof AGENT_ENTITY_CATEGORY_MODULES;
 
 type AiCallTraceAttempt = {
   attempt: number;
@@ -3390,14 +3409,27 @@ export class AiManager {
     const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
     const requested = requestedToolIds ? new Set(requestedToolIds) : null;
-    const permissions = this.store.getWork(workId).modulePermissions as Record<string, unknown>;
+    const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
     return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
       && (!requested || requested.has(toolId))
-      && (toolId !== "search_drafts" || permissions.drafts === "read" || permissions.drafts === "write"));
+      && this.canReadWithAgentTool(permissions, toolId));
   }
 
   private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): Record<string, unknown>[] {
     return this.enabledAgentToolIds(workId, taskType, requestedToolIds).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+  }
+
+  private canReadWithAgentTool(permissions: WorkModulePermissions, toolId: AgentToolId): boolean {
+    if (toolId === "search_story_entities") {
+      return Object.values(AGENT_ENTITY_CATEGORY_MODULES).some((module) => canReadWorkModule(permissions, module));
+    }
+    return AGENT_TOOL_READ_MODULES[toolId].every((module) => canReadWorkModule(permissions, module));
+  }
+
+  private readableAgentEntityCategories(permissions: WorkModulePermissions): Set<AgentEntityCategory> {
+    return new Set((Object.entries(AGENT_ENTITY_CATEGORY_MODULES) as Array<[AgentEntityCategory, WorkPermissionModule]>)
+      .filter(([, module]) => canReadWorkModule(permissions, module))
+      .map(([category]) => category));
   }
 
   private async executeAgentTool(
@@ -3433,7 +3465,11 @@ export class AiManager {
       : name === "read_character_sections" ? readCharacterSectionsArguments
       : name === "search_drafts" ? searchDraftsArguments
       : null;
-    if (!schema) {
+    const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
+    const enabledTools = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
+      .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
+    const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
+    if (!schema || !toolId || !enabledTools.has(toolId) || !this.canReadWithAgentTool(permissions, toolId)) {
       return {
         id: toolCall.id,
         name,
@@ -3550,14 +3586,15 @@ export class AiManager {
     }
     if (name === "search_story_entities") {
       const { query, categories: categoryList, limit, cursor } = args as z.infer<typeof searchStoryEntitiesArguments>;
-      const categories = new Set<string>(categoryList);
-      const allowed = new Set(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"]);
+      const readableCategories = this.readableAgentEntityCategories(permissions);
+      const categories = new Set<AgentEntityCategory>(categoryList.filter((category): category is AgentEntityCategory => readableCategories.has(category)));
+      const requestedCategories = categoryList.length > 0 ? categories : readableCategories;
       const combined = (await this.searchWork(workId, query, { limit: 100 })).flatMap((item) => {
         const sourceType = String(item.type);
         const type = sourceType === "timeline-track" || sourceType === "timeline-event"
           ? "timeline"
           : sourceType === "chapter-outline" ? "outline" : sourceType;
-        if (!allowed.has(type) || (categories.size > 0 && !categories.has(type))) return [];
+        if (!requestedCategories.has(type as AgentEntityCategory)) return [];
         return [{
           ...item,
           ...this.hybridAiSearchDetails(workId, sourceType, String(item.id)),
@@ -3582,7 +3619,7 @@ export class AiManager {
         id: toolCall.id,
         name,
         calledAt,
-        arguments: { query, categories: categoryList, limit, ...(cursor > 0 ? { cursor } : {}) },
+        arguments: { query, categories: [...requestedCategories], limit, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
         result
       };
