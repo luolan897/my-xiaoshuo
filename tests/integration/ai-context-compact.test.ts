@@ -47,9 +47,10 @@ describe("AI 对话上下文压缩", () => {
     const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
       displayName: "压缩模型",
       modelId: "compact-model",
-      contextWindow: 4096
+      contextWindow: 32_768
     }).expect(201);
     modelId = model.body.data.id;
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 4_096, modelId);
     fetchMock.mockClear();
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ contextCompactThreshold: 50 }).expect(200);
   });

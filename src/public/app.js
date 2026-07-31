@@ -5,7 +5,7 @@ import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MODEL_PURPOSE_OPTIONS, isKimiModelId, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260723-kimi-temperature";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260731-model-context-guidance-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
@@ -9154,6 +9154,7 @@ function openProviderDialog(item) {
 
 function openModelDialog(providerId, item = null) {
   const values = modelFormValues(item);
+  const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
   const connectionTest = item && item.providerStatus === "enabled"
     ? `<section class="model-connection-test">
@@ -9161,15 +9162,22 @@ function openModelDialog(providerId, item = null) {
         <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
       </section>`
     : "";
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow) + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
     const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
   }, item ? "模型配置" : "供应商模型");
   const modelIdInput = $("#dialog-fields input[name='modelId']");
+  const contextWindowInput = $("#model-context-window");
+  const contextWindowHint = $("#model-context-window-hint");
   const temperatureInput = $("#dialog-fields input[name='temperature']");
   const temperatureHint = $("#model-temperature-hint");
+  const syncModelContextWindowGuidance = () => {
+    const guidance = modelContextWindowGuidance(contextWindowInput.value);
+    contextWindowInput.setCustomValidity(guidance.belowMinimum ? "模型上下文不能低于 32K（32768 Token）。" : "");
+    contextWindowHint.hidden = !guidance.showRecommendation;
+  };
   const syncKimiTemperature = () => {
     const isKimi = isKimiModelId(modelIdInput.value);
     temperatureHint.hidden = !isKimi;
@@ -9178,6 +9186,7 @@ function openModelDialog(providerId, item = null) {
     if (isKimiModelId(modelIdInput.value)) temperatureInput.value = "1";
     syncKimiTemperature();
   });
+  contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
   $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -9194,6 +9203,7 @@ function openModelDialog(providerId, item = null) {
       button.textContent = "测试连接";
     }
   });
+  syncModelContextWindowGuidance();
   syncKimiTemperature();
 }
 

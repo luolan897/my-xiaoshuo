@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260731-context-compaction-v2');
-    expect(page.text).toContain('/styles.css?v=20260731-context-compaction-v2');
+    expect(page.text).toContain('/app.js?v=20260731-model-context-guidance-v1');
+    expect(page.text).toContain('/styles.css?v=20260731-model-context-guidance-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -794,7 +794,12 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".provider-card.is-disabled");
     expect(styles.text).toContain(".provider-status-badge.is-disabled");
     expect(styles.text).toContain(".model-connection-test");
-    expect(application.text).toContain('field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow)');
+    expect(styles.text).toContain(".model-temperature-hint, .model-context-window-hint");
+    expect(application.text).toContain('id="model-context-window"');
+    expect(application.text).toContain('min="${MIN_MODEL_CONTEXT_WINDOW}"');
+    expect(application.text).toContain("低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。");
+    expect(application.text).toContain('contextWindowInput.setCustomValidity(guidance.belowMinimum ? "模型上下文不能低于 32K（32768 Token）。" : "")');
+    expect(application.text).toContain("contextWindowHint.hidden = !guidance.showRecommendation");
     expect(application.text).toContain('field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens)');
     expect(application.text).toContain('Kimi 模型必须设置温度为 1。');
     expect(application.text).toContain('field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled)');

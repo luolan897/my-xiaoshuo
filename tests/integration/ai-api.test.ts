@@ -71,6 +71,10 @@ describe("AI 供应商、模型与建议 API", () => {
     return { providerId, modelId: model.body.data.id };
   }
 
+  function setLegacyModelContextWindow(modelId: string, contextWindow: number): void {
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", contextWindow, modelId);
+  }
+
   it("只有连接测试成功的启用供应商才能设置默认模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).put(`/api/works/${workId}/task-defaults/continue`).send({ modelId }).expect(409);
@@ -106,6 +110,28 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(firstPage.body.data.items).toHaveLength(20);
     expect(secondPage.body.data).toMatchObject({ page: 2, limit: 20, hasMore: false, nextPage: null });
     expect(secondPage.body.data.items).toHaveLength(1);
+  });
+
+  it("拒绝新增或改为低于 32K 上下文的模型", async () => {
+    const { providerId, modelId } = await configureAi();
+    const invalidCreate = await request(runtime.app).post(`/api/providers/${providerId}/models`).send({
+      displayName: "过小上下文模型",
+      modelId: "short-context-model",
+      contextWindow: 32_767
+    }).expect(400);
+    expect(invalidCreate.body.error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      details: [{ path: "contextWindow", message: "模型上下文不能低于 32768 Token" }]
+    });
+
+    const invalidUpdate = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 32_767 }).expect(400);
+    expect(invalidUpdate.body.error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      details: [{ path: "contextWindow", message: "模型上下文不能低于 32768 Token" }]
+    });
+
+    const minimum = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 32_768 }).expect(200);
+    expect(minimum.body.data.contextWindow).toBe(32_768);
   });
 
   it("连接测试必须用 max_tokens=10 收到正文或 thinking", async () => {
@@ -297,8 +323,8 @@ describe("AI 供应商、模型与建议 API", () => {
 
     await request(runtime.app).patch("/api/platform/ai/settings").send({ systemPrompt: "平台追加：保持克制叙事。" }).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ systemPrompt: "本书追加：哥斯拉不得离开地球。" }).expect(200);
-    const updatedModel = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 4096 }).expect(200);
-    expect(updatedModel.body.data.contextWindow).toBe(4096);
+    const updatedModel = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 32_768 }).expect(200);
+    expect(updatedModel.body.data.contextWindow).toBe(32_768);
 
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
@@ -314,7 +340,7 @@ describe("AI 供应商、模型与建议 API", () => {
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(201);
-    expect(measured.body.data.contextUsage).toMatchObject({ modelId, contextWindow: 4096 });
+    expect(measured.body.data.contextUsage).toMatchObject({ modelId, contextWindow: 32_768 });
     expect(measured.body.data.contextUsage.inputTokens).toBeGreaterThan(0);
     await request(runtime.app).put(`/api/works/${secondWork.body.data.id}/task-defaults/chat`).send({ modelId }).expect(200);
     expect(secondChapter.body.data.title).toBe("第二章");
@@ -344,7 +370,7 @@ describe("AI 供应商、模型与建议 API", () => {
   it("按模型上下文比例裁剪全书概要引用", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 1024 }).expect(200);
+    setLegacyModelContextWindow(modelId, 1_024);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ bookSummaryContextPercent: 25 }).expect(200);
     runtime.store.db.run(
       `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
@@ -644,7 +670,7 @@ describe("AI 供应商、模型与建议 API", () => {
   it("长工具结果按完整结构限制在一万字符内并通过游标续读", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 30_000 }).expect(200);
+    setLegacyModelContextWindow(modelId, 30_000);
     const content = "长正文。".repeat(3_000);
     runtime.store.saveChapter(chapterId, { content });
     const fragments: string[] = [];
@@ -707,7 +733,7 @@ describe("AI 供应商、模型与建议 API", () => {
   it("工具结果接近模型上限时先压缩旧工具上下文再拼入新结果", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 16_000 }).expect(200);
+    setLegacyModelContextWindow(modelId, 16_000);
     runtime.store.saveChapter(chapterId, { content: "分页上下文证据。".repeat(2_500) });
     let completionCount = 0;
     let firstPageContent = "";
@@ -786,13 +812,18 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(finalContext).toContain("已压缩的工具调用上下文");
     expect(finalContext).toContain("已确认前一页包含章节正文证据");
     expect(finalContext).not.toContain(firstPageContent);
+    const firstUserMessageIndex = finalMessages.findIndex((message) => message.role === "user");
+    expect(firstUserMessageIndex).toBeGreaterThan(0);
+    expect(finalMessages.slice(0, firstUserMessageIndex).every((message) => message.role === "system")).toBe(true);
+    expect(finalMessages[firstUserMessageIndex]?.content).toContain("已压缩的工具调用上下文");
+    expect(finalMessages.filter((message) => message.role === "system").every((message) => !message.content?.includes("已压缩的工具调用上下文"))).toBe(true);
     expect(requestInputTokens.every((tokens) => tokens < 16_000)).toBe(true);
   });
 
   it("模型上下文较小时按剩余预算缩小工具结果分页", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 6_000 }).expect(200);
+    setLegacyModelContextWindow(modelId, 6_000);
     runtime.store.saveChapter(chapterId, { content: "小窗口分页正文。".repeat(2_000) });
     let completionCount = 0;
     const returnedPages: Array<{ pagination: { maxChars: number; nextCursor: number | null } }> = [];
@@ -1109,6 +1140,31 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-s*****lue\\"}}"');
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
+  });
+
+  it("首轮上下文超限时不请求模型并提示减少上下文", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    setLegacyModelContextWindow(modelId, 1_024);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    fetchMock.mockClear();
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "必须保留的超长首轮指令。".repeat(1_000),
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(streamed.text).toContain("event: error");
+    expect(streamed.text).toContain('"code":"CONTEXT_WINDOW_EXCEEDED"');
+    expect(streamed.text).toContain('"status":400');
+    expect(streamed.text).toContain("首轮上下文约");
+    expect(streamed.text).toContain("本轮未进行上下文压缩，请减少选中的正文、设定、引用、对话历史或指令长度后重试");
+    expect(streamed.text).toContain('"providerName":"本地兼容服务"');
+    expect(streamed.text).toContain(`"providerId":"${providerId}"`);
+    expect(streamed.text).toContain('"modelId":"mock-novel-model"');
+    expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
   });
 
   it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {
