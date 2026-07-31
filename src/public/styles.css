@@ -899,6 +899,8 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .work-access-field strong { color: var(--ink); font-size: 12px; }
 .work-access-field small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .work-access-field .ghost-button { flex: 0 0 auto; white-space: nowrap; }
+.work-export-actions { display: flex; flex-wrap: wrap; gap: 7px; flex: 0 0 auto; }
+.work-export-actions .ghost-button { min-height: 32px; }
 .work-access-options { display: flex; flex-wrap: wrap; gap: 5px; }
 .work-access-options span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 1.35; }
 .account-dialog { width: min(640px, 92vw); overflow: hidden; }
@@ -3135,6 +3137,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .appearance-whitespace-field, .font-preview { grid-column: auto; }
   .access-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .access-row select, .access-row button, .work-access-field .ghost-button { width: 100%; }
+  .work-export-actions { width: 100%; }
+  .work-export-actions .ghost-button { width: 100%; }
   .work-access-field { align-items: stretch; flex-direction: column; }
 
   .entity-editor-view { min-width: 0; }

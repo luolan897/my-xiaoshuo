@@ -3034,6 +3034,7 @@ function renderSettingsHub() {
   const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
   const canReadAggregate = hasWork && canReadAggregateContent();
   const canReadFullExport = canReadAggregate && canReadModule("drafts");
+  const canExportDocx = hasWork && canReadModule("editor");
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
@@ -3044,9 +3045,10 @@ function renderSettingsHub() {
   $("#work-audit-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !canReadAggregate;
   $("#export-button").disabled = !canReadFullExport;
+  $("#export-docx-button").disabled = !canExportDocx;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
-    ? `当前作品：《${state.work.title}》。导出的 ZIP 内含 Markdown 正文，仅包含分卷、章节标题与正文。`
+    ? `当前作品：《${state.work.title}》。可导出 Markdown ZIP 或 DOCX 正文；DOCX 在有封面时会嵌入为首页。`
     : "当前未选择作品；打开作品后可使用导出。";
 }
 
@@ -7300,9 +7302,10 @@ function bindWorkCoverControls(work) {
   });
 }
 
-function downloadWorkManuscript(work) {
+function downloadWorkManuscript(work, format = "markdown") {
   if (!work?.id) return;
-  window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=markdown`;
+  const exportFormat = format === "docx" ? "docx" : "markdown";
+  window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=${exportFormat}`;
 }
 
 function openWorkSettingsDialog(work) {
@@ -7322,8 +7325,11 @@ function openWorkSettingsDialog(work) {
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
   const exportField = `<section class="work-access-field" aria-labelledby="work-export-settings-title">
-    <div><strong id="work-export-settings-title">导出正文</strong><small>服务器将分卷、章节标题与正文压缩为 ZIP，压缩包内含 Markdown 文件；不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
-    <button id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>
+    <div><strong id="work-export-settings-title">导出正文</strong><small>可下载 Markdown ZIP，或导出 DOCX（书名、分卷、章节为一级至三级标题；若已设置封面则嵌入为首页）。不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
+    <div class="work-export-actions">
+      <button id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>
+      <button id="work-export-docx-button" class="ghost-button" type="button">下载 DOCX</button>
+    </div>
   </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
     <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>恢复已软删除的章节，或彻底删除正文、版本和关联资料。</small></div>
@@ -7357,7 +7363,8 @@ function openWorkSettingsDialog(work) {
     $("#form-dialog").close();
     void openImportHistory();
   });
-  $("#work-export-button")?.addEventListener("click", () => downloadWorkManuscript(work));
+  $("#work-export-button")?.addEventListener("click", () => downloadWorkManuscript(work, "markdown"));
+  $("#work-export-docx-button")?.addEventListener("click", () => downloadWorkManuscript(work, "docx"));
   $("#chapter-recycle-bin-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openChapterRecycleBin();
@@ -11097,7 +11104,8 @@ $("#search-form").addEventListener("submit", async (event) => {
     $("#search-results").innerHTML = `<p class="search-results-status">${esc(error.message)}</p>`;
   });
 });
-$("#export-button").addEventListener("click", () => downloadWorkManuscript(state.work));
+$("#export-button").addEventListener("click", () => downloadWorkManuscript(state.work, "markdown"));
+$("#export-docx-button").addEventListener("click", () => downloadWorkManuscript(state.work, "docx"));
 window.addEventListener("beforeunload", (event) => { if (state.dirty || entityEditorDirty || characterSectionEditorDirty) event.preventDefault(); });
 
 initializePage().catch((error) => {

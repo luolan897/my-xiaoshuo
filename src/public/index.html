@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260731-draft-bindings-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260801-docx-export-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -201,6 +201,7 @@
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">ZIP</span><strong>导出正文</strong><small>以 ZIP 下载 Markdown 正文，不包含角色和设定资料</small></button>
+            <button id="export-docx-button" class="settings-hub-card" type="button" data-settings-action="export-docx"><span class="settings-card-mark">DOC</span><strong>导出 DOCX</strong><small>导出 Word 正文；若已设置封面则嵌入为首页</small></button>
           </div>
           <p id="settings-work-note" class="settings-work-note"></p>
           <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
@@ -896,6 +897,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-draft-dialog-meta-v1"></script>
+    <script type="module" src="/app.js?v=20260801-docx-export-v1"></script>
   </body>
 </html>
