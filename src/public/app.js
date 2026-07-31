@@ -6713,19 +6713,70 @@ function tokenUsageCalendarMarkup(daily) {
   const calendar = buildUsageCalendar(daily);
   const cells = calendar.cells.map((cell) => {
     const label = `${tokenUsageDateLabel(cell.date)}：${Number(cell.totalTokens).toLocaleString("zh-CN")} Token`;
-    return `<span class="usage-calendar-cell${cell.future ? " is-future" : ""}" data-level="${cell.level}" role="gridcell" aria-label="${esc(label)}" title="${esc(label)}" ${cell.future ? 'aria-disabled="true"' : 'tabindex="0"'}></span>`;
+    return cell.future
+      ? `<span class="usage-calendar-cell is-future" data-level="${cell.level}" role="gridcell" aria-disabled="true"></span>`
+      : `<button class="usage-calendar-cell" type="button" data-level="${cell.level}" data-usage-calendar-label="${esc(label)}" role="gridcell" aria-label="${esc(label)}"></button>`;
   }).join("");
   const months = calendar.months.map((month) => `<span style="grid-column:${month.week + 1}">${esc(month.label)}</span>`).join("");
-  return `<div class="usage-calendar-scroll" tabindex="0" aria-label="每日 Token 用量日历，可横向滚动">
-    <div class="usage-calendar-frame" style="--usage-week-count:${calendar.weekCount}">
-      <div class="usage-calendar-months" aria-hidden="true">${months}</div>
-      <div class="usage-calendar-body">
-        <div class="usage-calendar-weekdays" aria-hidden="true"><span>一</span><span>三</span><span>五</span></div>
-        <div class="usage-calendar-grid" role="grid" aria-label="过去 53 周每日 Token 用量">${cells}</div>
+  return `<div class="usage-calendar-widget">
+    <div class="usage-calendar-scroll" tabindex="0" aria-label="每日 Token 用量日历，可横向滚动">
+      <div class="usage-calendar-frame" style="--usage-week-count:${calendar.weekCount}">
+        <div class="usage-calendar-months" aria-hidden="true">${months}</div>
+        <div class="usage-calendar-body">
+          <div class="usage-calendar-weekdays" aria-hidden="true"><span>一</span><span>三</span><span>五</span></div>
+          <div class="usage-calendar-grid" role="grid" aria-label="过去 53 周每日 Token 用量">${cells}</div>
+        </div>
       </div>
     </div>
+    <output class="usage-calendar-tooltip" role="tooltip" hidden></output>
   </div>
   <div class="usage-calendar-legend"><span>少</span>${[0, 1, 2, 3, 4].map((level) => `<i data-level="${level}" aria-hidden="true"></i>`).join("")}<span>多</span></div>`;
+}
+
+function bindUsageCalendarInteractions(root) {
+  root.querySelectorAll(".usage-calendar-widget").forEach((widget) => {
+    const tooltip = widget.querySelector(".usage-calendar-tooltip");
+    const calendarScroll = widget.querySelector(".usage-calendar-scroll");
+    let activeCell = null;
+    const hideTooltip = () => {
+      tooltip.hidden = true;
+      activeCell = null;
+    };
+    const showTooltip = (cell) => {
+      activeCell = cell;
+      tooltip.textContent = cell.dataset.usageCalendarLabel;
+      tooltip.hidden = false;
+      const widgetRect = widget.getBoundingClientRect();
+      const cellRect = cell.getBoundingClientRect();
+      const edgeInset = tooltip.offsetWidth / 2 + 8;
+      const centeredLeft = cellRect.left + cellRect.width / 2 - widgetRect.left;
+      const fitsAbove = cellRect.top - widgetRect.top >= tooltip.offsetHeight + 8;
+      tooltip.dataset.placement = fitsAbove ? "top" : "bottom";
+      tooltip.style.left = `${Math.min(widget.clientWidth - edgeInset, Math.max(edgeInset, centeredLeft))}px`;
+      tooltip.style.top = fitsAbove
+        ? `${cellRect.top - widgetRect.top - 8}px`
+        : `${cellRect.bottom - widgetRect.top + 8}px`;
+    };
+    widget.querySelectorAll("button.usage-calendar-cell").forEach((cell) => {
+      cell.addEventListener("mouseenter", () => showTooltip(cell));
+      cell.addEventListener("mouseleave", () => {
+        if (document.activeElement !== cell) hideTooltip();
+      });
+      cell.addEventListener("focus", () => showTooltip(cell));
+      cell.addEventListener("blur", () => {
+        if (!cell.matches(":hover")) hideTooltip();
+      });
+      cell.addEventListener("click", () => showTooltip(cell));
+      cell.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        hideTooltip();
+        cell.blur();
+      });
+    });
+    calendarScroll.addEventListener("scroll", () => {
+      if (activeCell && !tooltip.hidden) showTooltip(activeCell);
+    });
+  });
 }
 
 function scrollUsageCalendarsToLatest(root) {
@@ -6786,6 +6837,7 @@ async function renderPlatformTokenUsage() {
     description: "汇总所有作品迄今产生的输入与输出 Token；缓存命中率仅基于供应商返回了缓存明细的调用。",
     showWorks: true
   });
+  bindUsageCalendarInteractions(host);
   scrollUsageCalendarsToLatest(host);
 }
 
@@ -6809,6 +6861,7 @@ async function renderBookAiSettings() {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
   })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  bindUsageCalendarInteractions(host);
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
