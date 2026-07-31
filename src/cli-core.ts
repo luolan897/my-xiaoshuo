@@ -496,6 +496,7 @@ function helpText(): string {
   scriverse audit <workId>
   scriverse writing progress <workId>
   scriverse annotation list <chapterId>
+  scriverse annotation list-work <workId>
 
 编辑：
   scriverse work create --input <json-file|->
@@ -536,7 +537,7 @@ function schemaList(): Record<string, unknown> {
     commands: {
       writing: ["progress", "goal"],
       chapter: ["move", "batch"],
-      annotation: ["list", "create", "update", "delete"],
+      annotation: ["list", "list-work", "create", "update", "delete"],
       manuscript: ["get"]
     },
     prohibited: ["用户管理", "作品成员管理", "系统管理", "AI 供应商与模型管理", "永久删除及作品、分卷、知识实体删除", "任意 HTTP 请求"],
@@ -845,11 +846,16 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
   }
 
   if (group === "annotation") {
-    const id = requiredPosition(parsed.positionals, 2, action === "list" || action === "create" ? "chapterId" : "annotationId");
+    const id = requiredPosition(parsed.positionals, 2, action === "list-work" ? "workId" : (action === "list" || action === "create" ? "chapterId" : "annotationId"));
     assertPositionCount(parsed.positionals, 3);
     if (action === "list") {
       assertAllowedOptions(parsed, []);
       emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/chapters/${encoded(id)}/annotations`), compact);
+      return;
+    }
+    if (action === "list-work") {
+      assertAllowedOptions(parsed, []);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(id)}/chapter-annotations`), compact);
       return;
     }
     if (action === "create") {
