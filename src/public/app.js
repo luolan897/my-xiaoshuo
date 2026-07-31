@@ -49,6 +49,7 @@ import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
+import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -183,6 +184,10 @@ let backgroundTaskCenterWorkId = null;
 let backgroundTaskCenterTasksInitialized = false;
 let backgroundTaskCenterTaskSnapshots = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
+const systemHealthPollInterval = 30_000;
+let systemHealthTimer = null;
+let systemHealthSnapshot = { status: "checking", version: "" };
+let topbarStatusSource = "view";
 const taskProgressRefreshInterval = 2_500;
 const taskStatusSnapshots = new Map();
 
@@ -2304,11 +2309,18 @@ async function api(path, options = {}) {
   const headers = { ...(options.headers ?? {}) };
   if (state.csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)) headers["X-CSRF-Token"] = state.csrfToken;
   if (!(body instanceof FormData)) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, body instanceof FormData ? { ...options, body, headers } : {
-    ...options,
-    headers,
-    body: body && typeof body !== "string" ? JSON.stringify(body) : body
-  });
+  let response;
+  try {
+    response = await fetch(path, body instanceof FormData ? { ...options, body, headers } : {
+      ...options,
+      headers,
+      body: body && typeof body !== "string" ? JSON.stringify(body) : body
+    });
+  } catch (error) {
+    updateSystemHealth({ status: "offline" });
+    throw error;
+  }
+  updateSystemHealth({ status: response.status >= 500 ? "degraded" : "ready" });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
     // Presence is best-effort; a heartbeat 401 must not force the login wall.
@@ -2328,6 +2340,12 @@ async function api(path, options = {}) {
     return null;
   }
   const payload = await response.json();
+  if (path === "/api/health") {
+    updateSystemHealth({
+      status: payload.data?.status === "ok" ? "ready" : "degraded",
+      version: payload.data?.version
+    });
+  }
   invalidateModuleRequestsAfterMutation(path, method);
   return payload.data;
 }
@@ -2442,21 +2460,40 @@ function invalidateModuleRequestsAfterMutation(path, method) {
   affected.forEach((module) => moduleRequestCache.invalidate(state.work.id, module));
 }
 
+function applyProductHealthMetadata(health) {
+  const version = String(health?.version ?? "").trim();
+  document.querySelectorAll("[data-product-footer-version]").forEach((element) => {
+    element.textContent = version ? `v${version}` : "v—";
+  });
+  document.querySelectorAll("[data-product-footer-development]").forEach((element) => {
+    element.classList.toggle("hidden", health?.development !== true);
+  });
+}
+
+function scheduleSystemHealthCheck() {
+  if (systemHealthTimer !== null) window.clearTimeout(systemHealthTimer);
+  systemHealthTimer = window.setTimeout(() => {
+    systemHealthTimer = null;
+    void refreshSystemHealth();
+  }, systemHealthPollInterval);
+}
+
+async function refreshSystemHealth() {
+  try {
+    const health = await api("/api/health");
+    applyProductHealthMetadata(health);
+  } catch {
+    // 系统状态已由 api 记录；健康检查失败不弹出重复提示
+  } finally {
+    scheduleSystemHealthCheck();
+  }
+}
+
 async function initializeProductFooters() {
   const year = String(new Date().getFullYear());
   document.querySelectorAll("[data-product-footer-year]").forEach((element) => { element.textContent = year; });
-  try {
-    const health = await api("/api/health");
-    const version = String(health.version ?? "").trim();
-    document.querySelectorAll("[data-product-footer-version]").forEach((element) => {
-      element.textContent = version ? `v${version}` : "v—";
-    });
-    document.querySelectorAll("[data-product-footer-development]").forEach((element) => {
-      element.classList.toggle("hidden", health.development !== true);
-    });
-  } catch {
-    document.querySelectorAll("[data-product-footer-version]").forEach((element) => { element.textContent = "v—"; });
-  }
+  applyProductHealthMetadata(null);
+  await refreshSystemHealth();
 }
 
 function observeSystemBootId(value) {
@@ -2813,10 +2850,53 @@ document.addEventListener("toggle", (event) => {
   }
 }, true);
 
+function paintTopbarStatus(text, { source, tone, title }) {
+  const element = $("#save-state");
+  const colors = { ok: "var(--green)", pending: "var(--muted)", error: "var(--accent)" };
+  topbarStatusSource = source;
+  element.textContent = text;
+  element.style.color = colors[tone] ?? colors.ok;
+  element.dataset.statusSource = source;
+  element.setAttribute("aria-label", `${source === "system" ? "系统" : "工作台"}状态：${text}`);
+  element.title = title || text;
+}
+
+function setTopbarViewState(text) {
+  state.dirty = false;
+  paintTopbarStatus(text, { source: "view", tone: "ok", title: text });
+}
+
+function updateSystemHealth(next) {
+  systemHealthSnapshot = {
+    ...systemHealthSnapshot,
+    ...next,
+    version: next.version === undefined ? systemHealthSnapshot.version : String(next.version ?? "")
+  };
+  if (topbarStatusSource === "system") renderSystemHealth();
+}
+
+function renderSystemHealth() {
+  const presentation = systemStatusPresentation(systemHealthSnapshot);
+  paintTopbarStatus(presentation.label, {
+    source: "system",
+    tone: presentation.tone,
+    title: presentation.title
+  });
+}
+
+function showSystemStatus() {
+  state.dirty = false;
+  topbarStatusSource = "system";
+  renderSystemHealth();
+}
+
 function setSaveState(text, dirty = false) {
   state.dirty = dirty;
-  $("#save-state").textContent = text;
-  $("#save-state").style.color = dirty ? "var(--accent)" : "var(--green)";
+  paintTopbarStatus(text, {
+    source: "save",
+    tone: dirty ? "error" : "ok",
+    title: text
+  });
 }
 
 function chapterDraftSnapshot() {
@@ -3084,7 +3164,7 @@ function showShelf() {
   $("#work-meta").textContent = `${state.works.length} 部作品`;
   $("#settings-button").removeAttribute("aria-current");
   $("#top-search-button").disabled = true;
-  setSaveState("书架");
+  setTopbarViewState("书架");
   renderShelf();
   replacePageRoute({ view: "shelf" });
 }
@@ -3580,7 +3660,7 @@ async function showSettingsHub() {
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = "设置中心";
   $("#settings-button").setAttribute("aria-current", "page");
-  setSaveState("设置");
+  setTopbarViewState("设置");
   renderSettingsHub();
   replacePageRoute({ view: "settings", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
@@ -3625,7 +3705,7 @@ async function showPlatformAi() {
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = "平台 AI 管理";
   $("#settings-button").setAttribute("aria-current", "page");
-  setSaveState("平台 AI");
+  setTopbarViewState("平台 AI");
   await renderPlatformAiConfig();
   replacePageRoute({ view: "platform-ai", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
@@ -3645,7 +3725,7 @@ async function showPlatformUsage() {
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = "Token 用量";
   $("#settings-button").setAttribute("aria-current", "page");
-  setSaveState("Token 用量");
+  setTopbarViewState("Token 用量");
   await renderPlatformTokenUsage();
   replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
@@ -3734,7 +3814,7 @@ async function selectWork(workId, preferredChapterId = null) {
   }
   const nextWork = await api(`/api/works/${workId}?directory=volumes`);
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
-  setSaveState("就绪");
+  showSystemStatus();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
@@ -4219,6 +4299,7 @@ function showWelcome(hasWork = false) {
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#welcome-view").classList.remove("hidden");
+  if (hasWork) showSystemStatus();
   $("#welcome-view h1").innerHTML = hasWork ? "故事已经就位，<br>从新章节继续。" : "把长篇故事的每条线索，<br>留在作者掌控之中。";
   $("#welcome-new-work").textContent = hasWork ? "新建章节" : "创建第一部作品";
   replacePageRoute(hasWork && state.work ? { view: "welcome", workId: state.work.id } : { view: "shelf" });
@@ -4272,6 +4353,7 @@ async function showModule(module) {
     }
     return;
   }
+  showSystemStatus();
   dismissChapterInsightToast();
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -11182,11 +11264,18 @@ $("#search-form").addEventListener("submit", async (event) => {
 });
 $("#export-button").addEventListener("click", () => downloadWorkManuscript(state.work));
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.user && !systemRestartDetected) scheduleSystemBootCheck(0);
+  if (document.visibilityState !== "visible") return;
+  if (state.user && !systemRestartDetected) scheduleSystemBootCheck(0);
+  void refreshSystemHealth();
 });
 window.addEventListener("beforeunload", (event) => {
   if (!systemRestartReloading && (state.dirty || entityEditorDirty || characterSectionEditorDirty)) event.preventDefault();
 });
+window.addEventListener("online", () => {
+  updateSystemHealth({ status: "checking" });
+  void refreshSystemHealth();
+});
+window.addEventListener("offline", () => updateSystemHealth({ status: "offline" }));
 
 initializePage().catch((error) => {
   restoringPageRoute = false;

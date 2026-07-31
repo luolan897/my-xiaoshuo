@@ -12,8 +12,9 @@ describe("作品工作台按需加载", () => {
 
     expect(selectWorkSource).toContain("renderTree();");
     expect(selectWorkSource).toContain("?directory=volumes");
-    expect(selectWorkSource).toContain('if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();\n  setSaveState("就绪");');
+    expect(selectWorkSource).toContain('if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();\n  showSystemStatus();');
     expect(selectWorkSource).not.toContain('if (discarding) setSaveState("就绪");');
+    expect(selectWorkSource).not.toContain('setSaveState("就绪")');
     expect(selectWorkSource).toContain("void loadAllVolumeChapters(nextWork.id)");
     expect(selectWorkSource).not.toContain("await selectChapter(targetChapter.id)");
     expect(selectWorkSource).not.toContain("await loadModels()");
@@ -45,6 +46,9 @@ describe("作品工作台按需加载", () => {
     expect(showModuleSource).toContain('if (module === "characters") await renderCharacters(characterListPage)');
     expect(showModuleSource).toContain('if (module === "timeline") await renderTimeline()');
     expect(showModuleSource).toContain('if (module === "relationships") await renderRelationships()');
+    expect(showModuleSource).toContain("showSystemStatus();");
+    expect(application).toContain('updateSystemHealth({ status: "offline" });');
+    expect(application).toContain("const systemHealthPollInterval = 30_000;");
     expect(application).toContain('$("#ai-prompt").addEventListener("focus"');
     expect(application).toContain("await ensureAiReferencesLoaded();");
     expect(application).toContain("await ensureAiConversationsLoaded();");
