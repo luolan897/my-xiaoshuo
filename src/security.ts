@@ -238,7 +238,7 @@ const redirectStatuses = new Set([301, 302, 303, 307, 308]);
 
 /**
  * 出站 AI 请求：禁止浏览器式自动跟随重定向。
- * 每一跳都重新做 SSRF 校验；跨主机跳转时剥离 Authorization，避免密钥泄露到跳转目标。
+ * 每一跳都重新做 SSRF 校验；只允许同源跳转，避免密钥或请求正文泄露到其他目标。
  */
 export async function fetchSafeAiEndpoint(
   fetchImpl: typeof fetch,
@@ -274,7 +274,7 @@ export async function fetchSafeAiEndpoint(
       throw new AppError(502, "PROVIDER_REDIRECT_INVALID", "AI 供应商返回了无效的重定向地址");
     }
     if (nextUrl.origin !== new URL(currentUrl).origin) {
-      baseHeaders.delete("authorization");
+      throw new AppError(502, "PROVIDER_REDIRECT_CROSS_ORIGIN", "AI 供应商返回了不安全的跨域重定向");
     }
     if (response.status === 303) {
       init = { ...init, method: "GET", body: undefined };
