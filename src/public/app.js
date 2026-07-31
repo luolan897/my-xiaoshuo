@@ -152,6 +152,7 @@ function createPresenceClientId() {
 
 const presenceClientId = createPresenceClientId();
 const presenceHeartbeatInterval = 12_000;
+const systemBootCheckInterval = 8_000;
 let presenceParticipants = [];
 let presenceHeartbeatTimer = null;
 let presenceHeartbeatQueued = null;
@@ -160,6 +161,11 @@ const acknowledgedCollaborativeChangeIds = new Set();
 let collaborativeChangePromptOpen = false;
 let relationshipPresenceId = null;
 let collaborationAutoSaveDisabled = false;
+let systemBootId = null;
+let systemBootCheckTimer = null;
+let systemBootCheckPromise = null;
+let systemRestartDetected = false;
+let systemRestartReloading = false;
 let chapterAnnotations = [];
 let workAuditRecords = [];
 let workAuditNextPage = null;
@@ -2305,10 +2311,13 @@ async function api(path, options = {}) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
     // Presence is best-effort; a heartbeat 401 must not force the login wall.
     if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
-      state.user = null;
-      state.csrfToken = null;
-      moduleRequestCache.clear();
-      showAuth(false);
+      const restarted = await checkSystemBoot(true);
+      if (!restarted) {
+        state.user = null;
+        state.csrfToken = null;
+        moduleRequestCache.clear();
+        showAuth(false);
+      }
     }
     throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
   }
@@ -2446,6 +2455,61 @@ async function initializeProductFooters() {
   } catch {
     document.querySelectorAll("[data-product-footer-version]").forEach((element) => { element.textContent = "v—"; });
   }
+}
+
+function observeSystemBootId(value) {
+  const nextBootId = typeof value === "string" ? value.trim() : "";
+  if (!nextBootId) return false;
+  if (!systemBootId) {
+    systemBootId = nextBootId;
+    return false;
+  }
+  if (nextBootId === systemBootId) return false;
+  systemRestartDetected = true;
+  if (systemBootCheckTimer !== null) clearTimeout(systemBootCheckTimer);
+  systemBootCheckTimer = null;
+  const dialog = $("#system-restart-dialog");
+  if (!dialog.open) dialog.showModal();
+  window.requestAnimationFrame(() => $("#system-restart-dialog-title").focus());
+  return true;
+}
+
+async function checkSystemBoot(forceFresh = false) {
+  if (!state.user || systemRestartDetected) return systemRestartDetected;
+  if (systemBootCheckPromise) {
+    if (!forceFresh) return systemBootCheckPromise;
+    await systemBootCheckPromise;
+    if (systemRestartDetected) return true;
+  }
+  systemBootCheckPromise = (async () => {
+    try {
+      const response = await fetch("/api/health", {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) return false;
+      const payload = await response.json();
+      return observeSystemBootId(payload?.data?.bootId);
+    } catch {
+      return false;
+    }
+  })();
+  try {
+    return await systemBootCheckPromise;
+  } finally {
+    systemBootCheckPromise = null;
+  }
+}
+
+function scheduleSystemBootCheck(delay = systemBootCheckInterval) {
+  if (systemBootCheckTimer !== null) clearTimeout(systemBootCheckTimer);
+  systemBootCheckTimer = null;
+  if (!state.user || systemRestartDetected) return;
+  systemBootCheckTimer = setTimeout(async () => {
+    systemBootCheckTimer = null;
+    await checkSystemBoot();
+    scheduleSystemBootCheck();
+  }, delay);
 }
 
 function selectAuthMode(mode) {
@@ -2589,7 +2653,9 @@ async function initializeAuthentication() {
   }
   // 已登录却停在登录页路由时，回到书架首页
   if (route.view === "login") window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));
+  observeSystemBootId(session.bootId);
   applyAuthenticatedUser(session);
+  scheduleSystemBootCheck();
   await loadPlatformUiSettings();
   return true;
 }
@@ -9960,6 +10026,14 @@ $("#onboarding-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
   completeOnboarding();
 });
+$("#system-restart-dialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+});
+$("#system-restart-confirm").addEventListener("click", () => {
+  systemRestartReloading = true;
+  window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
+  window.location.reload();
+});
 $("#onboarding-dialog").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
@@ -11098,7 +11172,12 @@ $("#search-form").addEventListener("submit", async (event) => {
   });
 });
 $("#export-button").addEventListener("click", () => downloadWorkManuscript(state.work));
-window.addEventListener("beforeunload", (event) => { if (state.dirty || entityEditorDirty || characterSectionEditorDirty) event.preventDefault(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.user && !systemRestartDetected) scheduleSystemBootCheck(0);
+});
+window.addEventListener("beforeunload", (event) => {
+  if (!systemRestartReloading && (state.dirty || entityEditorDirty || characterSectionEditorDirty)) event.preventDefault();
+});
 
 initializePage().catch((error) => {
   restoringPageRoute = false;
