@@ -38,4 +38,22 @@ describe("AI 错误详情界面", () => {
     expect(styles).toContain(".assistant-message.is-error .message-body { font-family: inherit; font-size: inherit; line-height: inherit; }");
     expect(styles).toContain(".assistant-message.is-error .ai-error-text { margin: 0; white-space: pre-wrap; font: inherit; }");
   });
+
+  it("创作助手执行失败时将标题状态点切换为红色", async () => {
+    const [page, application, styles] = await Promise.all([
+      readFile(join(process.cwd(), "src", "public", "index.html"), "utf8"),
+      readFile(join(process.cwd(), "src", "public", "app.js"), "utf8"),
+      readFile(join(process.cwd(), "src", "public", "styles.css"), "utf8")
+    ]);
+
+    expect(page).toContain('id="ai-status-dot" class="status-dot" role="status" aria-label="创作助手状态：正常"');
+    expect(application).toContain("function setAiAssistantStatus(status)");
+    expect(application).toContain('dot.classList.toggle("is-error", failed);');
+    expect(application).toContain('setAiAssistantStatus("ready");');
+    expect(application).toContain('if (toolCall.status === "failed") setAiAssistantStatus("error");');
+    expect(application).toContain('const suggestionFailed = suggestion.guard?.status === "failed"');
+    expect(application).toContain('if (suggestionFailed) setAiAssistantStatus("error");');
+    expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
+    expect(styles).toContain('.status-dot.is-error { background: var(--accent);');
+  });
 });
