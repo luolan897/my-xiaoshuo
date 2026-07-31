@@ -1345,14 +1345,20 @@ function resetAiFeed() {
   $("#ai-feed").innerHTML = '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
-function appendAiContextCompactionDivider(kind, before = null) {
+function createAiContextCompactionDivider({ kind = "conversation", ariaLabel = "已压缩上下文", title = "" } = {}) {
   const divider = document.createElement("div");
   divider.className = "ai-context-compaction-divider";
   divider.dataset.contextCompaction = kind;
   divider.dataset.testid = "ai-context-compaction-divider";
   divider.setAttribute("role", "separator");
-  divider.setAttribute("aria-label", "已压缩上下文");
+  divider.setAttribute("aria-label", ariaLabel);
+  if (title) divider.title = title;
   divider.innerHTML = "<span>已压缩上下文</span>";
+  return divider;
+}
+
+function appendAiContextCompactionDivider(kind, before = null) {
+  const divider = createAiContextCompactionDivider({ kind });
   const feed = $("#ai-feed");
   if (before?.parentElement === feed) feed.insertBefore(divider, before);
   else feed.append(divider);
@@ -1602,14 +1608,11 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null) {
   list.className = "ai-process-list";
   for (const step of steps) {
     if (step?.type === "context_compaction") {
-      const compaction = document.createElement("div");
-      compaction.className = "ai-process-context-compaction";
-      compaction.dataset.testid = "ai-process-context-compaction";
-      compaction.setAttribute("role", "separator");
-      compaction.setAttribute("aria-label", `第 ${Number(step.round) || 1} 轮已压缩上下文`);
-      compaction.title = `已将 ${Number(step.sourceMessageCount) || 0} 条工具上下文压缩为摘要`;
-      compaction.innerHTML = "<span>已压缩上下文</span>";
-      list.append(compaction);
+      list.append(createAiContextCompactionDivider({
+        kind: "tool",
+        ariaLabel: `第 ${Number(step.round) || 1} 轮已压缩上下文`,
+        title: `已将 ${Number(step.sourceMessageCount) || 0} 条工具上下文压缩为摘要`
+      }));
       continue;
     }
     if (step?.type === "tool" && step.toolCall) {
