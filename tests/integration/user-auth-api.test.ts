@@ -1364,6 +1364,69 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(JSON.stringify(result)).not.toContain("TOP_SECRET_PROSE_TOOL");
   });
 
+  it("AI 调用列表按成员权限隐藏原始上下文", async () => {
+    const owner = await register(runtime, "ai_call_owner");
+    const collaborator = await register(runtime, "ai_call_reader");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 调用权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const permissions = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "read",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions })
+      .expect(201);
+    const provider = await owner.agent.post("/api/platform/ai/providers")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "调用记录供应商", baseUrl: "https://example.com", apiKey: "audit-call-key", status: "enabled" })
+      .expect(201);
+    const model = await owner.agent.post(`/api/providers/${provider.body.data.id}/models`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ displayName: "调用记录模型", modelId: "audit-call-model" })
+      .expect(201);
+    runtime.database.run(
+      `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+       status, input_chars, created_at) VALUES (?, ?, 'chat', ?, ?, ?, '{}', 'completed', 1, ?)`,
+      "call_restricted_context",
+      workId,
+      provider.body.data.id,
+      model.body.data.id,
+      JSON.stringify({
+        type: "selection",
+        selection: "TOP_SECRET_SELECTION_CONTEXT",
+        chapterId: "chapter_secret",
+        volumeId: "volume_secret",
+        chapterIds: ["chapter_secret"],
+        characterIds: ["character_secret"],
+        settingIds: ["setting_secret"],
+        includeBookSummary: true
+      }),
+      new Date().toISOString()
+    );
+
+    const response = await collaborator.agent.get(`/api/works/${workId}/ai-calls`).expect(200);
+    expect(response.body.data[0].contextScope).toEqual({ type: "selection", restricted: true });
+    expect(JSON.stringify(response.body.data)).not.toContain("TOP_SECRET_SELECTION_CONTEXT");
+    expect(JSON.stringify(response.body.data)).not.toContain("chapter_secret");
+    expect(JSON.stringify(response.body.data)).not.toContain("character_secret");
+    expect(JSON.stringify(response.body.data)).not.toContain("setting_secret");
+  });
+
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {
     const owner = await register(runtime, "member_owner");
     const collaborator = await register(runtime, "member_transaction_target");

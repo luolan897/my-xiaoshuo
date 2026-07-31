@@ -689,6 +689,32 @@ function redactTaskCharacterNames(record: Record<string, unknown>, permissions: 
   return result;
 }
 
+function redactAiCallContext(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  const result = { ...record };
+  const scope = recordValue(result.contextScope);
+  if (!scope) return result;
+  const redactedScope = { ...scope };
+  let restricted = false;
+  if (permissions.prose === "none") {
+    for (const field of ["selection", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
+      if (field in redactedScope) {
+        delete redactedScope[field];
+        restricted = true;
+      }
+    }
+  }
+  if (permissions.characters === "none" && "characterIds" in redactedScope) {
+    delete redactedScope.characterIds;
+    restricted = true;
+  }
+  if (permissions.settings === "none" && "settingIds" in redactedScope) {
+    delete redactedScope.settingIds;
+    restricted = true;
+  }
+  result.contextScope = restricted ? { ...redactedScope, restricted: true } : redactedScope;
+  return result;
+}
+
 function redactMergeRecords(
   value: unknown,
   mapper: (record: Record<string, unknown>) => Record<string, unknown>
@@ -2120,7 +2146,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/suggestions/:suggestionId/reject", (request, response) => data(response, ai.rejectSuggestion(request.params.suggestionId)));
   app.get("/api/works/:workId/ai-calls", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? ai.listCallsPage(request.params.workId, pagination) : ai.listCalls(request.params.workId));
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, pagination
+      ? mapRecords(ai.listCallsPage(request.params.workId, pagination), (call) => redactAiCallContext(call, permissions))
+      : ai.listCalls(request.params.workId).map((call) => redactAiCallContext(call, permissions)));
   });
 
   app.get("/api/works/:workId/search", async (request, response) => {
