@@ -8,16 +8,10 @@ function pad(value) {
   return String(value).padStart(2, "0");
 }
 
-function localDayKey(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-export function formatAiMessageTime(createdAt, previousCreatedAt = null) {
+export function formatAiMessageTime(createdAt) {
   const created = validDate(createdAt);
   if (!created) return "";
+  const date = `${pad(created.getMonth() + 1)}-${pad(created.getDate())}`;
   const time = `${pad(created.getHours())}:${pad(created.getMinutes())}`;
-  const previous = validDate(previousCreatedAt);
-  return previous && localDayKey(previous) !== localDayKey(created)
-    ? `${localDayKey(created)} ${time}`
-    : time;
+  return `${date} ${time}`;
 }
