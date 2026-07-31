@@ -21,6 +21,12 @@ describe("assertSafeAiEndpoint", () => {
       expect.objectContaining({ family: expect.any(Number) })
     ]));
   });
+
+  it("拒绝公网 HTTP 地址传输供应商凭据", async () => {
+    await expect(assertSafeAiEndpoint("http://93.184.216.34/v1", false)).rejects.toMatchObject({
+      code: "INSECURE_PROVIDER_ENDPOINT"
+    });
+  });
 });
 
 describe("fetchSafeAiEndpoint", () => {

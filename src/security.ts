@@ -231,6 +231,9 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
       throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址指向受保护的本机、内网或链路本地网络");
     }
   }
+  if (endpoint.protocol === "http:" && addresses.some(({ address }) => unsafeIpKind(address) !== "private")) {
+    throw new AppError(400, "INSECURE_PROVIDER_ENDPOINT", "公网 AI 供应商地址必须使用 HTTPS");
+  }
   return addresses;
 }
 
