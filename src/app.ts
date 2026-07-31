@@ -780,7 +780,7 @@ export function publicAiStreamError(error: unknown): {
       code: error.code,
       message: error.message,
       status: error.status,
-      ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
+      ...(error.status < 500 && typeof details?.failure === "string" ? { failure: details.failure } : {}),
       ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
       ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
