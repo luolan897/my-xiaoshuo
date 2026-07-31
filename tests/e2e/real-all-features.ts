@@ -254,7 +254,7 @@ try {
   });
   const shenInOrganization = await api<Entity>("PATCH", `/characters/${shen.id}`, { organizationIds: [organization.id, secondOrganization.id] });
   assert.deepEqual(new Set(shenInOrganization.organizationIds), new Set([organization.id, secondOrganization.id]));
-  const organizations = await api<Entity[]>("GET", `/works/${disposableWorkId}/organizations`);
+  const organizations = await api<Entity[]>("GET", `/works/${disposableWorkId}/organizations?includeContent=true`);
   const guardOrganization = organizations.find((item) => item.id === organization.id);
   const allianceOrganization = organizations.find((item) => item.id === secondOrganization.id);
   assert.deepEqual(new Set(guardOrganization?.memberIds), new Set([lin.id, shen.id]));
