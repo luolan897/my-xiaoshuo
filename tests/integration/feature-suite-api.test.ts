@@ -433,6 +433,12 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
       name: "待删除组织",
       memberIds: [character.body.data.id]
     }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "待删除卷" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "待删除章",
+      content: "用于触发关系索引队列。"
+    }).expect(201);
 
     await request(runtime.app).delete(`/api/works/${workId}`).expect(204);
     await request(runtime.app).get(`/api/works/${workId}`).expect(404);
