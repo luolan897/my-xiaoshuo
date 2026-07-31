@@ -26,7 +26,7 @@
         <form id="login-form" class="auth-form">
           <label>用户名<input name="username" autocomplete="username" maxlength="100" required></label>
           <label>密码<input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="200" required aria-describedby="login-lock-hint"></label>
-          <p id="login-lock-hint" class="auth-security-hint">5 分钟内连续输错 5 次密码，登录将锁定 30 分钟。</p>
+          <p id="login-lock-hint" class="auth-security-hint">登录和注册采用验证码与来源限速防护，不会因他人输错密码而锁定账户。</p>
           <div class="auth-captcha">
             <label>验证码<input name="captchaAnswer" autocomplete="off" inputmode="text" maxlength="8" spellcheck="false" required aria-describedby="login-captcha-hint"></label>
             <button id="login-captcha-refresh" class="auth-captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码">

@@ -155,7 +155,7 @@ export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000): Re
   };
 }
 
-export function createAuthenticationRateLimitMiddleware(limit = 20, windowMs = 15 * 60_000): RequestHandler {
+export function createAuthenticationRateLimitMiddleware(limit = 10, windowMs = 15 * 60_000): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
     const authenticationWrite = request.method === "POST" && ["/api/auth/login", "/api/auth/register"].includes(request.path);

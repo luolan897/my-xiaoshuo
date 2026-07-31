@@ -42,7 +42,7 @@ describe("注册入口状态", () => {
     expect(page.text).toContain('aria-describedby="login-lock-hint"');
     expect(page.text).toContain('<input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="200" required aria-describedby="login-lock-hint">');
     expect(page.text).not.toContain('data-password-toggle="login-password"');
-    expect(page.text).toContain('id="login-lock-hint" class="auth-security-hint">5 分钟内连续输错 5 次密码，登录将锁定 30 分钟。</p>');
+    expect(page.text).toContain('id="login-lock-hint" class="auth-security-hint">登录和注册采用验证码与来源限速防护，不会因他人输错密码而锁定账户。</p>');
     expect(styles.text).toContain(".auth-security-hint {");
   });
 });
