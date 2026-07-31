@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity } from "../../sr
 import { isDevelopmentServer, isLoopbackHost, startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
 import { APP_VERSION } from "../../src/version.js";
 import { loadMasterSecret } from "../../src/credential-vault.js";
+import { DATABASE_SCHEMA_VERSION, Database, readDatabaseSchemaVersion } from "../../src/database.js";
 
 const roots: string[] = [];
 const runningServers: RunningLocalServer[] = [];
@@ -90,6 +91,42 @@ describe("本地服务运行时", () => {
     chmodSync(masterKeyPath, 0o644);
     expect(loadMasterSecret(masterKeyPath)).toHaveLength(43);
     expect(statSync(masterKeyPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("升级数据库前完整备份数据库、主密钥和附件", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-migration-backup-"));
+    roots.push(root);
+    const databasePath = join(root, "novel.db");
+    const legacy = new Database(databasePath);
+    legacy.raw.exec("DROP TABLE attachment_access_modules; DELETE FROM schema_migrations WHERE version = 58");
+    legacy.close();
+    const masterKey = loadMasterSecret(join(root, "master.key"));
+    const attachmentsDirectory = join(root, "attachments", "fixture");
+    mkdirSync(attachmentsDirectory, { recursive: true });
+    writeFileSync(join(attachmentsDirectory, "image.bin"), "attachment-backup-fixture");
+
+    const running = await startLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      dataDirectory: root,
+      databasePath,
+      env: { NODE_ENV: "test" }
+    });
+    runningServers.push(running);
+
+    const backupNames = readdirSync(join(root, "backups"));
+    expect(backupNames).toHaveLength(1);
+    expect(backupNames[0]).toContain(`pre-migration-v57-to-v${DATABASE_SCHEMA_VERSION}`);
+    const backupDirectory = join(root, "backups", backupNames[0]!);
+    expect(readDatabaseSchemaVersion(join(backupDirectory, "novel.db"))).toBe(57);
+    expect(readFileSync(join(backupDirectory, "master.key"), "utf8").trim()).toBe(masterKey);
+    expect(readFileSync(join(backupDirectory, "attachments", "fixture", "image.bin"), "utf8")).toBe("attachment-backup-fixture");
+    expect(JSON.parse(readFileSync(join(backupDirectory, "backup.json"), "utf8"))).toMatchObject({
+      fromSchemaVersion: 57,
+      toSchemaVersion: DATABASE_SCHEMA_VERSION,
+      databaseFile: "novel.db"
+    });
+    expect(running.runtime.database.get("SELECT MAX(version) AS version FROM schema_migrations")).toEqual({ version: DATABASE_SCHEMA_VERSION });
   });
 
   it("开发免登录使用已有账户进入工作台", async () => {

@@ -6,6 +6,22 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
+export const DATABASE_SCHEMA_VERSION = 58;
+
+export function readDatabaseSchemaVersion(filename: string): number | null {
+  if (!existsSync(filename)) return null;
+  const database = new DatabaseSync(filename, { readOnly: true });
+  try {
+    const migrationTable = database.prepare(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+    ).get();
+    if (!migrationTable) return 0;
+    const row = database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version?: unknown } | undefined;
+    return Number(row?.version ?? 0);
+  } finally {
+    database.close();
+  }
+}
 
 export class Database {
   readonly raw: DatabaseSync;
