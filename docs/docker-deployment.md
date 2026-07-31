@@ -26,6 +26,7 @@ services:
       - "127.0.0.1:13210:13210"
     environment:
       APP_ALLOW_REGISTRATION: "${APP_ALLOW_REGISTRATION:-false}"
+      APP_SETUP_TOKEN: "${APP_SETUP_TOKEN:-}"
       APP_TRUST_PROXY: "${APP_TRUST_PROXY:-false}"
     volumes:
       - scriverse-data:/app/.data
@@ -40,6 +41,7 @@ volumes:
 ```dotenv
 SCRIVERSE_TAG=latest
 APP_ALLOW_REGISTRATION=true
+APP_SETUP_TOKEN=请替换为至少32个字符的随机初始化令牌
 APP_TRUST_PROXY=false
 ```
 
@@ -51,12 +53,13 @@ docker compose up -d
 docker compose ps
 ```
 
-访问 [http://127.0.0.1:13210](http://127.0.0.1:13210)，创建首个管理员账户。
+访问 [http://127.0.0.1:13210](http://127.0.0.1:13210)，输入初始化令牌并创建首个管理员账户。
 
 首个管理员创建完成后，将 `.env` 中的注册开关改为：
 
 ```dotenv
 APP_ALLOW_REGISTRATION=false
+APP_SETUP_TOKEN=
 ```
 
 重新创建容器，让配置立即生效：
@@ -65,7 +68,7 @@ APP_ALLOW_REGISTRATION=false
 docker compose up -d --force-recreate
 ```
 
-`APP_ALLOW_REGISTRATION` 只有明确设置为 `true` 时才开放注册。未设置、`false` 或其他值都会同时关闭前端注册入口和后端注册接口，包括空数据库的首位管理员注册。
+`APP_ALLOW_REGISTRATION` 只有明确设置为 `true` 时才开放注册；同时必须配置至少 32 个字符的 `APP_SETUP_TOKEN`。未设置、`false` 或其他值都会同时关闭前端注册入口和后端注册接口，包括空数据库的首位管理员注册。初始化令牌只在创建首位管理员时校验。
 
 ## 固定正式版本
 
@@ -169,7 +172,7 @@ docker build --tag scriverse:local .
 
 ### 页面显示“注册已禁用”
 
-首次初始化时必须设置 `APP_ALLOW_REGISTRATION=true`，然后重新创建容器。创建管理员后应立即关闭该开关。
+首次初始化时必须设置 `APP_ALLOW_REGISTRATION=true` 和至少 32 个字符的 `APP_SETUP_TOKEN`，然后重新创建容器。创建管理员后应立即关闭注册并清空初始化令牌。
 
 ### 容器不断重启
 

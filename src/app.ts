@@ -21,7 +21,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { Store, versionedEntityTypes } from "./store.js";
 import { parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -66,6 +66,7 @@ const registrationSchema = z.object({
   username: usernameSchema,
   password: passwordSchema,
   passwordConfirmation: passwordSchema,
+  setupToken: z.string().max(500).optional(),
   ...captchaFields
 }).strict().refine((input) => input.password === input.passwordConfirmation, {
   path: ["passwordConfirmation"],
@@ -689,6 +690,32 @@ function redactTaskCharacterNames(record: Record<string, unknown>, permissions: 
   return result;
 }
 
+function redactAiCallContext(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  const result = { ...record };
+  const scope = recordValue(result.contextScope);
+  if (!scope) return result;
+  const redactedScope = { ...scope };
+  let restricted = false;
+  if (permissions.prose === "none") {
+    for (const field of ["selection", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
+      if (field in redactedScope) {
+        delete redactedScope[field];
+        restricted = true;
+      }
+    }
+  }
+  if (permissions.characters === "none" && "characterIds" in redactedScope) {
+    delete redactedScope.characterIds;
+    restricted = true;
+  }
+  if (permissions.settings === "none" && "settingIds" in redactedScope) {
+    delete redactedScope.settingIds;
+    restricted = true;
+  }
+  result.contextScope = restricted ? { ...redactedScope, restricted: true } : redactedScope;
+  return result;
+}
+
 function redactMergeRecords(
   value: unknown,
   mapper: (record: Record<string, unknown>) => Record<string, unknown>
@@ -816,14 +843,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/auth/session", (request, response) => {
     const session = auth.authenticate(request);
     const registrationOpen = options.security?.allowRegistration === true;
+    const setupRequired = !auth.hasUsers();
+    const setupTokenRequired = setupRequired && Boolean(options.security?.setupToken);
     const developmentUser = getDevelopmentUser();
     if (!session && developmentUser) {
-      data(response, { authenticated: true, user: developmentUser, csrfToken: null, setupRequired: false, registrationOpen });
+      data(response, { authenticated: true, user: developmentUser, csrfToken: null, setupRequired: false, setupTokenRequired: false, registrationOpen });
       return;
     }
     data(response, session
-      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, registrationOpen }
-      : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers(), registrationOpen });
+      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, setupTokenRequired: false, registrationOpen }
+      : { authenticated: false, user: null, csrfToken: null, setupRequired, setupTokenRequired, registrationOpen });
   });
   app.get("/api/auth/captcha", (_request, response) => {
     data(response, captcha.create());
@@ -834,6 +863,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     const input = parse(registrationSchema, request.body);
     captcha.consume(input.captchaId, input.captchaAnswer);
+    if (!auth.hasUsers() && !verifySetupToken(options.security?.setupToken, input.setupToken)) {
+      throw new AppError(403, "SETUP_TOKEN_INVALID", "初始化令牌无效或未配置");
+    }
     const result = auth.register({ username: input.username, password: input.password });
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));
@@ -853,6 +885,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     disabled: options.disableUserAuth === true,
     resolveBypassUser: getDevelopmentUser
   }));
+  app.use(createUploadRateLimitMiddleware());
   app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
   app.get("/api/cli/session", (request, response) => {
@@ -1055,13 +1088,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.put("/api/works/:workId/cover", coverUpload.single("file"), (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 封面");
     const bytes = request.file.buffer;
-    const isPng = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-    const isWebp = bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
-    const mimeType: "image/png" | "image/jpeg" | "image/webp" | null = isPng ? "image/png" : isJpeg ? "image/jpeg" : isWebp ? "image/webp" : null;
-    if (!mimeType) throw new AppError(415, "INVALID_COVER", "封面文件内容不是有效的 PNG、JPEG 或 WebP 图片");
-    const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
-    data(response, store.setWorkCover(String(request.params.workId), mimeType, bytes, expectedVersionNo));
+    try {
+      const metadata = readRasterImageMetadata(bytes);
+      const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
+      data(response, store.setWorkCover(String(request.params.workId), metadata.mimeType, bytes, expectedVersionNo));
+    } catch (error) {
+      if (error instanceof InvalidRasterImageError) throw new AppError(415, "INVALID_COVER", error.message);
+      throw error;
+    }
   });
   app.delete("/api/works/:workId/cover", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
@@ -2120,7 +2154,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/suggestions/:suggestionId/reject", (request, response) => data(response, ai.rejectSuggestion(request.params.suggestionId)));
   app.get("/api/works/:workId/ai-calls", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? ai.listCallsPage(request.params.workId, pagination) : ai.listCalls(request.params.workId));
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, pagination
+      ? mapRecords(ai.listCallsPage(request.params.workId, pagination), (call) => redactAiCallContext(call, permissions))
+      : ai.listCalls(request.params.workId).map((call) => redactAiCallContext(call, permissions)));
   });
 
   app.get("/api/works/:workId/search", async (request, response) => {

@@ -1301,11 +1301,17 @@ export class Store {
     const storageKeys = this.db.all("SELECT DISTINCT storage_key FROM attachments WHERE work_id = ?", workId)
       .map((row) => requiredString(row, "storage_key"));
     this.db.transaction(() => {
+      this.db.raw.exec("PRAGMA defer_foreign_keys = ON");
       const current = this.getWork(workId);
       this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
       this.recordEntityVersion("work", workId, "delete", null, "删除作品");
       this.audit(null, "work.deleted", "work", workId, { title: work.title });
+      this.db.run("DELETE FROM characters WHERE work_id = ?", workId);
+      this.db.run("DELETE FROM organizations WHERE work_id = ?", workId);
+      this.db.run("UPDATE races SET parent_race_id = NULL WHERE work_id = ? AND parent_race_id IS NOT NULL", workId);
+      this.db.run("DELETE FROM races WHERE work_id = ?", workId);
       this.db.run("DELETE FROM works WHERE id = ?", workId);
+      this.db.run("DELETE FROM relationship_source_index_queue WHERE work_id = ?", workId);
     });
     return storageKeys.filter((storageKey) => Number(
       this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0

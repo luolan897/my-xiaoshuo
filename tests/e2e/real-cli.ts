@@ -115,6 +115,7 @@ async function register(username: string): Promise<SessionCredentials> {
       username,
       password: "secure-password-123",
       passwordConfirmation: "secure-password-123",
+      setupToken: "cli-e2e-setup-token-with-at-least-32-characters",
       captchaId: captcha.captchaId,
       captchaAnswer: captcha.answer
     })

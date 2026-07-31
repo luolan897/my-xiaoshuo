@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { chmodSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
@@ -32,13 +33,23 @@ export function isDevelopmentServer(environment: NodeJS.ProcessEnv): boolean {
   return environment.NODE_ENV === "development" || environment.npm_lifecycle_event === "dev";
 }
 
+export function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLocaleLowerCase().replace(/^\[|\]$/gu, "");
+  return normalized === "localhost" || normalized === "::1" || /^127(?:\.\d{1,3}){3}$/u.test(normalized);
+}
+
 export async function startLocalServer(options: LocalServerOptions): Promise<RunningLocalServer> {
   logger.info("server.starting", { host: options.host, port: options.port, dataDirectory: options.dataDirectory, databasePath: options.databasePath });
   let security: RuntimeSecurityOptions;
   let runtime: Runtime;
   try {
+    mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
+    chmodSync(options.dataDirectory, 0o700);
     security = resolveRuntimeSecurity(options.env);
     const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
+    if (devAuthBypass && !isLoopbackHost(options.host)) {
+      throw new Error("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
+    }
     runtime = createRuntime({
       databasePath: options.databasePath,
       attachmentDirectory: join(options.dataDirectory, "attachments"),

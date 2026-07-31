@@ -105,12 +105,13 @@ Run `scriverse --help` for all local server, default server, authentication, wor
 | `HOST` | `127.0.0.1` | Listen address; use `0.0.0.0` for a server deployment |
 | `DATA_DIR` | `<project>/.data` | Default data directory |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite database path |
-| `AI_NOVEL_MASTER_KEY` | Generated and stored at `<DATA_DIR>/master.key` | Master key used to encrypt AI provider credentials |
+| `AI_NOVEL_MASTER_KEY` | Generated and stored at `<DATA_DIR>/master.key` | Master key used to encrypt AI provider credentials; at least 32 characters when configured manually |
 | `APP_AUTH_USERNAME` | Empty | Optional deployment gateway username; the in-app user system is always enabled |
 | `APP_AUTH_PASSWORD` | Empty | Optional deployment gateway password, at least 12 characters; must be transported over HTTPS |
 | `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Allow AI providers on loopback/private networks; link-local and cloud metadata addresses are always blocked |
 | `APP_ALLOW_REGISTRATION` | `false` | Registration is enabled only when explicitly set to `true`; unset and all other values stay closed, including first-admin setup |
+| `APP_SETUP_TOKEN` | Empty | Required when registration is enabled and must contain at least 32 characters; only the first administrator must enter it |
 
 Custom configuration example:
 
@@ -128,7 +129,7 @@ APP_AUTH_PASSWORD='replace-with-a-long-random-password' \
 npm start
 ```
 
-Production deployments must use HTTPS at a trusted reverse proxy. For first-time setup, set `APP_ALLOW_REGISTRATION=true`; the first registered user becomes the system administrator. Afterwards, remove the variable or set it to `false` and restart the service. Explicitly enable it again only when more users need to register. Optional HTTP Basic Auth is only an additional deployment gateway, and its credentials are merely Base64 encoded. `/api/health` remains public for health checks, while business APIs require an in-app login.
+Production deployments must use HTTPS at a trusted reverse proxy. For first-time setup, set `APP_ALLOW_REGISTRATION=true` and configure `APP_SETUP_TOKEN` with at least 32 random characters. The first registered user must enter that token and becomes the system administrator. Afterwards, remove both variables or disable registration and restart the service. Later ordinary registrations do not require the setup token. Optional HTTP Basic Auth is only an additional deployment gateway, and its credentials are merely Base64 encoded. `/api/health` remains public for health checks, while business APIs require an in-app login.
 
 ## AI Provider Setup
 

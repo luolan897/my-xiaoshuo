@@ -17,9 +17,15 @@ describe("assertSafeAiEndpoint", () => {
   });
 
   it("允许公网 HTTPS 地址", async () => {
-    await expect(assertSafeAiEndpoint("https://example.com/v1")).resolves.toEqual(expect.arrayContaining([
+    await expect(assertSafeAiEndpoint("https://93.184.216.34/v1")).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ family: expect.any(Number) })
     ]));
+  });
+
+  it("拒绝公网 HTTP 地址传输供应商凭据", async () => {
+    await expect(assertSafeAiEndpoint("http://93.184.216.34/v1", false)).rejects.toMatchObject({
+      code: "INSECURE_PROVIDER_ENDPOINT"
+    });
   });
 });
 
@@ -76,11 +82,11 @@ describe("fetchSafeAiEndpoint", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("跨主机重定向时剥离 Authorization", async () => {
-    const seenAuth: Array<string | null> = [];
+  it("拒绝携带多种凭据的跨主机重定向", async () => {
+    const seenHeaders: Array<{ authorization: string | null; apiKey: string | null }> = [];
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
-      seenAuth.push(headers.get("authorization"));
+      seenHeaders.push({ authorization: headers.get("authorization"), apiKey: headers.get("x-api-key") });
       if (String(url).includes("provider.example")) {
         return new Response(null, {
           status: 302,
@@ -90,15 +96,15 @@ describe("fetchSafeAiEndpoint", () => {
       return new Response("ok", { status: 200 });
     }) as unknown as typeof fetch;
 
-    const response = await fetchSafeAiEndpoint(
+    await expect(fetchSafeAiEndpoint(
       fetchImpl,
       "https://provider.example/v1/models",
-      { headers: { Authorization: "Bearer secret-key" } },
+      { headers: { Authorization: "Bearer secret-key", "x-api-key": "secret-key" } },
       validateTestEndpoint
-    );
+    )).rejects.toMatchObject({ code: "PROVIDER_REDIRECT_CROSS_ORIGIN" });
 
-    expect(response.status).toBe(200);
-    expect(seenAuth).toEqual(["Bearer secret-key", null]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(seenHeaders).toEqual([{ authorization: "Bearer secret-key", apiKey: "secret-key" }]);
   });
 
   it("使用通过校验的地址建立实际连接", async () => {

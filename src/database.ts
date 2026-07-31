@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { logger, sanitizeError } from "./logger.js";
@@ -20,6 +20,11 @@ export class Database {
       if (filename !== ":memory:") this.raw.exec("PRAGMA journal_mode = WAL");
       this.migrate();
       this.recoverInterruptedOperations();
+      if (filename !== ":memory:") {
+        for (const path of [filename, `${filename}-wal`, `${filename}-shm`]) {
+          if (existsSync(path)) chmodSync(path, 0o600);
+        }
+      }
       const migration = this.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations");
       logger.info("database.ready", { inMemory: filename === ":memory:", schemaVersion: Number(migration?.version ?? 0) });
     } catch (error) {

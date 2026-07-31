@@ -214,7 +214,10 @@ try {
   checked("chapter-types", "all chapter metadata supports type marking without creating a false content version");
 
   const coverForm = new FormData();
-  coverForm.append("file", new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])], { type: "image/png" }), "cover.png");
+  coverForm.append("file", new Blob([Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
+    "base64"
+  )], { type: "image/png" }), "cover.png");
   const covered = await api<Entity>("PUT", `/works/${disposableWorkId}/cover`, coverForm);
   assert.match(covered.coverUrl, /\/cover\?v=/u);
   const coverResponse = await fetch(`${baseUrl}/works/${disposableWorkId}/cover`);
@@ -251,7 +254,7 @@ try {
   });
   const shenInOrganization = await api<Entity>("PATCH", `/characters/${shen.id}`, { organizationIds: [organization.id, secondOrganization.id] });
   assert.deepEqual(new Set(shenInOrganization.organizationIds), new Set([organization.id, secondOrganization.id]));
-  const organizations = await api<Entity[]>("GET", `/works/${disposableWorkId}/organizations`);
+  const organizations = await api<Entity[]>("GET", `/works/${disposableWorkId}/organizations?includeContent=true`);
   const guardOrganization = organizations.find((item) => item.id === organization.id);
   const allianceOrganization = organizations.find((item) => item.id === secondOrganization.id);
   assert.deepEqual(new Set(guardOrganization?.memberIds), new Set([lin.id, shen.id]));

@@ -5,7 +5,9 @@ import { dirname, join, resolve, sep } from "node:path";
 import sharp, { type Metadata } from "sharp";
 import { AppError } from "./errors.js";
 
-const maximumPixels = 100_000_000;
+const maximumPixels = 25_000_000;
+const maximumAnimationFrames = 100;
+const maximumAnimationPixels = 50_000_000;
 const allowedFormats = new Set(["png", "jpeg", "webp", "gif"]);
 
 type StoredImageMimeType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
@@ -114,6 +116,12 @@ export class AttachmentStorage {
       throw new AppError(415, "INVALID_ATTACHMENT_IMAGE", "无法读取附件图片尺寸");
     }
     if (width * pageHeight > maximumPixels) throw new AppError(413, "ATTACHMENT_IMAGE_TOO_LARGE", "附件图片像素尺寸过大");
+    if (!Number.isInteger(pageCount) || pageCount > maximumAnimationFrames) {
+      throw new AppError(413, "ATTACHMENT_ANIMATION_TOO_LARGE", "附件动画帧数过多");
+    }
+    if (width * pageHeight * pageCount > maximumAnimationPixels) {
+      throw new AppError(413, "ATTACHMENT_ANIMATION_TOO_LARGE", "附件动画总像素量过大");
+    }
 
     const originalMimeType = mimeType(format);
     const candidatePath = join(this.temporaryDirectory, `${originalSha256}-${Date.now()}.webp`);

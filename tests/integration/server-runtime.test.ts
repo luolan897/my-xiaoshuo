@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity } from "../../src/security.js";
-import { isDevelopmentServer, startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
+import { isDevelopmentServer, isLoopbackHost, startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
 import { APP_VERSION } from "../../src/version.js";
+import { loadMasterSecret } from "../../src/credential-vault.js";
 
 const roots: string[] = [];
 const runningServers: RunningLocalServer[] = [];
@@ -19,7 +20,11 @@ describe("本地服务运行时", () => {
     expect(resolveRuntimeSecurity({}).allowRegistration).toBe(false);
     expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "false" }).allowRegistration).toBe(false);
     expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "TRUE" }).allowRegistration).toBe(false);
-    expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "true" }).allowRegistration).toBe(true);
+    expect(() => resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "true" })).toThrow("APP_SETUP_TOKEN");
+    expect(resolveRuntimeSecurity({
+      APP_ALLOW_REGISTRATION: "true",
+      APP_SETUP_TOKEN: "server-runtime-setup-token-with-at-least-32-characters"
+    }).allowRegistration).toBe(true);
   });
 
   it("仅在非生产环境显式开启时允许开发免登录", () => {
@@ -35,6 +40,23 @@ describe("本地服务运行时", () => {
     expect(isDevelopmentServer({ NODE_ENV: "production", npm_lifecycle_event: "start" })).toBe(false);
     expect(isDevelopmentServer({ NODE_ENV: "development" })).toBe(true);
     expect(isDevelopmentServer({ npm_lifecycle_event: "dev" })).toBe(true);
+  });
+
+  it("开发免登录仅允许绑定回环地址", async () => {
+    expect(isLoopbackHost("localhost")).toBe(true);
+    expect(isLoopbackHost("127.0.0.2")).toBe(true);
+    expect(isLoopbackHost("::1")).toBe(true);
+    expect(isLoopbackHost("0.0.0.0")).toBe(false);
+
+    const root = mkdtempSync(join(tmpdir(), "scriverse-dev-auth-host-"));
+    roots.push(root);
+    await expect(startLocalServer({
+      host: "0.0.0.0",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: { NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true" }
+    })).rejects.toThrow("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
   });
 
   it("使用隔离数据目录启动 API 和完整网页", async () => {
@@ -56,7 +78,18 @@ describe("本地服务运行时", () => {
     expect(health.data).toMatchObject({ status: "ok", version: APP_VERSION, development: false });
     expect(page).toContain("叙界");
     expect(existsSync(databasePath)).toBe(true);
-    expect(existsSync(join(root, "master.key"))).toBe(true);
+    const masterKeyPath = join(root, "master.key");
+    expect(existsSync(masterKeyPath)).toBe(true);
+    expect(statSync(root).mode & 0o777).toBe(0o700);
+    expect(statSync(databasePath).mode & 0o777).toBe(0o600);
+    expect(statSync(masterKeyPath).mode & 0o777).toBe(0o600);
+    for (const sqliteSidecar of [`${databasePath}-wal`, `${databasePath}-shm`]) {
+      if (existsSync(sqliteSidecar)) expect(statSync(sqliteSidecar).mode & 0o777).toBe(0o600);
+    }
+
+    chmodSync(masterKeyPath, 0o644);
+    expect(loadMasterSecret(masterKeyPath)).toHaveLength(43);
+    expect(statSync(masterKeyPath).mode & 0o777).toBe(0o600);
   });
 
   it("开发免登录使用已有账户进入工作台", async () => {

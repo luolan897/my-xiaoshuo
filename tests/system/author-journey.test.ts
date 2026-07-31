@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260731-draft-delete-v2');
-    expect(page.text).toContain('/styles.css?v=20260731-card-edit-placement-v1');
+    expect(page.text).toContain('/app.js?v=20260731-security-draft-merge-v1');
+    expect(page.text).toContain('/styles.css?v=20260731-security-draft-merge-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -514,7 +514,7 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("renderMarkdownTable");
     expect(vditorCss.text).toContain("Vditor v3.11.2");
     expect(vditorScript.text).toContain("Vditor");
-    expect(application.text).toContain('/markdown.js?v=20260730-table-wrap-menu-v1');
+    expect(application.text).toContain('/markdown.js?v=20260731-no-external-images-v1');
     expect(application.text).toContain('new window.Vditor');
     expect(application.text).toContain('createVditorUploadHandler');
     expect(page.text).toContain('id="character-section-editor-view"');
@@ -879,6 +879,7 @@ describe("作者完整创作流程", () => {
     const page = await request(runtime.app).get("/").expect(200).expect("Content-Type", /html/u);
     expect(page.headers["x-frame-options"]).toBe("DENY");
     expect(page.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(page.headers["content-security-policy"]).toContain("img-src 'self' data: blob:;");
 
     const work = await request(runtime.app).post("/api/works").send({ title: "星际纪元", author: "作者" }).expect(201);
     const workId = work.body.data.id;

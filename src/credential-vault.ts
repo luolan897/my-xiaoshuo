@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 export type EncryptedSecret = {
@@ -12,7 +12,7 @@ export class CredentialVault {
   private readonly key: Buffer;
 
   constructor(masterSecret: string) {
-    if (masterSecret.length < 16) throw new Error("主密钥长度至少为 16 个字符");
+    if (masterSecret.length < 32) throw new Error("主密钥长度至少为 32 个字符");
     this.key = createHash("sha256").update(masterSecret).digest();
   }
 
@@ -39,8 +39,11 @@ export class CredentialVault {
 
 export function loadMasterSecret(path: string, environmentSecret?: string): string {
   if (environmentSecret) return environmentSecret;
-  if (existsSync(path)) return readFileSync(path, "utf8").trim();
-  mkdirSync(dirname(path), { recursive: true });
+  if (existsSync(path)) {
+    chmodSync(path, 0o600);
+    return readFileSync(path, "utf8").trim();
+  }
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const secret = randomBytes(32).toString("base64url");
   writeFileSync(path, secret, { encoding: "utf8", mode: 0o600 });
   return secret;
