@@ -21,7 +21,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -829,6 +829,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
   );
   const app = express();
+  enforceCaseInsensitiveRouting(app);
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 30 * 1024 * 1024, files: 1, fields: 10, fieldSize: 64 * 1024, parts: 11, headerPairs: 100 }
@@ -1013,6 +1014,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.patch("/api/users/:userId", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
     const updated = auth.updateUser(request.authUser, request.params.userId, parse(userUpdateSchema, request.body));
     store.audit(null, "user.updated", "user", updated.userId, { role: updated.role, status: updated.status });
     data(response, updated);
@@ -2295,7 +2297,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       setHeaders: setStaticCacheControl
     }));
     app.get("/{*path}", (request, response, next) => {
-      if (request.path.startsWith("/api/")) return next();
+      if (normalizeApiPath(request.path).startsWith("/api/")) return next();
       sendIndexHtml(request, response);
     });
   }

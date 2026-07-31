@@ -81,12 +81,15 @@ function seededRandom(seed: Buffer): () => number {
   };
 }
 
-function glyphPath(pattern: readonly string[], cellSize: number): string {
+function glyphPath(pattern: readonly string[], cellSize: number, random: () => number): string {
   return pattern.flatMap((row, rowIndex) => [...row].flatMap((pixel, columnIndex) => {
     if (pixel !== "1") return [];
-    const x = columnIndex * cellSize;
-    const y = rowIndex * cellSize;
-    return `M${x} ${y}h${cellSize}v${cellSize}h-${cellSize}Z`;
+    // 把种子派生的扰动直接写入 path 坐标，避免仅依赖浏览器端滤镜、导致同一字符 path 恒定可查表。
+    const x = columnIndex * cellSize + randomBetween(random, -0.65, 0.65);
+    const y = rowIndex * cellSize + randomBetween(random, -0.65, 0.65);
+    const width = cellSize + randomBetween(random, -0.4, 0.4);
+    const height = cellSize + randomBetween(random, -0.4, 0.4);
+    return `M${x.toFixed(2)} ${y.toFixed(2)}h${width.toFixed(2)}v${height.toFixed(2)}h-${width.toFixed(2)}Z`;
   })).join("");
 }
 
@@ -124,7 +127,7 @@ export function renderCaptchaSvg(code: string, seed = randomBytes(8)): string {
     const skew = randomBetween(random, -8, 8);
     const color = ["#132d4b", "#1e3a5f", "#243f64", "#173451"][index % 4];
     const pattern = glyphPatterns[char] ?? fallbackGlyph;
-    return `<path d="${glyphPath(pattern, 4.9)}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${rotate.toFixed(1)} 12.3 17.2) skewX(${skew.toFixed(1)})" fill="${color}" filter="url(#glyph-roughen)"/>`;
+    return `<path d="${glyphPath(pattern, 4.9, random)}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${rotate.toFixed(1)} 12.3 17.2) skewX(${skew.toFixed(1)})" fill="${color}" filter="url(#glyph-roughen)"/>`;
   }).join("");
   for (let index = 0; index < 3; index += 1) {
     const startY = randomBetween(random, 8, height - 8).toFixed(1);

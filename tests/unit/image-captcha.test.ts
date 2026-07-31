@@ -38,4 +38,17 @@ describe("ImageCaptchaService", () => {
     const untrusted = renderCaptchaSvg("<&>\"", Buffer.alloc(8));
     expect(untrusted).not.toContain("<&>\"");
   });
+
+  it("同一字符的 glyph path 会随种子变化，避免离线查表解码", () => {
+    const extractGlyphPaths = (svg: string): string[] => [...svg.matchAll(/\sd="([^"]+)"\s+transform=/gu)].map((match) => match[1] ?? "");
+    const first = extractGlyphPaths(renderCaptchaSvg("AAAA", Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])));
+    const second = extractGlyphPaths(renderCaptchaSvg("AAAA", Buffer.from([8, 7, 6, 5, 4, 3, 2, 1])));
+    const repeated = extractGlyphPaths(renderCaptchaSvg("AAAA", Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])));
+    expect(first).toHaveLength(4);
+    expect(second).toHaveLength(4);
+    expect(first).toEqual(repeated);
+    expect(first[0]).not.toEqual(second[0]);
+    expect(new Set(first).size).toBeGreaterThan(1);
+    expect(first.every((path) => /\.\d{2}/u.test(path))).toBe(true);
+  });
 });
