@@ -1,5 +1,7 @@
 export const AGENT_TOOL_RESULT_MAX_CHARS = 10_000;
-export const AGENT_TOOL_CALL_SOFT_WARNING_REMAINING = 6;
+export const MIN_AGENT_TOOL_CALL_LIMIT = 5;
+export const MAX_AGENT_TOOL_CALL_LIMIT = 48;
+export const AGENT_TOOL_CALL_SOFT_WARNING_FLOOR = 3;
 
 export type AgentToolResultPagination = {
   cursor: number;
@@ -13,7 +15,12 @@ export type AgentToolCallQuotaNotice = {
   message: string;
 };
 
-export function buildAgentToolCallQuotaNotice(remaining: number): AgentToolCallQuotaNotice | null {
+export function agentToolCallSoftWarningThreshold(limit: number): number {
+  if (!Number.isFinite(limit) || limit <= 0) return AGENT_TOOL_CALL_SOFT_WARNING_FLOOR;
+  return Math.max(AGENT_TOOL_CALL_SOFT_WARNING_FLOOR, Math.floor(limit * 0.2) + 1);
+}
+
+export function buildAgentToolCallQuotaNotice(remaining: number, limit: number): AgentToolCallQuotaNotice | null {
   if (!Number.isFinite(remaining) || remaining <= 0) return null;
   if (remaining === 1) {
     return {
@@ -22,7 +29,7 @@ export function buildAgentToolCallQuotaNotice(remaining: number): AgentToolCallQ
       message: "重要提示：现在没有可用的工具调用次数了。请立即根据已有工具结果直接总结作答，不得再请求任何工具。若继续发起工具调用，系统将拒绝并报错。"
     };
   }
-  if (remaining <= AGENT_TOOL_CALL_SOFT_WARNING_REMAINING) {
+  if (remaining <= agentToolCallSoftWarningThreshold(limit)) {
     return {
       level: "warning",
       remaining,
@@ -34,9 +41,10 @@ export function buildAgentToolCallQuotaNotice(remaining: number): AgentToolCallQ
 
 export function withAgentToolCallQuotaNotice(
   result: Record<string, unknown>,
-  remaining: number
+  remaining: number,
+  limit: number
 ): Record<string, unknown> {
-  const notice = buildAgentToolCallQuotaNotice(remaining);
+  const notice = buildAgentToolCallQuotaNotice(remaining, limit);
   if (!notice) return result;
   return { ...result, toolCallQuotaNotice: notice };
 }
@@ -46,7 +54,7 @@ export function shouldRejectAgentToolCalls(executedCount: number, requestedCount
   if (requestedCount <= 0) return false;
   if (executedCount + requestedCount > limit) return true;
   // 最后一档配额保留给硬拒绝：在倒数第一次配额注入 critical 后，再请求工具即失败。
-  if (limit > 1 && executedCount >= limit - 1) return true;
+  if (executedCount >= limit - 1) return true;
   return false;
 }
 

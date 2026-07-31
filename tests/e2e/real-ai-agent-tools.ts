@@ -337,6 +337,12 @@ try {
     body: JSON.stringify({ agentToolCallLimit: 49 })
   });
   assert.equal(rejectedToolCalls.status, 400);
+  const rejectedLowToolCalls = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentToolCallLimit: 4 })
+  });
+  assert.equal(rejectedLowToolCalls.status, 400);
   await api("PATCH", `/works/${workId}/ai-settings`, { contextCompactThreshold: 50 });
   await api("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 12 });
   const compactConversation = await api<JsonObject>("POST", `/works/${workId}/ai-conversations`, { title: "压缩 E2E" });

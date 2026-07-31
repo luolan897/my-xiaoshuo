@@ -1115,7 +1115,7 @@ export class Store {
       autoRunConsecutiveFailures: Math.max(0, Number(row?.auto_run_consecutive_failures ?? 0) || 0),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentToolCallLimit: Math.min(48, Math.max(1, Number(row?.agent_tool_call_limit ?? 12) || 12)),
+      agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
         .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
         .filter((tool, index, tools) => tools.indexOf(tool) === index),
@@ -1192,7 +1192,7 @@ export class Store {
       Math.max(0, Number(current.autoRunConsecutiveFailures) || 0),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      Math.min(48, Math.max(1, nextAgentToolCallLimit)),
+      Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
       timestamp
@@ -1206,7 +1206,7 @@ export class Store {
       autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      agentToolCallLimit: Math.min(48, Math.max(1, nextAgentToolCallLimit)),
+      agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       agentTools: nextAgentTools,
       titleGenerationModelId: nextTitleGenerationModelId
     });

@@ -452,7 +452,7 @@ export class Database {
         auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
-        agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 1 AND 48),
+        agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 48),
         agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]',
         title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
         updated_at TEXT NOT NULL
@@ -2499,9 +2499,21 @@ export class Database {
       this.transaction(() => {
         const columns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
         if (!columns.has("agent_tool_call_limit")) {
-          this.run("ALTER TABLE work_ai_settings ADD COLUMN agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 1 AND 48)");
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 48)");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (61, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(62)) {
+      this.transaction(() => {
+        this.run("UPDATE work_ai_settings SET agent_tool_call_limit = 5 WHERE agent_tool_call_limit < 5");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (62, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

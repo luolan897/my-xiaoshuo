@@ -13,6 +13,7 @@ import {
 } from "./ai-protocol.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
+  MIN_AGENT_TOOL_CALL_LIMIT,
   paginateToolResultRecords,
   shouldRejectAgentToolCalls,
   structuralToolResultRecords,
@@ -4150,9 +4151,9 @@ export class AiManager {
       const executedToolCalls: AgentToolCallResult[] = [];
       const configuredToolCallLimit = Math.min(
         MAX_CONFIGURED_AGENT_TOOL_CALLS,
-        Math.max(1, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
+        Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
       );
-      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, 1, MAX_CONFIGURED_AGENT_TOOL_CALLS));
+      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, MAX_CONFIGURED_AGENT_TOOL_CALLS));
       const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
         const reasoning = currentChoice?.message?.reasoning_content;
         if (reasoning?.trim()) {
@@ -4206,7 +4207,7 @@ export class AiManager {
           });
           executedToolCalls.push(execution);
           const remainingToolCalls = Math.max(0, agentToolCallLimit - executedToolCalls.length);
-          execution.result = withAgentToolCallQuotaNotice(execution.result, remainingToolCalls);
+          execution.result = withAgentToolCallQuotaNotice(execution.result, remainingToolCalls, agentToolCallLimit);
           toolTraceRound?.toolExecutions.push(execution);
           saveTrace();
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });

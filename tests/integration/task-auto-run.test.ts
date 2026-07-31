@@ -139,6 +139,9 @@ describe("分析任务自动运行", () => {
       agentToolCallLimit: 49
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 4
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       agentToolCallLimit: 0
     }).expect(400);
     const updated = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
