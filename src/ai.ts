@@ -857,6 +857,28 @@ function aiFailureTargetDetails(provider: Row, model: Row): Record<string, strin
   };
 }
 
+function initialContextWindowError(error: AppError, provider: Row, model: Row): AppError {
+  const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : {};
+  const inputTokens = Number(details.inputTokens);
+  const contextWindow = Number(details.contextWindow);
+  const usage = Number.isFinite(inputTokens) && Number.isFinite(contextWindow)
+    ? `首轮上下文约 ${inputTokens} Token，已超过模型 ${contextWindow} Token 的上下文容量。`
+    : "首轮上下文已超过当前模型的上下文容量。";
+  return new AppError(
+    error.status,
+    error.code,
+    `${usage}本轮未进行上下文压缩，请减少选中的正文、设定、引用、对话历史或指令长度后重试。`,
+    {
+      ...details,
+      stage: "initial",
+      compactAttempted: false,
+      ...aiFailureTargetDetails(provider, model)
+    }
+  );
+}
+
 function numberValue(row: Row, key: string): number {
   return Number(row[key] ?? 0);
 }
@@ -3641,7 +3663,12 @@ export class AiManager {
     const inputTokens = estimateAiTokens(JSON.stringify(messages))
       + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
     if (inputTokens >= contextWindow) {
-      throw new AppError(400, "CONTEXT_WINDOW_EXCEEDED", `当前上下文约 ${inputTokens} Token，已超过模型 ${contextWindow} Token 的上下文容量`);
+      throw new AppError(
+        400,
+        "CONTEXT_WINDOW_EXCEEDED",
+        `当前上下文约 ${inputTokens} Token，已超过模型 ${contextWindow} Token 的上下文容量`,
+        { inputTokens, contextWindow }
+      );
     }
     return {
       ...parameters,
@@ -3674,12 +3701,18 @@ export class AiManager {
     try {
       parameters = this.constrainParametersForContext(model, messages, requestedParameters, tools);
     } catch (error) {
-      if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED" || tools.length === 0) throw error;
+      if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
+      if (tools.length === 0) throw initialContextWindowError(error, provider, model);
       effectiveInput = { ...input, agentToolIds: [] };
       context = this.buildContext(effectiveInput, model);
       messages = this.buildMessages(effectiveInput, context);
       tools = [];
-      parameters = this.constrainParametersForContext(model, messages, requestedParameters);
+      try {
+        parameters = this.constrainParametersForContext(model, messages, requestedParameters);
+      } catch (fallbackError) {
+        if (!(fallbackError instanceof AppError) || fallbackError.code !== "CONTEXT_WINDOW_EXCEEDED") throw fallbackError;
+        throw initialContextWindowError(fallbackError, provider, model);
+      }
       logger.warn("ai.tools.disabled_for_context", {
         workId: input.workId,
         taskType: input.taskType,
@@ -4195,10 +4228,16 @@ export class AiManager {
     const context = this.buildContext(input, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
-    const parameters = this.constrainParametersForContext(model, messages, {
-      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
-      ...thinkingParameters(provider, model)
-    });
+    let parameters: Record<string, unknown>;
+    try {
+      parameters = this.constrainParametersForContext(model, messages, {
+        ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
+        ...thinkingParameters(provider, model)
+      });
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
+      throw initialContextWindowError(error, provider, model);
+    }
     const callId = id("call");
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,

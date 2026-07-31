@@ -1116,6 +1116,31 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
   });
 
+  it("首轮上下文超限时不请求模型并提示减少上下文", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 1_024 }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    fetchMock.mockClear();
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "必须保留的超长首轮指令。".repeat(1_000),
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(streamed.text).toContain("event: error");
+    expect(streamed.text).toContain('"code":"CONTEXT_WINDOW_EXCEEDED"');
+    expect(streamed.text).toContain('"status":400');
+    expect(streamed.text).toContain("首轮上下文约");
+    expect(streamed.text).toContain("本轮未进行上下文压缩，请减少选中的正文、设定、引用、对话历史或指令长度后重试");
+    expect(streamed.text).toContain('"providerName":"本地兼容服务"');
+    expect(streamed.text).toContain(`"providerId":"${providerId}"`);
+    expect(streamed.text).toContain('"modelId":"mock-novel-model"');
+    expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
+  });
+
   it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
