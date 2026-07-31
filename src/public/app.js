@@ -904,6 +904,7 @@ let chapterEditorReadOnly = true;
 let characterListPage = 1;
 let taskListPage = 1;
 let draftTypeFilter = "all";
+let draftBindingFilters = [];
 let draftFiltersPanelOpen = false;
 const moduleListPages = {
   drafts: 1,
@@ -3627,6 +3628,7 @@ function resetWorkScopedUiCaches() {
   state.races = [];
   characterListPage = 1;
   draftTypeFilter = "all";
+  draftBindingFilters = [];
   draftFiltersPanelOpen = false;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
@@ -4631,6 +4633,32 @@ function draftTypeLabel(draftType) {
   return draftType === "setting" ? "设定想法" : "正文想法";
 }
 
+const draftSettingModules = Object.freeze([
+  ["settings", "设定库"],
+  ["characters", "角色"],
+  ["races", "种族"],
+  ["organizations", "组织"],
+  ["timeline", "时间轴"],
+  ["relationships", "关系"],
+  ["outlines", "大纲/伏笔"]
+]);
+
+function draftSettingModuleLabel(module) {
+  return draftSettingModules.find(([value]) => value === module)?.[1] ?? "未知模块";
+}
+
+function draftBindingKey(item) {
+  if (item.draftType === "prose" && item.volumeId) return `volume:${item.volumeId}`;
+  if (item.draftType === "setting" && item.settingModule) return `module:${item.settingModule}`;
+  return "global";
+}
+
+function draftBindingLabel(item) {
+  if (item.draftType === "prose" && item.volumeId) return `分卷 · ${item.volumeTitle || "已删除分卷"}`;
+  if (item.draftType === "setting" && item.settingModule) return `设定模块 · ${draftSettingModuleLabel(item.settingModule)}`;
+  return "全局";
+}
+
 async function deleteDraft(item) {
   if (!item || !canEditModule("drafts")) return;
   $("#form-dialog").close();
@@ -4664,12 +4692,16 @@ async function deleteDraft(item) {
 
 function openDraftDialog(item = null, { readOnly = false } = {}) {
   const viewOnly = readOnly || !canEditModule("drafts");
+  const volumeOptions = [["", "全局（不绑定分卷）"], ...(state.work?.volumes ?? []).map((volume) => [volume.id, volume.title])];
+  const settingModuleOptions = [["", "全局（不绑定设定模块）"], ...draftSettingModules];
   const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="想法操作">
     <div><strong>想法操作</strong><small>删除后将从想法列表移除，版本历史仍会保留。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除想法</button></div>
   </section>` : "";
   const fields = `<p class="form-field-note">这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
     + field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
+    + `<div class="draft-binding-field" data-draft-binding-field="prose">${field("volumeId", "绑定分卷", "select", item?.volumeId ?? "", volumeOptions)}</div>`
+    + `<div class="draft-binding-field" data-draft-binding-field="setting">${field("settingModule", "绑定设定模块", "select", item?.settingModule ?? "", settingModuleOptions)}</div>`
     + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
@@ -4680,8 +4712,11 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     if (viewOnly) return;
     const title = String(form.get("title") ?? "").trim();
     if (!title) throw new Error("请填写想法标题");
+    const draftType = form.get("draftType") === "setting" ? "setting" : "prose";
     const body = {
-      draftType: form.get("draftType"),
+      draftType,
+      volumeId: draftType === "prose" ? String(form.get("volumeId") ?? "") || null : null,
+      settingModule: draftType === "setting" ? String(form.get("settingModule") ?? "") || null : null,
       title,
       content: String(form.get("content") ?? ""),
       ...(item ? { expectedVersionNo: item.versionNo } : {})
@@ -4698,6 +4733,18 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     editor: true,
     errorPrefix: "想法保存失败："
   });
+  const draftTypeSelect = $("#dialog-fields").querySelector('select[name="draftType"]');
+  const syncDraftBindingFields = () => {
+    const draftType = draftTypeSelect?.value === "setting" ? "setting" : "prose";
+    $("#dialog-fields").querySelectorAll("[data-draft-binding-field]").forEach((bindingField) => {
+      const active = bindingField.dataset.draftBindingField === draftType;
+      bindingField.classList.toggle("hidden", !active);
+      const select = bindingField.querySelector("select");
+      if (select) select.disabled = !active || viewOnly;
+    });
+  };
+  draftTypeSelect?.addEventListener("change", syncDraftBindingFields);
+  syncDraftBindingFields();
   if (viewOnly) {
     $("#dialog-fields").querySelectorAll("input, select, textarea").forEach((control) => {
       if (control instanceof HTMLSelectElement) control.disabled = true;
@@ -4711,9 +4758,14 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
 
 async function renderDrafts(page = moduleListPages.drafts) {
   const allDrafts = await moduleApiAllPages("drafts", `/api/works/${state.work.id}/drafts`);
-  const drafts = draftTypeFilter === "all"
+  const typeDrafts = draftTypeFilter === "all"
     ? allDrafts
     : allDrafts.filter((draft) => draft.draftType === draftTypeFilter);
+  const selectedBindingKeys = new Set(draftBindingFilters);
+  const drafts = selectedBindingKeys.size
+    ? typeDrafts.filter((draft) => selectedBindingKeys.has(draftBindingKey(draft)))
+    : typeDrafts;
+  const hasDraftFilters = draftTypeFilter !== "all" || selectedBindingKeys.size > 0;
   mountModuleCount(drafts.length);
   const pageResult = paginateModuleItems(drafts, page, "drafts");
   moduleListPages.drafts = pageResult.page;
@@ -4721,21 +4773,26 @@ async function renderDrafts(page = moduleListPages.drafts) {
   if (drafts.length) mountModuleLayoutToggle(layout, "想法列表样式");
   else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
   mountDraftFilterToggle();
-  const filterToolbar = `<section id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="想法筛选">
-    <label for="draft-type-filter">想法类型</label>
-    <select id="draft-type-filter" aria-label="按想法类型筛选">
+  const bindingOptions = [
+    ["global", "全局（未绑定）"],
+    ...(state.work?.volumes ?? []).map((volume) => [`volume:${volume.id}`, `分卷 · ${volume.title}`]),
+    ...draftSettingModules.map(([value, label]) => [`module:${value}`, `设定模块 · ${label}`])
+  ];
+  const filterToolbar = `<section id="draft-filter-panel" class="character-filter-toolbar draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="想法筛选">
+    <label class="draft-type-filter-field" for="draft-type-filter"><span>按想法类型筛选</span><select id="draft-type-filter" aria-label="按想法类型筛选">
       <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部想法</option>
       <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文想法</option>
       <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定想法</option>
-    </select>
-    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>`}
+    </select></label>
+    <details class="character-filter-dropdown"><summary><span>按绑定位置筛选</span><strong>${selectedBindingKeys.size ? `已选 ${selectedBindingKeys.size} 项` : "全部位置"}</strong></summary><div id="draft-binding-filter" class="character-filter-options">${bindingOptions.map(([value, label]) => `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedBindingKeys.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("")}</div></details>
+    <div class="character-filter-toolbar-actions">${hasDraftFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>` : ""}<button id="clear-draft-filters" class="ghost-button" type="button" ${hasDraftFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
   const actions = (item) => canEditModule("drafts")
     ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
     : recordHistoryButton("draft", item.id, item.title);
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
     <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
-      <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
+      <small>${esc(draftTypeLabel(item.draftType))} · ${esc(draftBindingLabel(item))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
       <h3>${esc(item.title)}</h3>
       <div class="record-markdown-preview">${esc(item.contentPreview || "暂无内容")}</div>
       <div class="card-actions">${actions(item)}</div>
@@ -4743,19 +4800,32 @@ async function renderDrafts(page = moduleListPages.drafts) {
   const rows = `<div class="module-row-list">${pageResult.items.map((item) => {
     const preview = moduleRowPreview(item.contentPreview || "暂无内容");
     return `<article class="record-card module-row preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
-      <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
+      <small>${esc(draftTypeLabel(item.draftType))} · ${esc(draftBindingLabel(item))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
       <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
       <div class="card-actions">${actions(item)}</div>
     </article>`;
   }).join("")}</div>`;
   const emptyDrafts = allDrafts.length
-    ? emptyModule("没有符合筛选条件的想法", "可以切换想法类型查看其他内容。")
+    ? emptyModule("没有符合筛选条件的想法", "可以切换想法类型、绑定位置或重置筛选。")
     : emptyModule("还没有想法", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
   $("#module-content").innerHTML = filterToolbar + (drafts.length
     ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "想法列表")}`
     : emptyDrafts);
   $("#draft-type-filter").addEventListener("change", async (event) => {
     draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    draftFiltersPanelOpen = true;
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
+  $("#draft-binding-filter").addEventListener("change", async () => {
+    draftBindingFilters = [...$("#draft-binding-filter").querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+    draftFiltersPanelOpen = true;
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
+  $("#clear-draft-filters")?.addEventListener("click", async () => {
+    draftTypeFilter = "all";
+    draftBindingFilters = [];
     draftFiltersPanelOpen = true;
     moduleListPages.drafts = 1;
     await renderDrafts(1);

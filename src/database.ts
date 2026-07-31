@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 59;
+export const DATABASE_SCHEMA_VERSION = 60;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -226,10 +226,14 @@ export class Database {
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         draft_type TEXT NOT NULL CHECK(draft_type IN ('prose', 'setting')),
+        volume_id TEXT REFERENCES volumes(id) ON DELETE SET NULL,
+        setting_module TEXT,
         title TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        CHECK(setting_module IS NULL OR setting_module IN ('settings', 'characters', 'races', 'organizations', 'timeline', 'relationships', 'outlines')),
+        CHECK((draft_type = 'prose' AND setting_module IS NULL) OR (draft_type = 'setting' AND volume_id IS NULL))
       );
 
       CREATE TABLE IF NOT EXISTS races (
@@ -2448,6 +2452,40 @@ export class Database {
         ) WITHOUT ROWID`);
         this.run("CREATE INDEX IF NOT EXISTS idx_attachment_cleanup_queue_updated ON attachment_cleanup_queue(updated_at, storage_key)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (59, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(60)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(drafts)").map((row) => String(row.name)));
+        if (!columns.has("volume_id")) {
+          this.run("ALTER TABLE drafts ADD COLUMN volume_id TEXT REFERENCES volumes(id) ON DELETE SET NULL");
+        }
+        if (!columns.has("setting_module")) {
+          this.run("ALTER TABLE drafts ADD COLUMN setting_module TEXT");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_drafts_volume ON drafts(volume_id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_drafts_setting_module ON drafts(work_id, setting_module)");
+        this.run(`CREATE TRIGGER IF NOT EXISTS drafts_binding_insert
+          BEFORE INSERT ON drafts
+          WHEN (NEW.draft_type = 'prose' AND NEW.setting_module IS NOT NULL)
+            OR (NEW.draft_type = 'setting' AND NEW.volume_id IS NOT NULL)
+            OR (NEW.setting_module IS NOT NULL AND NEW.setting_module NOT IN ('settings', 'characters', 'races', 'organizations', 'timeline', 'relationships', 'outlines'))
+            OR (NEW.volume_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM volumes WHERE id = NEW.volume_id AND work_id = NEW.work_id))
+          BEGIN SELECT RAISE(ABORT, 'invalid draft binding'); END`);
+        this.run(`CREATE TRIGGER IF NOT EXISTS drafts_binding_update
+          BEFORE UPDATE OF work_id, draft_type, volume_id, setting_module ON drafts
+          WHEN (NEW.draft_type = 'prose' AND NEW.setting_module IS NOT NULL)
+            OR (NEW.draft_type = 'setting' AND NEW.volume_id IS NOT NULL)
+            OR (NEW.setting_module IS NOT NULL AND NEW.setting_module NOT IN ('settings', 'characters', 'races', 'organizations', 'timeline', 'relationships', 'outlines'))
+            OR (NEW.volume_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM volumes WHERE id = NEW.volume_id AND work_id = NEW.work_id))
+          BEGIN SELECT RAISE(ABORT, 'invalid draft binding'); END`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (60, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

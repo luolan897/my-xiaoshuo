@@ -123,6 +123,8 @@ export const cliResourceDefinitions = {
       required: ["draftType", "title"],
       properties: {
         draftType: "prose | setting",
+        volumeId: "正文想法绑定的分卷 ID 或 null",
+        settingModule: "设定想法绑定模块或 null：settings | characters | races | organizations | timeline | relationships | outlines",
         title: "想法标题，最多 200 字",
         content: "想法内容，最多 20 万字符"
       },
@@ -131,6 +133,8 @@ export const cliResourceDefinitions = {
     update: {
       properties: {
         draftType: "prose | setting",
+        volumeId: "正文想法绑定的分卷 ID 或 null",
+        settingModule: "设定想法绑定模块或 null",
         title: "新标题",
         content: "完整替换想法内容；长文本推荐使用 --field-file content=draft.md",
         changeNote

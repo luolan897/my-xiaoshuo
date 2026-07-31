@@ -19,9 +19,11 @@ describe("想法模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">想法</button>");
-    expect(page.text).toContain('/app.js?v=20260731-attachment-permissions-v1');
+    expect(page.text).toContain('/app.js?v=20260731-draft-bindings-v1');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
+    expect(application.text).toContain('field("volumeId", "绑定分卷"');
+    expect(application.text).toContain('field("settingModule", "绑定设定模块"');
     expect(application.text).toContain('field("content", "内容", "markdown"');
     expect(application.text).toContain('data-vditor-editor');
     expect(application.text).toContain("可能采用，也可能永远不会写入正文或正式设定");
@@ -29,11 +31,14 @@ describe("想法模块界面", () => {
     expect(application.text).toContain('id="draft-type-filter"');
     expect(application.text).toContain('function mountDraftFilterToggle()');
     expect(application.text).toContain('aria-label="筛选想法" aria-controls="draft-filter-panel"');
-    expect(application.text).toContain('id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}"');
+    expect(application.text).toContain('id="draft-filter-panel" class="character-filter-toolbar draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}"');
     expect(application.text).toContain('>全部想法</option>');
     expect(application.text).toContain('>正文想法</option>');
     expect(application.text).toContain('>设定想法</option>');
-    expect(application.text).toContain('draft.draftType === draftTypeFilter');
+    expect(application.text).toContain('id="draft-binding-filter"');
+    expect(application.text).toContain('按绑定位置筛选');
+    expect(application.text).toContain('id="clear-draft-filters"');
+    expect(application.text).toContain('selectedBindingKeys.has(draftBindingKey(draft))');
     expect(application.text).toContain('没有符合筛选条件的想法');
     expect(application.text).toContain('formDialogVditors = bindVditorEditors($("#dialog-fields"))');
     expect(application.text).toContain('formDialogVditors.forEach(destroyVditorEditor)');
@@ -44,8 +49,8 @@ describe("想法模块界面", () => {
     expect(application.text).toContain('confirmLabel: "确认删除"');
     expect(application.text).toContain('editor: true');
     expect(application.text).toContain('dialog.classList.toggle("editor-dialog", Boolean(options.editor))');
-    expect(styles.text).toContain('.draft-filter-toolbar { display: flex; align-items: center;');
-    expect(styles.text).toContain('.draft-filter-toolbar select { min-width: 180px; min-height: 38px;');
+    expect(styles.text).toContain('.draft-filter-toolbar { grid-template-columns:');
+    expect(styles.text).toContain('.draft-type-filter-field select { width: 100%;');
     expect(styles.text).toContain('font-size: 11px; }');
     expect(styles.text).toContain('.card-actions .record-card-edit { position: static; padding: 0; }');
     expect(styles.text).toContain('.editor-dialog { width: min(1180px, 94vw); max-height: calc(100dvh - 16px); }');
