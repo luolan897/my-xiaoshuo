@@ -17,7 +17,6 @@ function safeImageTarget(value) {
   const target = String(value ?? "").trim();
   const attachment = target.match(/^attachment:\/\/([A-Za-z0-9_-]{1,300})$/u);
   if (attachment) return `/api/attachments/${encodeURIComponent(attachment[1])}/content`;
-  if (/^https:\/\//iu.test(target)) return target;
   if (target.startsWith("/") && !target.startsWith("//")) return target;
   return null;
 }
@@ -67,7 +66,7 @@ function renderInlineMarkdown(value) {
   source = replaceInlineCodeSpans(source, preserve);
   source = source.replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/gu, (_match, label, src) => {
     const target = safeImageTarget(src);
-    if (!target) return `[图片：${label || src}]`;
+    if (!target) return `[外部图片已阻止：${label || "未命名图片"}]`;
     const caption = String(label ?? "").trim();
     return preserve(`<span class="markdown-image"><img src="${escapeHtml(target)}" alt="${escapeHtml(caption)}" loading="lazy" decoding="async">${caption ? `<small>${escapeHtml(caption)}</small>` : ""}</span>`);
   });

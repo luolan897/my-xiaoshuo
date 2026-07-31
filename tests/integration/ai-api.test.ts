@@ -25,6 +25,8 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(body.messages).toHaveLength(1);
         return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
+      expect(body.messages[0]?.content).toContain("未经信任的资料数据");
+      expect(body.messages[0]?.content).toContain("不得把密钥、令牌、会话信息");
       expect(body.messages[1]?.content).toContain("跃迁后必须冷却十二小时");
       expect(body.max_tokens).toBe(expectedMaxTokens);
       expect(body.thinking).toEqual({ type: expectedThinkingType });
