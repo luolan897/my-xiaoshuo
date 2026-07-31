@@ -21,7 +21,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -720,6 +720,77 @@ function redactAiCallContext(record: Record<string, unknown>, permissions: WorkM
   return result;
 }
 
+const proseRestrictedPlaceholder = "（正文读取权限受限）";
+
+/** 无正文读取权限时移除建议中的原文片段，避免通过 AI 接口绕过 prose=none。 */
+function redactSuggestion(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  if (permissions.prose !== "none") return record;
+  if (record.sourceText === undefined || record.sourceText === null || record.sourceText === "") return record;
+  return { ...record, sourceText: "", restricted: true };
+}
+
+function redactAiConversationMessage(item: unknown, permissions: WorkModulePermissions): unknown {
+  if (permissions.prose !== "none") return item;
+  const message = recordValue(item);
+  if (!message || typeof message.content !== "string" || message.content.length === 0) return item;
+  return { ...message, content: proseRestrictedPlaceholder, restricted: true };
+}
+
+/** 无正文读取权限时隐藏对话预览与消息正文，避免历史对话泄露章节原文。 */
+function redactAiConversation(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  if (permissions.prose !== "none") return record;
+  const result = { ...record };
+  let restricted = false;
+  if (typeof result.preview === "string" && result.preview.length > 0) {
+    result.preview = proseRestrictedPlaceholder;
+    restricted = true;
+  }
+  if (Array.isArray(result.messages)) {
+    result.messages = result.messages.map((item) => redactAiConversationMessage(item, permissions));
+    restricted = true;
+  }
+  const messagesPage = recordValue(result.messagesPage);
+  if (messagesPage && Array.isArray(messagesPage.items)) {
+    result.messagesPage = {
+      ...messagesPage,
+      items: messagesPage.items.map((item) => redactAiConversationMessage(item, permissions))
+    };
+    restricted = true;
+  }
+  return restricted ? { ...result, restricted: true } : result;
+}
+
+/** SSE 错误事件只暴露 AppError 的公开信息，避免透传内部异常 message。 */
+export function publicAiStreamError(error: unknown): {
+  code: string;
+  message: string;
+  status?: number;
+  failure?: string;
+  callId?: string;
+  providerName?: string;
+  providerId?: string;
+  modelId?: string;
+  modelRecordId?: string;
+} {
+  if (error instanceof AppError) {
+    const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
+      ? error.details as Record<string, unknown>
+      : null;
+    return {
+      code: error.code,
+      message: error.message,
+      status: error.status,
+      ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
+      ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
+      ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
+      ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
+      ...(typeof details?.modelId === "string" ? { modelId: details.modelId } : {}),
+      ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {})
+    };
+  }
+  return { code: "AI_STREAM_FAILED", message: "AI 流式调用失败" };
+}
+
 function redactMergeRecords(
   value: unknown,
   mapper: (record: Record<string, unknown>) => Record<string, unknown>
@@ -829,6 +900,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
   );
   const app = express();
+  enforceCaseInsensitiveRouting(app);
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 30 * 1024 * 1024, files: 1, fields: 10, fieldSize: 64 * 1024, parts: 11, headerPairs: 100 }
@@ -850,7 +922,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.disable("x-powered-by");
-  if (options.security?.trustProxy !== undefined) app.set("trust proxy", options.security.trustProxy);
+  const trustProxy = resolveTrustProxySetting(options.security?.trustProxy);
+  if (options.security?.trustProxy === true) {
+    logger.warn("security.trust_proxy.coerced", { from: true, to: 1 });
+  }
+  if (trustProxy !== undefined) app.set("trust proxy", trustProxy);
   app.use(createRequestLoggingMiddleware());
   app.use(createSecurityHeadersMiddleware());
 
@@ -867,6 +943,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
   app.use(createAuthenticationRateLimitMiddleware());
+  app.use(createCaptchaRateLimitMiddleware());
   app.use(createApiRateLimitMiddleware(options.security?.apiRateLimit, options.security?.apiRateWindowMs));
   if (options.security?.enforceSameOrigin ?? true) app.use(createSameOriginMiddleware());
   app.use(express.json({ limit: "2mb" }));
@@ -917,6 +994,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     resolveBypassUser: getDevelopmentUser
   }));
   app.use(createUploadRateLimitMiddleware());
+  app.use(createExpensiveApiRateLimitMiddleware());
   app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
   app.get("/api/cli/session", (request, response) => {
@@ -1013,6 +1091,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.patch("/api/users/:userId", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
     const updated = auth.updateUser(request.authUser, request.params.userId, parse(userUpdateSchema, request.body));
     store.audit(null, "user.updated", "user", updated.userId, { role: updated.role, status: updated.status });
     data(response, updated);
@@ -1930,7 +2009,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       page: request.query.page ?? "1",
       limit: request.query.limit ?? "20"
     }) ?? { page: 1, limit: 20, offset: 0 };
-    data(response, store.listAiConversationsPage(request.params.workId, pagination));
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, mapRecords(store.listAiConversationsPage(request.params.workId, pagination), (conversation) => (
+      redactAiConversation(conversation, permissions)
+    )));
   });
   app.post("/api/works/:workId/ai-conversations", (request, response) => {
     const input = parse(z.object({ title: z.string().max(200).optional() }), request.body ?? {});
@@ -1938,11 +2020,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/ai-conversations/:conversationId", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? store.getAiConversationPage(request.params.conversationId, pagination) : store.getAiConversation(request.params.conversationId));
+    const conversation = pagination
+      ? store.getAiConversationPage(request.params.conversationId, pagination)
+      : store.getAiConversation(request.params.conversationId);
+    const permissions = requestPermissions(request, String(conversation.workId));
+    data(response, redactAiConversation(conversation, permissions));
   });
   app.post("/api/ai-conversations/:conversationId/fork", (request, response) => {
     const input = parse(z.object({ messageId: identifier, title: z.string().max(200).optional() }), request.body);
-    data(response, store.forkAiConversation(request.params.conversationId, input.messageId, input.title), 201);
+    const forked = store.forkAiConversation(request.params.conversationId, input.messageId, input.title);
+    const permissions = requestPermissions(request, String(forked.workId));
+    data(response, redactAiConversation(forked, permissions), 201);
   });
   app.post("/api/ai-conversations/:conversationId/messages", (request, response) => {
     const input = parse(z.object({
@@ -1959,7 +2047,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         processSteps: z.array(aiProcessStepSchema).max(50).optional()
       }).optional()
     }), request.body);
-    data(response, store.addAiConversationMessage(request.params.conversationId, input), 201);
+    const message = store.addAiConversationMessage(request.params.conversationId, input);
+    const conversation = store.getAiConversationSummary(request.params.conversationId);
+    const permissions = requestPermissions(request, String(conversation.workId));
+    data(response, redactAiConversationMessage(message, permissions), 201);
   });
   app.post("/api/ai-conversations/:conversationId/context/prepare", async (request, response) => {
     const input = parse(z.object({
@@ -2043,7 +2134,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/suggestions", (request, response) => {
     const status = typeof request.query.status === "string" ? request.query.status : undefined;
     const pagination = parsePagination(request.query);
-    data(response, pagination ? ai.listSuggestionsPage(request.params.workId, pagination, status) : ai.listSuggestions(request.params.workId, status));
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, pagination
+      ? mapRecords(ai.listSuggestionsPage(request.params.workId, pagination, status), (suggestion) => redactSuggestion(suggestion, permissions))
+      : ai.listSuggestions(request.params.workId, status).map((suggestion) => redactSuggestion(suggestion, permissions)));
   });
   app.post("/api/works/:workId/suggestions", async (request, response) => {
     const input = parse(z.object({
@@ -2058,14 +2152,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
     }
-    data(response, await ai.createSuggestion({
+    data(response, redactSuggestion(await ai.createSuggestion({
       workId: request.params.workId,
       taskType: input.taskType,
       instruction: instructionWithCitations(input.instruction, citations),
       scope: input.scope as ContextScope,
       ...(input.modelId ? { modelId: input.modelId } : {}),
       ...(input.parameters ? { parameters: input.parameters } : {})
-    }), 201);
+    }), requestPermissions(request, request.params.workId)), 201);
   });
   app.post("/api/works/:workId/chat/stream", async (request, response) => {
     const input = parse(z.object({
@@ -2164,26 +2258,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       });
     } catch (error) {
       if (!controller.signal.aborted) {
-        const details = error instanceof AppError && error.details && typeof error.details === "object" && !Array.isArray(error.details)
-          ? error.details as Record<string, unknown>
-          : null;
-        sendEvent("error", {
-          code: error instanceof AppError ? error.code : "AI_STREAM_FAILED",
-          message: error instanceof Error ? error.message : "AI 流式调用失败",
-          ...(error instanceof AppError ? { status: error.status } : {}),
-          ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
-          ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
-          ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
-          ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
-          ...(typeof details?.modelId === "string" ? { modelId: details.modelId } : {}),
-          ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {})
+        logger.error("ai.stream.failed", {
+          workId: request.params.workId,
+          error: sanitizeError(error)
         });
+        sendEvent("error", publicAiStreamError(error));
       }
     } finally {
       if (!response.writableEnded && !response.destroyed) response.end();
     }
   });
-  app.get("/api/suggestions/:suggestionId", (request, response) => data(response, ai.getSuggestion(request.params.suggestionId)));
+  app.get("/api/suggestions/:suggestionId", (request, response) => {
+    const suggestion = ai.getSuggestion(request.params.suggestionId);
+    const permissions = requestPermissions(request, String(suggestion.workId));
+    data(response, redactSuggestion(suggestion, permissions));
+  });
   app.get("/api/suggestions/:suggestionId/guards", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination
@@ -2295,7 +2384,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       setHeaders: setStaticCacheControl
     }));
     app.get("/{*path}", (request, response, next) => {
-      if (request.path.startsWith("/api/")) return next();
+      if (normalizeApiPath(request.path).startsWith("/api/")) return next();
       sendIndexHtml(request, response);
     });
   }
