@@ -1088,13 +1088,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.put("/api/works/:workId/cover", coverUpload.single("file"), (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 封面");
     const bytes = request.file.buffer;
-    const isPng = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-    const isWebp = bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
-    const mimeType: "image/png" | "image/jpeg" | "image/webp" | null = isPng ? "image/png" : isJpeg ? "image/jpeg" : isWebp ? "image/webp" : null;
-    if (!mimeType) throw new AppError(415, "INVALID_COVER", "封面文件内容不是有效的 PNG、JPEG 或 WebP 图片");
-    const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
-    data(response, store.setWorkCover(String(request.params.workId), mimeType, bytes, expectedVersionNo));
+    try {
+      const metadata = readRasterImageMetadata(bytes);
+      const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
+      data(response, store.setWorkCover(String(request.params.workId), metadata.mimeType, bytes, expectedVersionNo));
+    } catch (error) {
+      if (error instanceof InvalidRasterImageError) throw new AppError(415, "INVALID_COVER", error.message);
+      throw error;
+    }
   });
   app.delete("/api/works/:workId/cover", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});

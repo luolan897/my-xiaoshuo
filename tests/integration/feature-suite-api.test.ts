@@ -3,6 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime } from "../helpers.js";
 
+const validPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
+  "base64"
+);
+const validJpeg = Buffer.from([
+  0xff, 0xd8, 0xff, 0xc0, 0x00, 0x07, 0x08, 0x00, 0x01, 0x00, 0x01, 0xff, 0xd9
+]);
+const validWebp = Buffer.from([
+  0x52, 0x49, 0x46, 0x46, 0x16, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+  0x56, 0x50, 0x38, 0x4c, 0x05, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00
+]);
+
 async function seedWork(runtime: Runtime, title = "功能测试作品") {
   const work = await request(runtime.app).post("/api/works").send({ title }).expect(201);
   const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
@@ -527,18 +540,19 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(imported.body.data).not.toHaveProperty("tree");
     expect(JSON.stringify(imported.body)).not.toContain("故事开始。");
 
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
-    const uploaded = await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", png, "cover.png").expect(200);
+    const uploaded = await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validPng, "cover.png").expect(200);
     expect(uploaded.body.data.coverUrl).toContain(`/api/works/${workId}/cover?v=`);
     const cover = await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/png/u);
     expect(cover.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
-    expect(cover.body).toEqual(png);
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x01]);
-    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", jpeg, "cover.jpg").expect(200);
+    expect(cover.body).toEqual(validPng);
+    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validJpeg, "cover.jpg").expect(200);
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/jpeg/u);
-    const webp = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), Buffer.from([0x00])]);
-    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", webp, "cover.webp").expect(200);
+    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validWebp, "cover.webp").expect(200);
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/webp/u);
+    const oversizedPng = Buffer.from(validPng);
+    oversizedPng.writeUInt32BE(5_000, 16);
+    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", oversizedPng, "oversized.png").expect(415);
+    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validPng.subarray(0, 16), "truncated.png").expect(415);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", Buffer.from("<svg></svg>"), "cover.svg").expect(415);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", Buffer.alloc(5 * 1024 * 1024 + 1), "too-large.png").expect(400);
     await request(runtime.app).delete(`/api/works/${workId}/cover`).expect(204);
