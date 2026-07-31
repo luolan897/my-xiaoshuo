@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity } from "../../src/security.js";
 import { isDevelopmentServer, isLoopbackHost, startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
 import { APP_VERSION } from "../../src/version.js";
+import { loadMasterSecret } from "../../src/credential-vault.js";
 
 const roots: string[] = [];
 const runningServers: RunningLocalServer[] = [];
@@ -77,7 +78,18 @@ describe("本地服务运行时", () => {
     expect(health.data).toMatchObject({ status: "ok", version: APP_VERSION, development: false });
     expect(page).toContain("叙界");
     expect(existsSync(databasePath)).toBe(true);
-    expect(existsSync(join(root, "master.key"))).toBe(true);
+    const masterKeyPath = join(root, "master.key");
+    expect(existsSync(masterKeyPath)).toBe(true);
+    expect(statSync(root).mode & 0o777).toBe(0o700);
+    expect(statSync(databasePath).mode & 0o777).toBe(0o600);
+    expect(statSync(masterKeyPath).mode & 0o777).toBe(0o600);
+    for (const sqliteSidecar of [`${databasePath}-wal`, `${databasePath}-shm`]) {
+      if (existsSync(sqliteSidecar)) expect(statSync(sqliteSidecar).mode & 0o777).toBe(0o600);
+    }
+
+    chmodSync(masterKeyPath, 0o644);
+    expect(loadMasterSecret(masterKeyPath)).toHaveLength(43);
+    expect(statSync(masterKeyPath).mode & 0o777).toBe(0o600);
   });
 
   it("开发免登录使用已有账户进入工作台", async () => {

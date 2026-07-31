@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { chmodSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
@@ -42,6 +43,8 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
   let security: RuntimeSecurityOptions;
   let runtime: Runtime;
   try {
+    mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
+    chmodSync(options.dataDirectory, 0o700);
     security = resolveRuntimeSecurity(options.env);
     const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
     if (devAuthBypass && !isLoopbackHost(options.host)) {
