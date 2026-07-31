@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
-import { BROWSER_AI_STORAGE_KEY, buildBrowserAiMessages, createBrowserAiStore, publicProvider, requestBrowserAi } from "../browser-ai.js";
+import { BROWSER_AI_STORAGE_KEY, buildBrowserAiMessages, createBrowserAiStore, publicProvider, requestBrowserAi, testBrowserAiModel, testBrowserAiProvider } from "../browser-ai.js";
 import { works } from "../data.js";
 import { DEMO_CREDENTIALS, isValidDemoLogin } from "../demo-auth.js";
 import { demoAssetVersion, demoCoverCacheControl, readDemoCoverVersions, readMainVersion, versionModuleSource, versionedDemoAdapterSource } from "../scripts/version.mjs";
@@ -75,6 +75,7 @@ test("Demo 适配主干最新正文管理能力且不重写正式前端", async 
     "writing-goal",
     "chapter-annotations",
     "annotations",
+    "volumes",
     "move",
     "restore",
     "permanent"
@@ -87,6 +88,32 @@ test("Demo 适配主干最新正文管理能力且不重写正式前端", async 
   assert.match(adapter, /chapter\.purged/);
   assert.match(adapter, /chapterAnnotations = work\.chapterAnnotations\.filter/);
   assert.match(adapter, /targetCount \+ index/);
+  assert.match(adapter, /volume\.chapters\.filter/);
+  assert.match(adapter, /scope === "roots"/);
+  assert.match(adapter, /scope === "descendants"/);
+});
+
+test("Demo 适配 0.6.1 评论、模型测试和对话流契约", async () => {
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  for (const capability of [
+    "chapter-annotations",
+    "testBrowserAiModel",
+    "minimumModelContextWindow",
+    "runBrowserChat",
+    "conversationSummary",
+    "appendConversationMessage",
+    "event: context",
+    "event: user_message",
+    "contextUsage",
+    "compactedMessageCount",
+    "relationshipSearchIndex",
+    "demoTokenUsage"
+  ]) assert.match(adapter, new RegExp(capability), `Demo 缺少 0.6.1 能力：${capability}`);
+  assert.ok(adapter.includes('match = path.match(/^\\/api\\/ai-conversations\\/([^/]+)\\/fork$/u);'));
+  assert.ok(adapter.includes('match = path.match(/^\\/api\\/ai-conversations\\/([^/]+)\\/compact$/u);'));
+  assert.match(adapter, /chapterAnnotations = chapters\.slice\(0, 3\)/);
+  assert.match(adapter, /chapterTitle: chapter\?\.title/);
+  assert.match(adapter, /volumeTitle: volume\?\.title/);
 });
 
 test("AI 配置仅保存在浏览器并说明前端直连方式", async () => {
@@ -121,6 +148,29 @@ test("浏览器直接调用 OpenAI 兼容模型并携带作品上下文", async 
   assert.equal(request.init.headers.Authorization, "Bearer sk-local");
   assert.equal(JSON.parse(request.init.body).model, "demo-model");
   assert.deepEqual(result, { content: "冲突概括", outputTokens: 12 });
+});
+
+test("供应商和模型连接测试都会发起最小模型请求并接受纯思考响应", async () => {
+  const requests = [];
+  const fetchImpl = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+    if (String(url).endsWith("/models")) {
+      return new Response(JSON.stringify({ data: [{ id: "available-model" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { reasoning_content: "OK", content: "" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const provider = { baseUrl: "https://example.test/v1", apiKey: "sk-local", maxTokens: 2000 };
+  const providerResult = await testBrowserAiProvider({ fetchImpl, provider });
+  const modelResult = await testBrowserAiModel({ fetchImpl, provider, model: { modelId: "configured-model", preset: { max_tokens: 8 } } });
+  const thinkingResult = await requestBrowserAi({ fetchImpl, provider, model: { modelId: "thinking-model", preset: { max_tokens: 8 } }, messages: [{ role: "user", content: "测试" }] });
+
+  assert.deepEqual(providerResult, { ok: true, availableModels: ["available-model"] });
+  assert.deepEqual(modelResult, { ok: true });
+  assert.deepEqual(thinkingResult, { content: "OK", outputTokens: 0 });
+  assert.equal(requests.length, 4);
+  assert.equal(JSON.parse(requests[1].init.body).model, "available-model");
+  assert.equal(JSON.parse(requests[2].init.body).model, "configured-model");
+  assert.equal(JSON.parse(requests[3].init.body).model, "thinking-model");
 });
 
 test("两本预制作品都设置了项目内封面", async () => {

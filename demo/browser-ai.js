@@ -101,9 +101,15 @@ export function buildBrowserAiMessages({ work, scope, instruction, platformPromp
 }
 
 function completionText(payload) {
-  const content = payload?.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((item) => typeof item === "string" ? item : item?.text ?? "").join("");
+  const message = payload?.choices?.[0]?.message;
+  const content = message?.content;
+  const contentText = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.map((item) => typeof item === "string" ? item : item?.text ?? "").join("")
+      : "";
+  const messageText = [message?.reasoning_content, contentText].filter((part) => typeof part === "string" && part.trim()).join("\n");
+  if (messageText) return messageText;
   if (typeof payload?.output_text === "string") return payload.output_text;
   throw new Error("模型响应中没有可用文本");
 }
@@ -136,9 +142,28 @@ export async function testBrowserAiProvider({ fetchImpl, provider }) {
   const response = await fetchImpl(providerApiUrl(provider.baseUrl, "models"), {
     headers: { Accept: "application/json", Authorization: `Bearer ${provider.apiKey}` }
   });
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
     throw new Error(payload?.error?.message ?? `连接测试失败：${response.status}`);
   }
+  const availableModels = Array.isArray(payload?.data)
+    ? payload.data.map((item) => String(item?.id ?? "").trim()).filter(Boolean)
+    : [];
+  if (!availableModels.length) throw new Error("AI 供应商没有返回可用模型");
+  await testBrowserAiModel({
+    fetchImpl,
+    provider,
+    model: { modelId: availableModels[0], preset: { temperature: 0, max_tokens: 8 } }
+  });
+  return { ok: true, availableModels };
+}
+
+export async function testBrowserAiModel({ fetchImpl, provider, model }) {
+  await requestBrowserAi({
+    fetchImpl,
+    provider,
+    model,
+    messages: [{ role: "user", content: "仅回复 OK" }]
+  });
   return { ok: true };
 }
