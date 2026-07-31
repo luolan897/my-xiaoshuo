@@ -12,6 +12,8 @@ describe("作品工作台按需加载", () => {
 
     expect(selectWorkSource).toContain("renderTree();");
     expect(selectWorkSource).toContain("?directory=volumes");
+    expect(selectWorkSource).toContain('if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();\n  setSaveState("就绪");');
+    expect(selectWorkSource).not.toContain('if (discarding) setSaveState("就绪");');
     expect(selectWorkSource).toContain("void loadAllVolumeChapters(nextWork.id)");
     expect(selectWorkSource).not.toContain("await selectChapter(targetChapter.id)");
     expect(selectWorkSource).not.toContain("await loadModels()");

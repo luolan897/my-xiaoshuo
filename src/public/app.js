@@ -3734,7 +3734,7 @@ async function selectWork(workId, preferredChapterId = null) {
   }
   const nextWork = await api(`/api/works/${workId}?directory=volumes`);
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
-  if (discarding) setSaveState("就绪");
+  setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
