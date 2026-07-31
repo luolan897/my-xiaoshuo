@@ -899,8 +899,6 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .work-access-field strong { color: var(--ink); font-size: 12px; }
 .work-access-field small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .work-access-field .ghost-button { flex: 0 0 auto; white-space: nowrap; }
-.work-export-actions { display: flex; flex-wrap: wrap; gap: 7px; flex: 0 0 auto; }
-.work-export-actions .ghost-button { min-height: 32px; }
 .work-access-options { display: flex; flex-wrap: wrap; gap: 5px; }
 .work-access-options span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 1.35; }
 .account-dialog { width: min(640px, 92vw); overflow: hidden; }
@@ -2312,6 +2310,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .markdown-table-menu button:hover, .markdown-table-menu button:focus-visible { background: var(--paper-deep); color: var(--accent-dark); }
 .markdown-table-menu button span { font-size: 11px; font-weight: 600; }
 .markdown-table-menu button small { color: var(--muted); font-size: 9px; }
+.manuscript-export-menu { position: fixed; z-index: 90; display: grid; min-width: 240px; gap: 3px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
+.manuscript-export-menu.hidden { display: none; }
+.manuscript-export-menu > strong { padding: 5px 8px 7px; color: var(--muted); font-size: 9px; }
+.manuscript-export-menu button { display: grid; width: 100%; gap: 2px; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; }
+.manuscript-export-menu button:hover, .manuscript-export-menu button:focus-visible { background: var(--paper-deep); color: var(--accent-dark); outline: 0; }
+.manuscript-export-menu button span { font-size: 11px; font-weight: 600; }
+.manuscript-export-menu button small { color: var(--muted); font-size: 9px; line-height: 1.45; }
 .chapter-annotations-dialog { width: min(820px, 94vw); }
 .chapter-annotations-list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; padding: 18px 24px; }
 .chapter-comment-module-list { display: grid; gap: 10px; }
@@ -3137,8 +3142,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .appearance-whitespace-field, .font-preview { grid-column: auto; }
   .access-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .access-row select, .access-row button, .work-access-field .ghost-button { width: 100%; }
-  .work-export-actions { width: 100%; }
-  .work-export-actions .ghost-button { width: 100%; }
   .work-access-field { align-items: stretch; flex-direction: column; }
 
   .entity-editor-view { min-width: 0; }
