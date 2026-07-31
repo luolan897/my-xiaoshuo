@@ -4673,6 +4673,7 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
+      attachmentModule: "drafts",
       readOnly: viewOnly
     }) + management;
   openDialog(item ? viewOnly ? "查看想法" : "编辑想法" : "新建想法", fields, async (form) => {
@@ -6922,7 +6923,7 @@ async function ensureAiReferencesLoaded() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
-  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
+  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-attachment-module="${esc(options.attachmentModule ?? "settings")}" data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
@@ -7608,10 +7609,10 @@ function markdownImageLabel(file, fallback = "图片附件") {
   return String(file?.name ?? "").replace(/[\[\]\r\n]/gu, "").trim() || fallback;
 }
 
-async function uploadMarkdownAttachment(file) {
+async function uploadMarkdownAttachment(file, module = "settings") {
   const body = new FormData();
   body.append("file", file);
-  const attachment = await api(`/api/works/${state.work.id}/attachments`, { method: "POST", body });
+  const attachment = await api(`/api/works/${state.work.id}/attachments?module=${encodeURIComponent(module)}`, { method: "POST", body });
   if (!attachment.deduplicated) markdownEditorPendingAttachments.push(String(attachment.id));
   return { attachment, imageLabel: markdownImageLabel(file) };
 }
@@ -7642,7 +7643,7 @@ function createVditorUploadHandler(uploadAttachment, getEditor) {
   };
 }
 
-function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = uploadMarkdownAttachment, placeholder = "", readOnly = false, width = "auto" } = {}) {
+function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = null, attachmentModule = "settings", placeholder = "", readOnly = false, width = "auto" } = {}) {
   if (!window.Vditor) {
     toast("Markdown 编辑器资源加载失败，请刷新页面后重试", "error");
     return null;
@@ -7673,7 +7674,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
       accept: "image/*",
       max: 10 * 1024 * 1024,
       multiple: true,
-      handler: createVditorUploadHandler(uploadAttachment, () => editor)
+      handler: createVditorUploadHandler(uploadAttachment ?? ((file) => uploadMarkdownAttachment(file, attachmentModule)), () => editor)
     },
     input: (markdown) => {
       normalizeVditorAttachmentImages(editor);
@@ -7902,6 +7903,7 @@ function bindVditorEditors(container) {
         if (valueField) valueField.value = markdown;
         markEntityEditorDirty();
       },
+      attachmentModule: host.dataset.attachmentModule ?? "settings",
       placeholder: host.dataset.placeholder ?? "",
       readOnly: Boolean(valueField?.readOnly)
     });
@@ -7917,7 +7919,7 @@ function characterSectionImageLabel(file, fallback = "图片附件") {
 async function uploadCharacterSectionAttachment(file) {
   const body = new FormData();
   body.append("file", file);
-  const attachment = await api(`/api/works/${state.work.id}/attachments`, { method: "POST", body });
+  const attachment = await api(`/api/works/${state.work.id}/attachments?module=characters`, { method: "POST", body });
   if (!attachment.deduplicated) characterSectionPendingAttachments.push(String(attachment.id));
   return {
     attachment,
@@ -7990,6 +7992,7 @@ async function openKnowledgeSectionEditor(index = null) {
   host.querySelectorAll("input, textarea").forEach((control) => control.addEventListener("input", () => { knowledgeSectionEditorDirty = true; }));
   knowledgeSectionVditor = createVditorEditor($("#knowledge-section-markdown"), section?.contentMarkdown ?? "", {
     onInput: () => { knowledgeSectionEditorDirty = true; },
+    attachmentModule: knowledgeEditorKind === "race" ? "races" : "organizations",
     placeholder: "从这里开始写 Markdown 设定…",
     width: "100%"
   });

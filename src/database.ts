@@ -6,6 +6,22 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
+export const DATABASE_SCHEMA_VERSION = 59;
+
+export function readDatabaseSchemaVersion(filename: string): number | null {
+  if (!existsSync(filename)) return null;
+  const database = new DatabaseSync(filename, { readOnly: true });
+  try {
+    const migrationTable = database.prepare(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+    ).get();
+    if (!migrationTable) return 0;
+    const row = database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version?: unknown } | undefined;
+    return Number(row?.version ?? 0);
+  } finally {
+    database.close();
+  }
+}
 
 export class Database {
   readonly raw: DatabaseSync;
@@ -2376,6 +2392,62 @@ export class Database {
           this.run("ALTER TABLE work_ai_settings ADD COLUMN title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (57, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(58)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS attachment_access_modules (
+          attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+          module TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(attachment_id, module)
+        ) WITHOUT ROWID`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_attachment_access_modules_module ON attachment_access_modules(module, attachment_id)");
+        const timestamp = new Date().toISOString();
+        this.run(`INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at)
+          SELECT attachment_id,
+            CASE entity_type
+              WHEN 'draft' THEN 'drafts'
+              WHEN 'setting' THEN 'settings'
+              WHEN 'race' THEN 'races'
+              WHEN 'organization' THEN 'organizations'
+              WHEN 'character-section' THEN 'characters'
+              WHEN 'chapter' THEN 'prose'
+              ELSE 'settings'
+            END,
+            ?
+          FROM attachment_references`, timestamp);
+        this.run(`INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at)
+          SELECT attachment.id, 'settings', ? FROM attachments attachment
+          WHERE NOT EXISTS (
+            SELECT 1 FROM attachment_access_modules access WHERE access.attachment_id = attachment.id
+          )`, timestamp);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (58, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(59)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS attachment_cleanup_queue (
+          storage_key TEXT PRIMARY KEY,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) WITHOUT ROWID`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_attachment_cleanup_queue_updated ON attachment_cleanup_queue(updated_at, storage_key)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (59, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

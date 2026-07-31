@@ -10,7 +10,8 @@ import {
   emptyWorkModulePermissions,
   fullWorkModulePermissions,
   storedWorkModulePermissions,
-  type WorkModulePermissions
+  type WorkModulePermissions,
+  type WorkPermissionModule
 } from "./work-permissions.js";
 import {
   countWords,
@@ -35,6 +36,9 @@ type WorkInput = {
 
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
+
+export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
 
 type PlatformPageSizes = {
   drafts: number;
@@ -1312,10 +1316,11 @@ export class Store {
       this.db.run("DELETE FROM races WHERE work_id = ?", workId);
       this.db.run("DELETE FROM works WHERE id = ?", workId);
       this.db.run("DELETE FROM relationship_source_index_queue WHERE work_id = ?", workId);
+      for (const storageKey of storageKeys) {
+        if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
+      }
     });
-    return storageKeys.filter((storageKey) => Number(
-      this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0
-    ) === 0);
+    return storageKeys.filter((storageKey) => !this.attachmentStorageKeyInUse(storageKey));
   }
 
   setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer, expectedVersionNo?: number): Record<string, unknown> {
@@ -4666,10 +4671,21 @@ export class Store {
     };
   }
 
-  createAttachment(workId: string, input: AttachmentInput): { attachment: Record<string, unknown>; created: boolean } {
+  createAttachment(workId: string, input: AttachmentInput, accessModule: AttachmentPermissionModule = "settings"): { attachment: Record<string, unknown>; created: boolean } {
     this.getWork(workId);
     const existing = this.db.get("SELECT * FROM attachments WHERE work_id = ? AND stored_sha256 = ?", workId, input.storedSha256);
-    if (existing) return { attachment: this.mapAttachment(existing), created: false };
+    if (existing) {
+      this.db.transaction(() => {
+        this.db.run(
+          "INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
+          requiredString(existing, "id"),
+          accessModule,
+          now()
+        );
+        this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", requiredString(existing, "storage_key"));
+      });
+      return { attachment: this.mapAttachment(existing), created: false };
+    }
     const attachmentId = id("attachment");
     const timestamp = now();
     this.db.transaction(() => {
@@ -4695,6 +4711,13 @@ export class Store {
         timestamp,
         currentRequestActor()?.userId ?? null
       );
+      this.db.run(
+        "INSERT INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
+        attachmentId,
+        accessModule,
+        timestamp
+      );
+      this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", input.storageKey);
       this.audit(workId, "attachment.created", "attachment", attachmentId, {
         originalMimeType: input.originalMimeType,
         storedMimeType: input.storedMimeType,
@@ -4724,17 +4747,122 @@ export class Store {
     return this.mapAttachment(row);
   }
 
-  deleteAttachment(attachmentId: string): { storageKey: string; removeStoredFile: boolean } {
+  attachmentModules(attachmentId: string): AttachmentPermissionModule[] {
+    this.getAttachment(attachmentId);
+    const modules = new Set<AttachmentPermissionModule>();
+    for (const row of this.db.all("SELECT module FROM attachment_access_modules WHERE attachment_id = ?", attachmentId)) {
+      const module = String(row.module);
+      if ((attachmentPermissionModules as readonly string[]).includes(module)) modules.add(module as AttachmentPermissionModule);
+    }
+    const referenceModules: Record<string, AttachmentPermissionModule> = {
+      chapter: "prose",
+      draft: "drafts",
+      setting: "settings",
+      "character-section": "characters",
+      race: "races",
+      organization: "organizations"
+    };
+    for (const row of this.db.all("SELECT DISTINCT entity_type FROM attachment_references WHERE attachment_id = ?", attachmentId)) {
+      const module = referenceModules[String(row.entity_type)];
+      if (module) modules.add(module);
+    }
+    return [...modules];
+  }
+
+  private attachmentStorageKeyInUse(storageKey: string): boolean {
+    return Number(this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0) > 0;
+  }
+
+  private enqueueAttachmentCleanup(storageKey: string): void {
+    const timestamp = now();
+    this.db.run(
+      `INSERT INTO attachment_cleanup_queue (storage_key, attempts, last_error, created_at, updated_at)
+       VALUES (?, 0, NULL, ?, ?) ON CONFLICT(storage_key) DO UPDATE SET updated_at = excluded.updated_at`,
+      storageKey,
+      timestamp,
+      timestamp
+    );
+  }
+
+  listAttachmentCleanupQueue(limit = 100): Array<{ storageKey: string; attempts: number }> {
+    return this.db.all(
+      "SELECT storage_key, attempts FROM attachment_cleanup_queue ORDER BY updated_at, storage_key LIMIT ?",
+      Math.max(1, Math.min(1_000, Math.trunc(limit)))
+    ).map((row) => ({ storageKey: requiredString(row, "storage_key"), attempts: numberValue(row, "attempts") }));
+  }
+
+  attachmentCleanupStillRequired(storageKey: string): boolean {
+    return !this.attachmentStorageKeyInUse(storageKey);
+  }
+
+  completeAttachmentCleanup(storageKey: string): void {
+    this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", storageKey);
+  }
+
+  failAttachmentCleanup(storageKey: string, message: string): void {
+    this.db.run(
+      "UPDATE attachment_cleanup_queue SET attempts = attempts + 1, last_error = ?, updated_at = ? WHERE storage_key = ?",
+      message.slice(0, 500),
+      now(),
+      storageKey
+    );
+  }
+
+  private attachmentHistoricalReferenceCount(attachmentId: string): number {
+    const needle = `attachment://${attachmentId}`;
+    const sources = [
+      ["entity_versions", "snapshot_json"],
+      ["character_profile_section_versions", "snapshot_json"],
+      ["character_versions", "snapshot_json"],
+      ["chapter_versions", "content"],
+      ["file_versions", "snapshot_json"]
+    ] as const;
+    return sources.reduce((count, [table, column]) => count + Number(
+      this.db.get(`SELECT COUNT(*) AS count FROM ${table} WHERE instr(${column}, ?) > 0`, needle)?.count ?? 0
+    ), 0);
+  }
+
+  queueUnreferencedAttachments(retentionMs = 24 * 60 * 60_000, limit = 100): number {
+    const cutoff = new Date(Date.now() - Math.max(0, retentionMs)).toISOString();
+    const candidates = this.db.all(
+      `SELECT attachment.* FROM attachments attachment
+       WHERE attachment.created_at <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM attachment_references reference WHERE reference.attachment_id = attachment.id
+         )
+       ORDER BY attachment.created_at, attachment.id LIMIT ?`,
+      cutoff,
+      Math.max(1, Math.min(1_000, Math.trunc(limit)))
+    );
+    let queued = 0;
+    for (const candidate of candidates) {
+      const attachmentId = requiredString(candidate, "id");
+      if (this.attachmentHistoricalReferenceCount(attachmentId) > 0) continue;
+      const storageKey = requiredString(candidate, "storage_key");
+      this.db.transaction(() => {
+        this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
+        this.audit(requiredString(candidate, "work_id"), "attachment.garbage-collected", "attachment", attachmentId, { storageKey });
+        if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
+      });
+      queued += 1;
+    }
+    return queued;
+  }
+
+  deleteAttachment(attachmentId: string): { storageKey: string; cleanupQueued: boolean } {
     const attachment = this.getAttachment(attachmentId);
     const references = Number(this.db.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count ?? 0);
     if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被资料引用，无法删除");
+    if (this.attachmentHistoricalReferenceCount(attachmentId) > 0) {
+      throw new AppError(409, "ATTACHMENT_IN_VERSION_HISTORY", "附件仍被历史版本引用，无法删除");
+    }
     const storageKey = String(attachment.storageKey);
     this.db.transaction(() => {
       this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
       this.audit(String(attachment.workId), "attachment.deleted", "attachment", attachmentId, { storageKey });
+      if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
     });
-    const remaining = Number(this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0);
-    return { storageKey, removeStoredFile: remaining === 0 };
+    return { storageKey, cleanupQueued: !this.attachmentStorageKeyInUse(storageKey) };
   }
 
   getCharacter(characterId: string): Record<string, unknown> {

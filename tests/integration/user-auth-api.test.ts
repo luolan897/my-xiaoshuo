@@ -912,6 +912,64 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("按实际资料模块隔离 Markdown 图片附件", async () => {
+    const owner = await register(runtime, "attachment_owner");
+    const characterEditor = await register(runtime, "attachment_character_editor");
+    const settingsReader = await register(runtime, "attachment_settings_reader");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "附件权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const noAccess = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: characterEditor.user.userId, permissions: { ...noAccess, characters: "write" } })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: settingsReader.user.userId, permissions: { ...noAccess, settings: "read" } })
+      .expect(201);
+
+    await characterEditor.agent.post(`/api/works/${workId}/attachments`)
+      .set("X-CSRF-Token", characterEditor.csrfToken)
+      .attach("file", onePixelPng, "missing-module.png")
+      .expect(403);
+    const uploaded = await characterEditor.agent.post(`/api/works/${workId}/attachments?module=characters`)
+      .set("X-CSRF-Token", characterEditor.csrfToken)
+      .attach("file", onePixelPng, "character-profile.png")
+      .expect(201);
+    const attachmentId = String(uploaded.body.data.id);
+    const character = await characterEditor.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", characterEditor.csrfToken)
+      .send({ name: "保密角色" })
+      .expect(201);
+    await characterEditor.agent.post(`/api/characters/${String(character.body.data.id)}/sections`)
+      .set("X-CSRF-Token", characterEditor.csrfToken)
+      .send({ title: "保密档案", contentMarkdown: `![](attachment://${attachmentId})` })
+      .expect(201);
+
+    await characterEditor.agent.get(`/api/attachments/${attachmentId}/content`).expect(200);
+    const hiddenList = await settingsReader.agent.get(`/api/works/${workId}/attachments`).expect(200);
+    expect(hiddenList.body.data).toEqual([]);
+    const hiddenContent = await settingsReader.agent.get(`/api/attachments/${attachmentId}/content`).expect(403);
+    expect(hiddenContent.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+  });
+
   it("可单独授权 AI 对话或 AI 分析，互不影响", async () => {
     const owner = await register(runtime, "ai_split_owner");
     const chatOnly = await register(runtime, "ai_chat_only");

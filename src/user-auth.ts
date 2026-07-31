@@ -816,6 +816,14 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
 
 const contentPermissionModules = workPermissionModules.filter((module) => !["drafts", "reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
 const aiInteractionModules = ["ai-chat", "ai-analysis"] as const satisfies readonly WorkPermissionModule[];
+const attachmentModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+
+function requestedAttachmentModule(request: Request): WorkPermissionModule {
+  const module = String(request.query.module ?? "settings");
+  return attachmentModules.includes(module as typeof attachmentModules[number])
+    ? module as typeof attachmentModules[number]
+    : "settings";
+}
 
 const analysisTaskDirectReadModules: Record<string, readonly WorkPermissionModule[]> = {
   structure: ["prose"],
@@ -879,6 +887,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
+  if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
+    return write ? direct(requestedAttachmentModule(request)) : { anyRead: [...attachmentModules] };
+  }
+  if (/^\/api\/attachments\/[^/]+(?:\/content)?$/u.test(pathname)) {
+    return write ? { anyWrite: [...attachmentModules] } : { anyRead: [...attachmentModules] };
+  }
   if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { anyRead: [...aiInteractionModules] };
   if (!write && /^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u.test(pathname)) {
     return { anyRead: [...aiInteractionModules] };
@@ -940,8 +954,8 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     [/^\/api\/(?:volumes|chapters)\/[^/]+(?:\/|$)/u, "prose"],
     [/^\/api\/works\/[^/]+\/drafts(?:\/|$)/u, "drafts"],
     [/^\/api\/drafts\/[^/]+(?:\/|$)/u, "drafts"],
-    [/^\/api\/works\/[^/]+\/(?:settings|attachments)(?:\/|$)/u, "settings"],
-    [/^\/api\/(?:settings|attachments)\/[^/]+(?:\/|$)/u, "settings"],
+    [/^\/api\/works\/[^/]+\/settings(?:\/|$)/u, "settings"],
+    [/^\/api\/settings\/[^/]+(?:\/|$)/u, "settings"],
     [/^\/api\/character-sections\/[^/]+(?:\/|$)/u, "characters"],
     [/^\/api\/works\/[^/]+\/(?:timeline-tracks|timeline)(?:\/|$)/u, "timeline"],
     [/^\/api\/(?:timeline-tracks|timeline)\/[^/]+(?:\/|$)/u, "timeline"],
