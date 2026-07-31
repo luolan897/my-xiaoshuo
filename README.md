@@ -111,12 +111,13 @@ CLI 会按服务器保存登录凭据。所有连接服务的数据命令都可�
 | `HOST` | `127.0.0.1` | 监听地址；服务器部署时可设为 `0.0.0.0` |
 | `DATA_DIR` | `<项目目录>/.data` | 默认数据目录 |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite 数据库路径 |
-| `AI_NOVEL_MASTER_KEY` | 自动生成并保存在 `<DATA_DIR>/master.key` | 加密 AI 供应商密钥的主密钥 |
+| `AI_NOVEL_MASTER_KEY` | 自动生成并保存在 `<DATA_DIR>/master.key` | 加密 AI 供应商密钥的主密钥；手动配置时至少 32 个字符 |
 | `APP_AUTH_USERNAME` | 空 | 可选的部署网关账号；应用内用户系统始终启用 |
 | `APP_AUTH_PASSWORD` | 空 | 可选的部署网关密码，至少 12 个字符；必须通过 HTTPS 传输 |
 | `APP_TRUST_PROXY` | `false` | 位于可信反向代理后时设为代理跳数（通常为 `1`）或 `true` |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | 开发环境 `true`，生产环境 `false` | 是否允许 AI 供应商连接本机或内网地址；链路本地与云元数据地址始终禁止 |
 | `APP_ALLOW_REGISTRATION` | `false` | 仅明确设为 `true` 时开放注册；未设置或其他值均关闭，首次初始化创建管理员也必须显式开启 |
+| `APP_SETUP_TOKEN` | 空 | 开放注册时必填且至少 32 个字符；仅首位管理员注册需要在页面输入 |
 
 自定义示例：
 
@@ -134,7 +135,7 @@ APP_AUTH_PASSWORD='请替换为足够长的随机密码' \
 npm start
 ```
 
-生产环境必须在可信反向代理后启用 HTTPS。首次初始化时，将 `APP_ALLOW_REGISTRATION` 设为 `true`，创建的第一个用户会自动成为系统管理员；完成后应删除该环境变量或设为 `false` 并重启服务。后续如需添加用户，再临时显式开启注册。可选的 HTTP Basic Auth 仅作为额外部署网关，其凭据只是 Base64 编码，未使用 HTTPS 时不能防止链路窃听。`/api/health` 保持免认证以供探活，业务 API 需要应用内登录。
+生产环境必须在可信反向代理后启用 HTTPS。首次初始化时，将 `APP_ALLOW_REGISTRATION` 设为 `true`，并为 `APP_SETUP_TOKEN` 配置至少 32 个字符的随机值；创建的第一个用户会自动成为系统管理员，且必须在页面输入该令牌。完成后应删除这两个环境变量或关闭注册并重启服务。后续添加普通用户只需临时开放注册，不再要求初始化令牌。可选的 HTTP Basic Auth 仅作为额外部署网关，其凭据只是 Base64 编码，未使用 HTTPS 时不能防止链路窃听。`/api/health` 保持免认证以供探活，业务 API 需要应用内登录。
 
 ## AI 供应商配置
 

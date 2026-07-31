@@ -1,4 +1,4 @@
-import type { ParsedNovel } from "./domain.js";
+import { DRAFT_SETTING_MODULES, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
@@ -10,7 +10,8 @@ import {
   emptyWorkModulePermissions,
   fullWorkModulePermissions,
   storedWorkModulePermissions,
-  type WorkModulePermissions
+  type WorkModulePermissions,
+  type WorkPermissionModule
 } from "./work-permissions.js";
 import {
   countWords,
@@ -35,6 +36,9 @@ type WorkInput = {
 
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
+
+export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
 
 type PlatformPageSizes = {
   drafts: number;
@@ -106,6 +110,8 @@ type SettingInput = {
 
 type DraftInput = {
   draftType: "prose" | "setting";
+  volumeId?: string | null;
+  settingModule?: DraftSettingModule | null;
   title: string;
   content: string;
 };
@@ -605,6 +611,8 @@ export class Store {
     };
     if (type === "draft") return {
       draftType: entity.draftType,
+      volumeId: entity.volumeId,
+      settingModule: entity.settingModule,
       title: entity.title,
       content: entity.content
     };
@@ -1301,15 +1309,22 @@ export class Store {
     const storageKeys = this.db.all("SELECT DISTINCT storage_key FROM attachments WHERE work_id = ?", workId)
       .map((row) => requiredString(row, "storage_key"));
     this.db.transaction(() => {
+      this.db.raw.exec("PRAGMA defer_foreign_keys = ON");
       const current = this.getWork(workId);
       this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
       this.recordEntityVersion("work", workId, "delete", null, "删除作品");
       this.audit(null, "work.deleted", "work", workId, { title: work.title });
+      this.db.run("DELETE FROM characters WHERE work_id = ?", workId);
+      this.db.run("DELETE FROM organizations WHERE work_id = ?", workId);
+      this.db.run("UPDATE races SET parent_race_id = NULL WHERE work_id = ? AND parent_race_id IS NOT NULL", workId);
+      this.db.run("DELETE FROM races WHERE work_id = ?", workId);
       this.db.run("DELETE FROM works WHERE id = ?", workId);
+      this.db.run("DELETE FROM relationship_source_index_queue WHERE work_id = ?", workId);
+      for (const storageKey of storageKeys) {
+        if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
+      }
     });
-    return storageKeys.filter((storageKey) => Number(
-      this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0
-    ) === 0);
+    return storageKeys.filter((storageKey) => !this.attachmentStorageKeyInUse(storageKey));
   }
 
   setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer, expectedVersionNo?: number): Record<string, unknown> {
@@ -1558,6 +1573,7 @@ export class Store {
       for (const row of this.db.all("SELECT id FROM volumes WHERE work_id = ?", workId)) {
         this.recordEntityVersion("volume", requiredString(row, "id"), "delete", fileVersionId, "替换作品树前保存分卷历史");
       }
+      this.clearDraftVolumeBindings(workId, null, fileVersionId, "恢复文件版本时原分卷已被替换");
       this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
       for (const volume of volumes) {
         const volumeId = id("volume");
@@ -1633,6 +1649,7 @@ export class Store {
       for (const row of this.db.all("SELECT id FROM volumes WHERE work_id = ?", workId)) {
         this.recordEntityVersion("volume", requiredString(row, "id"), "delete", fileVersionId, "导入前保存分卷历史");
       }
+      this.clearDraftVolumeBindings(workId, null, fileVersionId, "覆盖导入时原分卷已被替换");
       this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
     } else {
       const lastVolume = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ?", workId);
@@ -1753,6 +1770,7 @@ export class Store {
         throw new AppError(409, "VOLUME_HAS_DELETED_CHAPTERS", "分卷回收站中仍有章节，请先彻底删除或恢复并移动这些章节");
       }
       this.recordEntityVersion("volume", volumeId, "delete", null, "删除分卷");
+      this.clearDraftVolumeBindings(String(current.workId), [volumeId], null, "绑定的分卷已删除");
       this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
       this.audit(String(current.workId), "volume.deleted", "volume", volumeId, { versionNo: Number(current.versionNo) });
     });
@@ -3265,13 +3283,16 @@ export class Store {
     changeNote = ""
   ): Record<string, unknown> {
     const timestamp = now();
+    const binding = this.normalizeDraftBinding(workId, input.draftType, input.volumeId ?? null, input.settingModule ?? null);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO drafts (id, work_id, draft_type, title, content, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO drafts (id, work_id, draft_type, volume_id, setting_module, title, content, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         draftId,
         workId,
         input.draftType,
+        binding.volumeId,
+        binding.settingModule,
         input.title,
         input.content,
         timestamp,
@@ -3291,8 +3312,10 @@ export class Store {
   listDrafts(workId: string, draftType?: "prose" | "setting", includeContent = false): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db.all(
-      `SELECT * FROM drafts WHERE work_id = ? AND (? IS NULL OR draft_type = ?)
-       ORDER BY updated_at DESC, title`,
+      `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+       LEFT JOIN volumes volume ON volume.id = draft.volume_id
+       WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
+       ORDER BY draft.updated_at DESC, draft.title`,
       workId,
       draftType ?? null,
       draftType ?? null
@@ -3308,8 +3331,10 @@ export class Store {
     this.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.db.all(
-      `SELECT * FROM drafts WHERE work_id = ? AND (? IS NULL OR draft_type = ?)
-       ORDER BY updated_at DESC, title${page.sql}`,
+      `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+       LEFT JOIN volumes volume ON volume.id = draft.volume_id
+       WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
+       ORDER BY draft.updated_at DESC, draft.title${page.sql}`,
       workId,
       draftType ?? null,
       draftType ?? null,
@@ -3331,10 +3356,11 @@ export class Store {
     const pattern = `%${escapedQuery}%`;
     const rows = normalizedQuery
       ? this.db.all(
-          `SELECT * FROM drafts
-           WHERE work_id = ? AND (? IS NULL OR draft_type = ?)
-             AND (title LIKE ? ESCAPE '\\' COLLATE NOCASE OR content LIKE ? ESCAPE '\\' COLLATE NOCASE)
-           ORDER BY CASE WHEN title LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, updated_at DESC
+          `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+           LEFT JOIN volumes volume ON volume.id = draft.volume_id
+           WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
+             AND (draft.title LIKE ? ESCAPE '\\' COLLATE NOCASE OR draft.content LIKE ? ESCAPE '\\' COLLATE NOCASE)
+           ORDER BY CASE WHEN draft.title LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, draft.updated_at DESC
            LIMIT ?`,
           workId,
           draftType ?? null,
@@ -3345,8 +3371,10 @@ export class Store {
           safeLimit
         )
       : this.db.all(
-          `SELECT * FROM drafts WHERE work_id = ? AND (? IS NULL OR draft_type = ?)
-           ORDER BY updated_at DESC, title LIMIT ?`,
+          `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+           LEFT JOIN volumes volume ON volume.id = draft.volume_id
+           WHERE draft.work_id = ? AND (? IS NULL OR draft.draft_type = ?)
+           ORDER BY draft.updated_at DESC, draft.title LIMIT ?`,
           workId,
           draftType ?? null,
           draftType ?? null,
@@ -3356,7 +3384,11 @@ export class Store {
   }
 
   getDraft(draftId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM drafts WHERE id = ?", draftId);
+    const row = this.db.get(
+      `SELECT draft.*, volume.title AS volume_title FROM drafts draft
+       LEFT JOIN volumes volume ON volume.id = draft.volume_id WHERE draft.id = ?`,
+      draftId
+    );
     if (!row) throw notFound("想法");
     return this.mapDraft(row, true);
   }
@@ -3371,11 +3403,19 @@ export class Store {
   ): Record<string, unknown> {
     const current = this.getDraft(draftId);
     const content = input.content ?? String(current.content);
+    const draftType = input.draftType ?? current.draftType as "prose" | "setting";
+    const typeChanged = input.draftType !== undefined && input.draftType !== current.draftType;
+    const restoreMissingBinding = source === "restore";
+    const volumeId = Object.hasOwn(input, "volumeId") ? input.volumeId ?? null : typeChanged || restoreMissingBinding ? null : current.volumeId as string | null;
+    const settingModule = Object.hasOwn(input, "settingModule") ? input.settingModule ?? null : typeChanged || restoreMissingBinding ? null : current.settingModule as DraftSettingModule | null;
+    const binding = this.normalizeDraftBinding(String(current.workId), draftType, volumeId, settingModule);
     this.db.transaction(() => {
       this.assertExpectedVersion("draft", draftId, expectedVersionNo, "想法");
       this.db.run(
-        "UPDATE drafts SET draft_type = ?, title = ?, content = ?, updated_at = ? WHERE id = ?",
-        input.draftType ?? String(current.draftType),
+        "UPDATE drafts SET draft_type = ?, volume_id = ?, setting_module = ?, title = ?, content = ?, updated_at = ? WHERE id = ?",
+        draftType,
+        binding.volumeId,
+        binding.settingModule,
         input.title ?? String(current.title),
         content,
         now(),
@@ -3405,12 +3445,66 @@ export class Store {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
       draftType: requiredString(row, "draft_type"),
+      volumeId: optionalString(row, "volume_id"),
+      volumeTitle: optionalString(row, "volume_title"),
+      settingModule: optionalString(row, "setting_module"),
       title: requiredString(row, "title"),
       ...(includeContent ? { content } : { contentPreview: content.replace(/\s+/gu, " ").trim().slice(0, 320) }),
       versionNo: this.currentEntityVersionNo("draft", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
+  }
+
+  private normalizeDraftBinding(
+    workId: string,
+    draftType: "prose" | "setting",
+    volumeId: string | null,
+    settingModule: DraftSettingModule | null
+  ): { volumeId: string | null; settingModule: DraftSettingModule | null } {
+    if (draftType === "prose") {
+      if (settingModule !== null) {
+        throw new AppError(400, "DRAFT_BINDING_TYPE_MISMATCH", "正文想法不能绑定设定模块");
+      }
+      if (volumeId !== null) {
+        const volume = this.getVolume(volumeId);
+        if (volume.workId !== workId) {
+          throw new AppError(400, "DRAFT_VOLUME_WORK_MISMATCH", "分卷不属于当前作品");
+        }
+      }
+      return { volumeId, settingModule: null };
+    }
+    if (volumeId !== null) {
+      throw new AppError(400, "DRAFT_BINDING_TYPE_MISMATCH", "设定想法不能绑定分卷");
+    }
+    if (settingModule !== null && !DRAFT_SETTING_MODULES.includes(settingModule)) {
+      throw new AppError(400, "DRAFT_SETTING_MODULE_INVALID", "设定想法绑定模块无效");
+    }
+    return { volumeId: null, settingModule };
+  }
+
+  private clearDraftVolumeBindings(
+    workId: string,
+    volumeIds: string[] | null,
+    sourceRef: string | null,
+    changeNote: string
+  ): void {
+    const drafts = volumeIds === null
+      ? this.db.all("SELECT id FROM drafts WHERE work_id = ? AND volume_id IS NOT NULL", workId)
+      : volumeIds.length
+        ? this.db.all(
+            `SELECT id FROM drafts WHERE work_id = ? AND volume_id IN (${volumeIds.map(() => "?").join(", ")})`,
+            workId,
+            ...volumeIds
+          )
+        : [];
+    const timestamp = now();
+    for (const draft of drafts) {
+      const draftId = requiredString(draft, "id");
+      this.db.run("UPDATE drafts SET volume_id = NULL, updated_at = ? WHERE id = ?", timestamp, draftId);
+      this.recordEntityVersion("draft", draftId, "manual", sourceRef, changeNote, timestamp);
+      this.audit(workId, "draft.updated", "draft", draftId, { fields: ["volumeId"], source: "volume-deleted", sourceRef });
+    }
   }
 
   createSetting(workId: string, input: SettingInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
@@ -4660,10 +4754,21 @@ export class Store {
     };
   }
 
-  createAttachment(workId: string, input: AttachmentInput): { attachment: Record<string, unknown>; created: boolean } {
+  createAttachment(workId: string, input: AttachmentInput, accessModule: AttachmentPermissionModule = "settings"): { attachment: Record<string, unknown>; created: boolean } {
     this.getWork(workId);
     const existing = this.db.get("SELECT * FROM attachments WHERE work_id = ? AND stored_sha256 = ?", workId, input.storedSha256);
-    if (existing) return { attachment: this.mapAttachment(existing), created: false };
+    if (existing) {
+      this.db.transaction(() => {
+        this.db.run(
+          "INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
+          requiredString(existing, "id"),
+          accessModule,
+          now()
+        );
+        this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", requiredString(existing, "storage_key"));
+      });
+      return { attachment: this.mapAttachment(existing), created: false };
+    }
     const attachmentId = id("attachment");
     const timestamp = now();
     this.db.transaction(() => {
@@ -4689,6 +4794,13 @@ export class Store {
         timestamp,
         currentRequestActor()?.userId ?? null
       );
+      this.db.run(
+        "INSERT INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
+        attachmentId,
+        accessModule,
+        timestamp
+      );
+      this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", input.storageKey);
       this.audit(workId, "attachment.created", "attachment", attachmentId, {
         originalMimeType: input.originalMimeType,
         storedMimeType: input.storedMimeType,
@@ -4718,17 +4830,122 @@ export class Store {
     return this.mapAttachment(row);
   }
 
-  deleteAttachment(attachmentId: string): { storageKey: string; removeStoredFile: boolean } {
+  attachmentModules(attachmentId: string): AttachmentPermissionModule[] {
+    this.getAttachment(attachmentId);
+    const modules = new Set<AttachmentPermissionModule>();
+    for (const row of this.db.all("SELECT module FROM attachment_access_modules WHERE attachment_id = ?", attachmentId)) {
+      const module = String(row.module);
+      if ((attachmentPermissionModules as readonly string[]).includes(module)) modules.add(module as AttachmentPermissionModule);
+    }
+    const referenceModules: Record<string, AttachmentPermissionModule> = {
+      chapter: "prose",
+      draft: "drafts",
+      setting: "settings",
+      "character-section": "characters",
+      race: "races",
+      organization: "organizations"
+    };
+    for (const row of this.db.all("SELECT DISTINCT entity_type FROM attachment_references WHERE attachment_id = ?", attachmentId)) {
+      const module = referenceModules[String(row.entity_type)];
+      if (module) modules.add(module);
+    }
+    return [...modules];
+  }
+
+  private attachmentStorageKeyInUse(storageKey: string): boolean {
+    return Number(this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0) > 0;
+  }
+
+  private enqueueAttachmentCleanup(storageKey: string): void {
+    const timestamp = now();
+    this.db.run(
+      `INSERT INTO attachment_cleanup_queue (storage_key, attempts, last_error, created_at, updated_at)
+       VALUES (?, 0, NULL, ?, ?) ON CONFLICT(storage_key) DO UPDATE SET updated_at = excluded.updated_at`,
+      storageKey,
+      timestamp,
+      timestamp
+    );
+  }
+
+  listAttachmentCleanupQueue(limit = 100): Array<{ storageKey: string; attempts: number }> {
+    return this.db.all(
+      "SELECT storage_key, attempts FROM attachment_cleanup_queue ORDER BY updated_at, storage_key LIMIT ?",
+      Math.max(1, Math.min(1_000, Math.trunc(limit)))
+    ).map((row) => ({ storageKey: requiredString(row, "storage_key"), attempts: numberValue(row, "attempts") }));
+  }
+
+  attachmentCleanupStillRequired(storageKey: string): boolean {
+    return !this.attachmentStorageKeyInUse(storageKey);
+  }
+
+  completeAttachmentCleanup(storageKey: string): void {
+    this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", storageKey);
+  }
+
+  failAttachmentCleanup(storageKey: string, message: string): void {
+    this.db.run(
+      "UPDATE attachment_cleanup_queue SET attempts = attempts + 1, last_error = ?, updated_at = ? WHERE storage_key = ?",
+      message.slice(0, 500),
+      now(),
+      storageKey
+    );
+  }
+
+  private attachmentHistoricalReferenceCount(attachmentId: string): number {
+    const needle = `attachment://${attachmentId}`;
+    const sources = [
+      ["entity_versions", "snapshot_json"],
+      ["character_profile_section_versions", "snapshot_json"],
+      ["character_versions", "snapshot_json"],
+      ["chapter_versions", "content"],
+      ["file_versions", "snapshot_json"]
+    ] as const;
+    return sources.reduce((count, [table, column]) => count + Number(
+      this.db.get(`SELECT COUNT(*) AS count FROM ${table} WHERE instr(${column}, ?) > 0`, needle)?.count ?? 0
+    ), 0);
+  }
+
+  queueUnreferencedAttachments(retentionMs = 24 * 60 * 60_000, limit = 100): number {
+    const cutoff = new Date(Date.now() - Math.max(0, retentionMs)).toISOString();
+    const candidates = this.db.all(
+      `SELECT attachment.* FROM attachments attachment
+       WHERE attachment.created_at <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM attachment_references reference WHERE reference.attachment_id = attachment.id
+         )
+       ORDER BY attachment.created_at, attachment.id LIMIT ?`,
+      cutoff,
+      Math.max(1, Math.min(1_000, Math.trunc(limit)))
+    );
+    let queued = 0;
+    for (const candidate of candidates) {
+      const attachmentId = requiredString(candidate, "id");
+      if (this.attachmentHistoricalReferenceCount(attachmentId) > 0) continue;
+      const storageKey = requiredString(candidate, "storage_key");
+      this.db.transaction(() => {
+        this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
+        this.audit(requiredString(candidate, "work_id"), "attachment.garbage-collected", "attachment", attachmentId, { storageKey });
+        if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
+      });
+      queued += 1;
+    }
+    return queued;
+  }
+
+  deleteAttachment(attachmentId: string): { storageKey: string; cleanupQueued: boolean } {
     const attachment = this.getAttachment(attachmentId);
     const references = Number(this.db.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count ?? 0);
     if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被资料引用，无法删除");
+    if (this.attachmentHistoricalReferenceCount(attachmentId) > 0) {
+      throw new AppError(409, "ATTACHMENT_IN_VERSION_HISTORY", "附件仍被历史版本引用，无法删除");
+    }
     const storageKey = String(attachment.storageKey);
     this.db.transaction(() => {
       this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
       this.audit(String(attachment.workId), "attachment.deleted", "attachment", attachmentId, { storageKey });
+      if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
     });
-    const remaining = Number(this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0);
-    return { storageKey, removeStoredFile: remaining === 0 };
+    return { storageKey, cleanupQueued: !this.attachmentStorageKeyInUse(storageKey) };
   }
 
   getCharacter(characterId: string): Record<string, unknown> {

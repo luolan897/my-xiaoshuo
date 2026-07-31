@@ -26,6 +26,7 @@ services:
       - "127.0.0.1:13210:13210"
     environment:
       APP_ALLOW_REGISTRATION: "${APP_ALLOW_REGISTRATION:-false}"
+      APP_SETUP_TOKEN: "${APP_SETUP_TOKEN:-}"
       APP_TRUST_PROXY: "${APP_TRUST_PROXY:-false}"
     volumes:
       - scriverse-data:/app/.data
@@ -40,6 +41,7 @@ Create a `.env` file that is not committed to version control:
 ```dotenv
 SCRIVERSE_TAG=latest
 APP_ALLOW_REGISTRATION=true
+APP_SETUP_TOKEN=replace-with-at-least-32-random-characters
 APP_TRUST_PROXY=false
 ```
 
@@ -51,12 +53,13 @@ docker compose up -d
 docker compose ps
 ```
 
-Open [http://127.0.0.1:13210](http://127.0.0.1:13210) and create the first administrator account.
+Open [http://127.0.0.1:13210](http://127.0.0.1:13210), enter the setup token, and create the first administrator account.
 
 After the administrator exists, change `.env` to:
 
 ```dotenv
 APP_ALLOW_REGISTRATION=false
+APP_SETUP_TOKEN=
 ```
 
 Recreate the container so the setting takes effect:
@@ -65,7 +68,7 @@ Recreate the container so the setting takes effect:
 docker compose up -d --force-recreate
 ```
 
-Registration is enabled only when `APP_ALLOW_REGISTRATION` is exactly `true`. Unset, `false`, and all other values disable both the UI and backend registration endpoint, including first-administrator setup on an empty database.
+Registration is enabled only when `APP_ALLOW_REGISTRATION` is exactly `true`, and `APP_SETUP_TOKEN` must contain at least 32 characters. Unset, `false`, and all other values disable both the UI and backend registration endpoint, including first-administrator setup on an empty database. The setup token is checked only when creating the first administrator.
 
 ## Pin a release
 
@@ -169,7 +172,7 @@ Temporarily change the Compose `image` to `scriverse:local`. Production deployme
 
 ### The page says registration is disabled
 
-Set `APP_ALLOW_REGISTRATION=true` for first-time setup and recreate the container. Disable it immediately after creating the administrator.
+Set `APP_ALLOW_REGISTRATION=true` and an `APP_SETUP_TOKEN` of at least 32 characters for first-time setup, then recreate the container. Disable registration and clear the token immediately after creating the administrator.
 
 ### The container keeps restarting
 

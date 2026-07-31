@@ -15,7 +15,8 @@ describe("供应商凭据保护", () => {
   });
 
   it("拒绝过短主密钥", () => {
-    expect(() => new CredentialVault("too-short")).toThrow("主密钥长度至少为 16 个字符");
+    expect(() => new CredentialVault("x".repeat(31))).toThrow("主密钥长度至少为 32 个字符");
+    expect(() => new CredentialVault("x".repeat(32))).not.toThrow();
   });
 
   it("仅显示密钥掩码并规范化兼容接口地址", () => {

@@ -150,6 +150,14 @@ function normalizeServer(value: string): string {
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new CliError("CLI_SERVER_INVALID", "服务端地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
   }
+  const loopbackHttp = url.protocol === "http:" && (
+    url.hostname === "localhost"
+    || url.hostname === "127.0.0.1"
+    || url.hostname === "[::1]"
+  );
+  if (url.protocol === "http:" && !loopbackHttp) {
+    throw new CliError("CLI_SERVER_INSECURE", "远程服务端地址必须使用 HTTPS；HTTP 仅允许连接本机回环地址");
+  }
   if (url.pathname !== "/" && url.pathname !== "") {
     throw new CliError("CLI_SERVER_INVALID", "服务端地址不能包含路径，请只填写协议、主机和端口");
   }

@@ -1,7 +1,9 @@
 import type { Server } from "node:http";
+import { chmodSync, cpSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
+import { DATABASE_SCHEMA_VERSION, readDatabaseSchemaVersion } from "./database.js";
 import { loadMasterSecret } from "./credential-vault.js";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity, type RuntimeSecurityOptions } from "./security.js";
 import { logger, sanitizeError } from "./logger.js";
@@ -32,13 +34,65 @@ export function isDevelopmentServer(environment: NodeJS.ProcessEnv): boolean {
   return environment.NODE_ENV === "development" || environment.npm_lifecycle_event === "dev";
 }
 
+export function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLocaleLowerCase().replace(/^\[|\]$/gu, "");
+  return normalized === "localhost" || normalized === "::1" || /^127(?:\.\d{1,3}){3}$/u.test(normalized);
+}
+
+export function createPreMigrationBackup(options: Pick<LocalServerOptions, "dataDirectory" | "databasePath">): string | null {
+  const schemaVersion = readDatabaseSchemaVersion(options.databasePath);
+  if (schemaVersion === null || schemaVersion >= DATABASE_SCHEMA_VERSION) return null;
+  const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
+  const backupsDirectory = join(options.dataDirectory, "backups");
+  const backupName = `pre-migration-v${schemaVersion}-to-v${DATABASE_SCHEMA_VERSION}-${timestamp}`;
+  const incompleteDirectory = join(backupsDirectory, `${backupName}.incomplete`);
+  const backupDirectory = join(backupsDirectory, backupName);
+  mkdirSync(incompleteDirectory, { recursive: true, mode: 0o700 });
+  chmodSync(incompleteDirectory, 0o700);
+  for (const source of [options.databasePath, `${options.databasePath}-wal`, `${options.databasePath}-shm`]) {
+    if (!existsSync(source)) continue;
+    const target = join(incompleteDirectory, basename(source));
+    cpSync(source, target, { preserveTimestamps: true });
+    chmodSync(target, 0o600);
+  }
+  const masterKeyPath = join(options.dataDirectory, "master.key");
+  if (existsSync(masterKeyPath)) {
+    const target = join(incompleteDirectory, "master.key");
+    cpSync(masterKeyPath, target, { preserveTimestamps: true });
+    chmodSync(target, 0o600);
+  }
+  const attachmentsPath = join(options.dataDirectory, "attachments");
+  if (existsSync(attachmentsPath)) {
+    cpSync(attachmentsPath, join(incompleteDirectory, "attachments"), { recursive: true, preserveTimestamps: true });
+  }
+  writeFileSync(join(incompleteDirectory, "backup.json"), JSON.stringify({
+    createdAt: new Date().toISOString(),
+    fromSchemaVersion: schemaVersion,
+    toSchemaVersion: DATABASE_SCHEMA_VERSION,
+    databaseFile: basename(options.databasePath)
+  }, null, 2), { encoding: "utf8", mode: 0o600 });
+  renameSync(incompleteDirectory, backupDirectory);
+  logger.info("database.pre_migration_backup.created", {
+    backupDirectory,
+    fromSchemaVersion: schemaVersion,
+    toSchemaVersion: DATABASE_SCHEMA_VERSION
+  });
+  return backupDirectory;
+}
+
 export async function startLocalServer(options: LocalServerOptions): Promise<RunningLocalServer> {
   logger.info("server.starting", { host: options.host, port: options.port, dataDirectory: options.dataDirectory, databasePath: options.databasePath });
   let security: RuntimeSecurityOptions;
   let runtime: Runtime;
   try {
+    mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
+    chmodSync(options.dataDirectory, 0o700);
     security = resolveRuntimeSecurity(options.env);
+    createPreMigrationBackup(options);
     const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
+    if (devAuthBypass && !isLoopbackHost(options.host)) {
+      throw new Error("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
+    }
     runtime = createRuntime({
       databasePath: options.databasePath,
       attachmentDirectory: join(options.dataDirectory, "attachments"),
@@ -49,6 +103,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       devAuthBypass,
       developmentServer: isDevelopmentServer(options.env)
     });
+    await runtime.cleanupAttachments();
   } catch (error) {
     logger.error("server.initialization_failed", { host: options.host, port: options.port, error: sanitizeError(error) });
     throw error;

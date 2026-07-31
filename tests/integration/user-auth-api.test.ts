@@ -5,6 +5,7 @@ import { join } from "node:path";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
+import { runWithRequestActor } from "../../src/request-context.js";
 
 type SessionCredentials = {
   agent: ReturnType<typeof request.agent>;
@@ -12,6 +13,8 @@ type SessionCredentials = {
   csrfToken: string;
   user: { userId: string; username: string; displayName: string; role: "admin" | "user" };
 };
+
+const setupToken = "user-auth-test-setup-token-with-at-least-32-characters";
 
 const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
@@ -34,6 +37,7 @@ async function register(runtime: Runtime, username: string): Promise<SessionCred
     username,
     password: "secure-password-123",
     passwordConfirmation: "secure-password-123",
+    setupToken,
     ...captcha
   }).expect(201);
   expect(response.body.data.user.displayName).toBe(username);
@@ -53,7 +57,7 @@ function createUserAuthTestRuntime(allowRegistration = true): Runtime {
     masterSecret: "user-auth-test-master-secret-with-enough-length",
     serveUi: false,
     revealCaptchaAnswer: true,
-    security: { allowRegistration, enforceSameOrigin: true }
+    security: { allowRegistration, enforceSameOrigin: true, setupToken }
   });
   activeRuntimeApp = runtime.app;
   return {
@@ -229,7 +233,22 @@ describe("用户、作品权限与操作者追踪 API", () => {
   it("首个用户成为管理员，并完成作品邀请、共同编辑与越权拦截", async () => {
     await request(runtime.app).get("/api/works").expect(401);
     const initialSession = await request(runtime.app).get("/api/auth/session").expect(200);
-    expect(initialSession.body.data).toMatchObject({ authenticated: false, setupRequired: true, registrationOpen: true });
+    expect(initialSession.body.data).toMatchObject({
+      authenticated: false,
+      setupRequired: true,
+      setupTokenRequired: true,
+      registrationOpen: true
+    });
+
+    const invalidSetupCaptcha = await solveCaptcha(runtime.app);
+    const invalidSetup = await request(runtime.app).post("/api/auth/register").send({
+      username: "attacker",
+      password: "secure-password-123",
+      passwordConfirmation: "secure-password-123",
+      setupToken: "incorrect-setup-token-with-at-least-32-characters",
+      ...invalidSetupCaptcha
+    }).expect(403);
+    expect(invalidSetup.body.error.code).toBe("SETUP_TOKEN_INVALID");
 
     const admin = await register(runtime, "admin");
     const writer = await register(runtime, "writer");
@@ -345,7 +364,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         masterSecret: "user-auth-restart-test-master-secret-with-enough-length",
         serveUi: false,
         revealCaptchaAnswer: true,
-        security: { allowRegistration: true, enforceSameOrigin: true }
+        security: { allowRegistration: true, enforceSameOrigin: true, setupToken }
       });
       const user = await register(firstRuntime, "restart_user");
       await user.agent.get("/api/auth/session").expect(200);
@@ -357,7 +376,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         masterSecret: "user-auth-restart-test-master-secret-with-enough-length",
         serveUi: false,
         revealCaptchaAnswer: true,
-        security: { allowRegistration: true, enforceSameOrigin: true }
+        security: { allowRegistration: true, enforceSameOrigin: true, setupToken }
       });
       const expiredSession = await request(restartedRuntime.app)
         .get("/api/auth/session")
@@ -379,146 +398,20 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }
   });
 
-  it("同一用户五分钟内连续五次密码错误后锁定登录三十分钟", async () => {
-    await register(runtime, "locked_user");
-    for (let index = 0; index < 4; index += 1) {
-      const response = await submitLogin(runtime, index % 2 === 0 ? "LOCKED_USER" : "locked_user", "wrong-password");
+  it("他人重复输错密码不会锁定目标账户", async () => {
+    await register(runtime, "available_user");
+    for (let index = 0; index < 8; index += 1) {
+      const response = await submitLogin(runtime, index % 2 === 0 ? "AVAILABLE_USER" : "available_user", "wrong-password");
       expect(response.status).toBe(401);
       expect(response.body.error.code).toBe("INVALID_CREDENTIALS");
     }
 
-    const locked = await submitLogin(runtime, "locked_user", "wrong-password");
-    expect(locked.status).toBe(429);
-    expect(locked.headers["retry-after"]).toBe("1800");
-    expect(locked.body.error).toMatchObject({
-      code: "LOGIN_LOCKED",
-      message: "5 分钟内密码错误达到 5 次，登录已锁定，请在 30 分钟后重试",
-      details: { retryAfterSeconds: 1_800 }
-    });
-    const attempt = runtime.database.get(
-      "SELECT json_array_length(failure_timestamps_json) AS failure_count, locked_until FROM login_attempts WHERE normalized_username = ?",
-      "locked_user"
-    );
-    expect(attempt?.failure_count).toBe(5);
-    const remainingMs = Date.parse(String(attempt?.locked_until)) - Date.now();
-    expect(remainingMs).toBeGreaterThan(29 * 60_000);
-    expect(remainingMs).toBeLessThanOrEqual(30 * 60_000);
-
-    const correctWhileLocked = await submitLogin(runtime, "locked_user", "secure-password-123");
-    expect(correctWhileLocked.status).toBe(429);
-    expect(correctWhileLocked.body.error.code).toBe("LOGIN_LOCKED");
-
-    runtime.database.run(
-      "UPDATE login_attempts SET locked_until = ? WHERE normalized_username = ?",
-      new Date(Date.now() - 1_000).toISOString(),
-      "locked_user"
-    );
-    const unlocked = await submitLogin(runtime, "locked_user", "secure-password-123");
-    expect(unlocked.status).toBe(200);
+    const successful = await submitLogin(runtime, "available_user", "secure-password-123");
+    expect(successful.status).toBe(200);
     expect(runtime.database.get(
       "SELECT COUNT(*) AS count FROM login_attempts WHERE normalized_username = ?",
-      "locked_user"
+      "available_user"
     )?.count).toBe(0);
-  });
-
-  it("登录锁定在服务重启后保持生效", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ai-novel-login-lock-restart-"));
-    const databasePath = join(root, "novel.db");
-    let firstRuntime: Runtime | null = null;
-    let restartedRuntime: Runtime | null = null;
-    try {
-      firstRuntime = createRuntime({
-        databasePath,
-        masterSecret: "login-lock-restart-test-master-secret-with-enough-length",
-        serveUi: false,
-        revealCaptchaAnswer: true,
-        security: { allowRegistration: true, enforceSameOrigin: true }
-      });
-      await register(firstRuntime, "persistent_lock_user");
-      for (let index = 0; index < 5; index += 1) {
-        const response = await submitLogin(firstRuntime, "persistent_lock_user", "wrong-password");
-        expect(response.status).toBe(index === 4 ? 429 : 401);
-      }
-      firstRuntime.close();
-      firstRuntime = null;
-
-      restartedRuntime = createRuntime({
-        databasePath,
-        masterSecret: "login-lock-restart-test-master-secret-with-enough-length",
-        serveUi: false,
-        revealCaptchaAnswer: true,
-        security: { allowRegistration: true, enforceSameOrigin: true }
-      });
-      const stillLocked = await submitLogin(restartedRuntime, "persistent_lock_user", "secure-password-123");
-      expect(stillLocked.status).toBe(429);
-      expect(stillLocked.body.error.code).toBe("LOGIN_LOCKED");
-    } finally {
-      restartedRuntime?.close();
-      firstRuntime?.close();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("密码错误超过五分钟窗口后重新计数", async () => {
-    await register(runtime, "window_user");
-    for (let index = 0; index < 4; index += 1) {
-      expect((await submitLogin(runtime, "window_user", "wrong-password")).status).toBe(401);
-    }
-    const expiredFailures = Array.from(
-      { length: 4 },
-      (_, index) => new Date(Date.now() - (6 * 60_000 + index * 1_000)).toISOString()
-    );
-    runtime.database.run(
-      "UPDATE login_attempts SET failure_timestamps_json = ? WHERE normalized_username = ?",
-      JSON.stringify(expiredFailures),
-      "window_user"
-    );
-
-    const outsideWindow = await submitLogin(runtime, "window_user", "wrong-password");
-    expect(outsideWindow.status).toBe(401);
-    expect(runtime.database.get(
-      "SELECT json_array_length(failure_timestamps_json) AS failure_count, locked_until FROM login_attempts WHERE normalized_username = ?",
-      "window_user"
-    )).toEqual({ failure_count: 1, locked_until: null });
-  });
-
-  it("仅统计任意连续五分钟内的密码错误", async () => {
-    await register(runtime, "rolling_window_user");
-    for (let index = 0; index < 4; index += 1) {
-      expect((await submitLogin(runtime, "rolling_window_user", "wrong-password")).status).toBe(401);
-    }
-    const now = Date.now();
-    runtime.database.run(
-      "UPDATE login_attempts SET failure_timestamps_json = ? WHERE normalized_username = ?",
-      JSON.stringify([
-        new Date(now - 6 * 60_000).toISOString(),
-        new Date(now - 4 * 60_000).toISOString(),
-        new Date(now - 3 * 60_000).toISOString(),
-        new Date(now - 2 * 60_000).toISOString()
-      ]),
-      "rolling_window_user"
-    );
-
-    expect((await submitLogin(runtime, "rolling_window_user", "wrong-password")).status).toBe(401);
-    const locked = await submitLogin(runtime, "rolling_window_user", "wrong-password");
-    expect(locked.status).toBe(429);
-    expect(runtime.database.get(
-      "SELECT json_array_length(failure_timestamps_json) AS failure_count FROM login_attempts WHERE normalized_username = ?",
-      "rolling_window_user"
-    )?.failure_count).toBe(5);
-  });
-
-  it("不存在的用户名也采用相同锁定响应以避免账户枚举", async () => {
-    for (let index = 0; index < 4; index += 1) {
-      expect((await submitLogin(runtime, "missing_user", "wrong-password")).status).toBe(401);
-    }
-    const locked = await submitLogin(runtime, "missing_user", "wrong-password");
-    expect(locked.status).toBe(429);
-    expect(locked.body.error.code).toBe("LOGIN_LOCKED");
-    expect(runtime.database.get(
-      "SELECT json_array_length(failure_timestamps_json) AS failure_count FROM login_attempts WHERE normalized_username = ?",
-      "missing_user"
-    )?.failure_count).toBe(5);
   });
 
   it("仅查看成员可读取正文和设定，但所有作品写操作都会被拒绝", async () => {
@@ -1019,6 +912,64 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("按实际资料模块隔离 Markdown 图片附件", async () => {
+    const owner = await register(runtime, "attachment_owner");
+    const characterEditor = await register(runtime, "attachment_character_editor");
+    const settingsReader = await register(runtime, "attachment_settings_reader");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "附件权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const noAccess = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: characterEditor.user.userId, permissions: { ...noAccess, characters: "write" } })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: settingsReader.user.userId, permissions: { ...noAccess, settings: "read" } })
+      .expect(201);
+
+    await characterEditor.agent.post(`/api/works/${workId}/attachments`)
+      .set("X-CSRF-Token", characterEditor.csrfToken)
+      .attach("file", onePixelPng, "missing-module.png")
+      .expect(403);
+    const uploaded = await characterEditor.agent.post(`/api/works/${workId}/attachments?module=characters`)
+      .set("X-CSRF-Token", characterEditor.csrfToken)
+      .attach("file", onePixelPng, "character-profile.png")
+      .expect(201);
+    const attachmentId = String(uploaded.body.data.id);
+    const character = await characterEditor.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", characterEditor.csrfToken)
+      .send({ name: "保密角色" })
+      .expect(201);
+    await characterEditor.agent.post(`/api/characters/${String(character.body.data.id)}/sections`)
+      .set("X-CSRF-Token", characterEditor.csrfToken)
+      .send({ title: "保密档案", contentMarkdown: `![](attachment://${attachmentId})` })
+      .expect(201);
+
+    await characterEditor.agent.get(`/api/attachments/${attachmentId}/content`).expect(200);
+    const hiddenList = await settingsReader.agent.get(`/api/works/${workId}/attachments`).expect(200);
+    expect(hiddenList.body.data).toEqual([]);
+    const hiddenContent = await settingsReader.agent.get(`/api/attachments/${attachmentId}/content`).expect(403);
+    expect(hiddenContent.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+  });
+
   it("可单独授权 AI 对话或 AI 分析，互不影响", async () => {
     const owner = await register(runtime, "ai_split_owner");
     const chatOnly = await register(runtime, "ai_chat_only");
@@ -1297,6 +1248,133 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const protectedTraceFull = await analysisOnly.agent.get(`/api/tasks/${taskId}/trace/calls/call_permission_trace?full=true`).expect(403);
     expect(protectedTraceFull.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     expect(JSON.stringify(protectedTraceFull.body)).not.toContain("TOP_SECRET_PROSE");
+  });
+
+  it("AI 工具按当前成员模块权限限制正文读取", async () => {
+    const owner = await register(runtime, "ai_tool_owner");
+    const collaborator = await register(runtime, "ai_tool_collaborator");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 工具权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "第一卷" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "机密章", content: "TOP_SECRET_PROSE_TOOL" })
+      .expect(201);
+    const permissions = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "write",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions })
+      .expect(201);
+    await owner.agent.patch(`/api/works/${workId}/ai-settings`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"] })
+      .expect(200);
+
+    const internalAi = runtime.ai as unknown as {
+      enabledAgentToolIds: (candidateWorkId: string, taskType: "chat") => string[];
+      executeAgentTool: (candidateWorkId: string, toolCall: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    };
+    const result = await runWithRequestActor({ ...collaborator.user, authentication: "session" }, async () => ({
+      enabledTools: internalAi.enabledAgentToolIds(workId, "chat"),
+      execution: await internalAi.executeAgentTool(workId, {
+        id: "permission-check",
+        type: "function",
+        function: {
+          name: "read_chapters",
+          arguments: JSON.stringify({ chapterIds: [chapter.body.data.id], include: "content", cursor: 0 })
+        }
+      })
+    }));
+
+    expect(result.enabledTools).toEqual([]);
+    expect(result.execution).toMatchObject({
+      status: "failed",
+      result: { ok: false, error: { code: "TOOL_NOT_AVAILABLE" } }
+    });
+    expect(JSON.stringify(result)).not.toContain("TOP_SECRET_PROSE_TOOL");
+  });
+
+  it("AI 调用列表按成员权限隐藏原始上下文", async () => {
+    const owner = await register(runtime, "ai_call_owner");
+    const collaborator = await register(runtime, "ai_call_reader");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 调用权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const permissions = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "read",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions })
+      .expect(201);
+    const provider = await owner.agent.post("/api/platform/ai/providers")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "调用记录供应商", baseUrl: "https://example.com", apiKey: "audit-call-key", status: "enabled" })
+      .expect(201);
+    const model = await owner.agent.post(`/api/providers/${provider.body.data.id}/models`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ displayName: "调用记录模型", modelId: "audit-call-model" })
+      .expect(201);
+    runtime.database.run(
+      `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+       status, input_chars, created_at) VALUES (?, ?, 'chat', ?, ?, ?, '{}', 'completed', 1, ?)`,
+      "call_restricted_context",
+      workId,
+      provider.body.data.id,
+      model.body.data.id,
+      JSON.stringify({
+        type: "selection",
+        selection: "TOP_SECRET_SELECTION_CONTEXT",
+        chapterId: "chapter_secret",
+        volumeId: "volume_secret",
+        chapterIds: ["chapter_secret"],
+        characterIds: ["character_secret"],
+        settingIds: ["setting_secret"],
+        includeBookSummary: true
+      }),
+      new Date().toISOString()
+    );
+
+    const response = await collaborator.agent.get(`/api/works/${workId}/ai-calls`).expect(200);
+    expect(response.body.data[0].contextScope).toEqual({ type: "selection", restricted: true });
+    expect(JSON.stringify(response.body.data)).not.toContain("TOP_SECRET_SELECTION_CONTEXT");
+    expect(JSON.stringify(response.body.data)).not.toContain("chapter_secret");
+    expect(JSON.stringify(response.body.data)).not.toContain("character_secret");
+    expect(JSON.stringify(response.body.data)).not.toContain("setting_secret");
   });
 
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {

@@ -8,7 +8,10 @@ const runtime = createRuntime({
   masterSecret: "cli-e2e-master-secret-with-at-least-32-characters",
   serveUi: false,
   revealCaptchaAnswer: true,
-  security: { allowRegistration: true }
+  security: {
+    allowRegistration: true,
+    setupToken: "cli-e2e-setup-token-with-at-least-32-characters"
+  }
 });
 const server = runtime.app.listen(0, "127.0.0.1", () => {
   const address = server.address();

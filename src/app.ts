@@ -14,14 +14,14 @@ import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
-import { TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
+import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
-import { Store, versionedEntityTypes } from "./store.js";
-import { parsePagination } from "./pagination.js";
+import { attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
+import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -29,7 +29,7 @@ import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logg
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
-import { fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
+import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
   entityEditorPageKey,
@@ -53,6 +53,7 @@ const optionalStrings = z.array(z.string()).optional();
 const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
 const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
+const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
 const maximumKnowledgeSectionsLength = 4_000_000;
 
@@ -66,6 +67,7 @@ const registrationSchema = z.object({
   username: usernameSchema,
   password: passwordSchema,
   passwordConfirmation: passwordSchema,
+  setupToken: z.string().max(500).optional(),
   ...captchaFields
 }).strict().refine((input) => input.password === input.passwordConfirmation, {
   path: ["passwordConfirmation"],
@@ -165,6 +167,8 @@ const settingSchema = z.object({
 
 const draftSchema = z.object({
   draftType: z.enum(["prose", "setting"]),
+  volumeId: identifier.nullable().optional(),
+  settingModule: z.enum(DRAFT_SETTING_MODULES).nullable().optional(),
   title: nonEmpty.max(200),
   content: z.string().max(200_000)
 }).strict();
@@ -539,6 +543,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
 
@@ -689,6 +694,32 @@ function redactTaskCharacterNames(record: Record<string, unknown>, permissions: 
   return result;
 }
 
+function redactAiCallContext(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  const result = { ...record };
+  const scope = recordValue(result.contextScope);
+  if (!scope) return result;
+  const redactedScope = { ...scope };
+  let restricted = false;
+  if (permissions.prose === "none") {
+    for (const field of ["selection", "chapterId", "volumeId", "chapterIds", "includeBookSummary"] as const) {
+      if (field in redactedScope) {
+        delete redactedScope[field];
+        restricted = true;
+      }
+    }
+  }
+  if (permissions.characters === "none" && "characterIds" in redactedScope) {
+    delete redactedScope.characterIds;
+    restricted = true;
+  }
+  if (permissions.settings === "none" && "settingIds" in redactedScope) {
+    delete redactedScope.settingIds;
+    restricted = true;
+  }
+  result.contextScope = restricted ? { ...redactedScope, restricted: true } : redactedScope;
+  return result;
+}
+
 function redactMergeRecords(
   value: unknown,
   mapper: (record: Record<string, unknown>) => Record<string, unknown>
@@ -743,6 +774,31 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  let attachmentCleanupChain = Promise.resolve();
+  const cleanupAttachments = (): Promise<void> => {
+    const cleanup = attachmentCleanupChain.then(async () => {
+      store.queueUnreferencedAttachments();
+      for (const queued of store.listAttachmentCleanupQueue()) {
+        if (!store.attachmentCleanupStillRequired(queued.storageKey)) {
+          store.completeAttachmentCleanup(queued.storageKey);
+          continue;
+        }
+        try {
+          await attachmentStorage.remove(queued.storageKey);
+          store.completeAttachmentCleanup(queued.storageKey);
+        } catch (error) {
+          store.failAttachmentCleanup(queued.storageKey, error instanceof Error ? error.message : "Attachment cleanup failed");
+          logger.warn("attachment.cleanup.failed", {
+            storageKey: queued.storageKey,
+            attempts: queued.attempts + 1,
+            error: sanitizeError(error)
+          });
+        }
+      }
+    });
+    attachmentCleanupChain = cleanup.catch(() => undefined);
+    return cleanup;
+  };
   const requestPermissions = (request: Request, workId?: string): WorkModulePermissions => {
     if (!request.authUser) return fullWorkModulePermissions();
     const resolvedWorkId = workId ?? auth.resolveWorkId(request.path) ?? undefined;
@@ -816,14 +872,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/auth/session", (request, response) => {
     const session = auth.authenticate(request);
     const registrationOpen = options.security?.allowRegistration === true;
+    const setupRequired = !auth.hasUsers();
+    const setupTokenRequired = setupRequired && Boolean(options.security?.setupToken);
     const developmentUser = getDevelopmentUser();
     if (!session && developmentUser) {
-      data(response, { authenticated: true, user: developmentUser, csrfToken: null, setupRequired: false, registrationOpen });
+      data(response, { authenticated: true, user: developmentUser, csrfToken: null, setupRequired: false, setupTokenRequired: false, registrationOpen });
       return;
     }
     data(response, session
-      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, registrationOpen }
-      : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers(), registrationOpen });
+      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, setupTokenRequired: false, registrationOpen }
+      : { authenticated: false, user: null, csrfToken: null, setupRequired, setupTokenRequired, registrationOpen });
   });
   app.get("/api/auth/captcha", (_request, response) => {
     data(response, captcha.create());
@@ -834,6 +892,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     const input = parse(registrationSchema, request.body);
     captcha.consume(input.captchaId, input.captchaAnswer);
+    if (!auth.hasUsers() && !verifySetupToken(options.security?.setupToken, input.setupToken)) {
+      throw new AppError(403, "SETUP_TOKEN_INVALID", "初始化令牌无效或未配置");
+    }
     const result = auth.register({ username: input.username, password: input.password });
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));
@@ -853,6 +914,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     disabled: options.disableUserAuth === true,
     resolveBypassUser: getDevelopmentUser
   }));
+  app.use(createUploadRateLimitMiddleware());
   app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
   app.get("/api/cli/session", (request, response) => {
@@ -1040,8 +1102,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.delete("/api/works/:workId", async (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const removableStorageKeys = store.deleteWork(request.params.workId, input.expectedVersionNo);
-    await Promise.all(removableStorageKeys.map((storageKey) => attachmentStorage.remove(storageKey)));
+    store.deleteWork(request.params.workId, input.expectedVersionNo);
+    await cleanupAttachments();
     noContent(response);
   });
   app.get("/api/works/:workId/cover", (request, response) => {
@@ -1055,13 +1117,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.put("/api/works/:workId/cover", coverUpload.single("file"), (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 封面");
     const bytes = request.file.buffer;
-    const isPng = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-    const isWebp = bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
-    const mimeType: "image/png" | "image/jpeg" | "image/webp" | null = isPng ? "image/png" : isJpeg ? "image/jpeg" : isWebp ? "image/webp" : null;
-    if (!mimeType) throw new AppError(415, "INVALID_COVER", "封面文件内容不是有效的 PNG、JPEG 或 WebP 图片");
-    const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
-    data(response, store.setWorkCover(String(request.params.workId), mimeType, bytes, expectedVersionNo));
+    try {
+      const metadata = readRasterImageMetadata(bytes);
+      const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
+      data(response, store.setWorkCover(String(request.params.workId), metadata.mimeType, bytes, expectedVersionNo));
+    } catch (error) {
+      if (error instanceof InvalidRasterImageError) throw new AppError(415, "INVALID_COVER", error.message);
+      throw error;
+    }
   });
   app.delete("/api/works/:workId/cover", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
@@ -1414,10 +1477,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/attachments", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listAttachmentsPage(request.params.workId, pagination) : store.listAttachments(request.params.workId));
+    const permissions = requestPermissions(request, request.params.workId);
+    const readable = store.listAttachments(request.params.workId).filter((attachment) => (
+      store.attachmentModules(String(attachment.id)).some((module) => canReadWorkModule(permissions, module))
+    ));
+    data(response, pagination
+      ? paginated(readable.slice(pagination.offset, pagination.offset + pagination.limit + 1), pagination, readable.length)
+      : readable);
   });
   app.post("/api/works/:workId/attachments", attachmentUpload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要上传的图片附件");
+    const accessModule = parse(attachmentPermissionModuleSchema, request.query.module ?? "settings");
     let storageKey: string | null = null;
     try {
       const stored = await attachmentStorage.ingest(request.file.path);
@@ -1425,7 +1495,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const result = store.createAttachment(String(request.params.workId), {
         originalName: normalizeUploadFileName(request.file.originalname),
         ...stored
-      });
+      }, accessModule);
       data(response, { ...result.attachment, deduplicated: !result.created }, result.created ? 201 : 200);
     } catch (error) {
       if (storageKey) {
@@ -1439,6 +1509,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/attachments/:attachmentId/content", async (request, response) => {
     const attachment = store.getAttachment(request.params.attachmentId);
+    const permissions = requestPermissions(request, String(attachment.workId));
+    if (!store.attachmentModules(request.params.attachmentId).some((module) => canReadWorkModule(permissions, module))) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取该附件所属资料模块的权限");
+    }
     const content = await attachmentStorage.read(String(attachment.storageKey));
     response.setHeader("Content-Type", String(attachment.storedMimeType));
     response.setHeader("Content-Length", String(attachment.storedByteLength));
@@ -1448,8 +1522,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.send(content);
   });
   app.delete("/api/attachments/:attachmentId", async (request, response) => {
-    const deleted = store.deleteAttachment(request.params.attachmentId);
-    if (deleted.removeStoredFile) await attachmentStorage.remove(deleted.storageKey);
+    const attachment = store.getAttachment(request.params.attachmentId);
+    const permissions = requestPermissions(request, String(attachment.workId));
+    if (!store.attachmentModules(request.params.attachmentId).some((module) => canWriteWorkModule(permissions, module))) {
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有编辑该附件所属资料模块的权限");
+    }
+    store.deleteAttachment(request.params.attachmentId);
+    await cleanupAttachments();
     noContent(response);
   });
 
@@ -2120,7 +2199,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/suggestions/:suggestionId/reject", (request, response) => data(response, ai.rejectSuggestion(request.params.suggestionId)));
   app.get("/api/works/:workId/ai-calls", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? ai.listCallsPage(request.params.workId, pagination) : ai.listCalls(request.params.workId));
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, pagination
+      ? mapRecords(ai.listCallsPage(request.params.workId, pagination), (call) => redactAiCallContext(call, permissions))
+      : ai.listCalls(request.params.workId).map((call) => redactAiCallContext(call, permissions)));
   });
 
   app.get("/api/works/:workId/search", async (request, response) => {
@@ -2273,7 +2355,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
     database.close();

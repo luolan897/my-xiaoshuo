@@ -1,6 +1,17 @@
 export const PROVIDER_STATUSES = ["enabled", "disabled", "error"] as const;
 export type ProviderStatus = (typeof PROVIDER_STATUSES)[number];
 
+export const DRAFT_SETTING_MODULES = [
+  "settings",
+  "characters",
+  "races",
+  "organizations",
+  "timeline",
+  "relationships",
+  "outlines"
+] as const;
+export type DraftSettingModule = (typeof DRAFT_SETTING_MODULES)[number];
+
 export const TASK_TYPES = [
   "chat",
   "continue",

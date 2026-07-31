@@ -46,6 +46,19 @@ describe("Scriverse CLI 核心", () => {
     expect(parsed.options.get("compact")).toEqual(["true"]);
   });
 
+  it("拒绝使用公网 HTTP 服务端地址", async () => {
+    const root = temporaryRoot();
+    const path = join(root, "cli.json");
+    const stderr = outputCapture();
+
+    expect(await runCli([
+      "connect", "http://192.0.2.10:13210", "--config", path
+    ], { stderr: stderr.stream })).toBe(1);
+    expect(JSON.parse(stderr.text())).toMatchObject({
+      error: { code: "CLI_SERVER_INSECURE" }
+    });
+  });
+
   it("资源契约只开放受控读写动作且不包含删除", () => {
     expect(cliResourceTypes).toHaveLength(12);
     expect(cliWorkDefinition.actions).not.toContain("delete");
@@ -59,6 +72,7 @@ describe("Scriverse CLI 核心", () => {
     expect(cliResourceDefinitions.race.update.properties.parentRaceId).toBe("新父种族 ID 或 null");
     expect(cliResourceDefinitions.draft.create.required).toEqual(["draftType", "title"]);
     expect(cliResourceDefinitions.draft.create.properties.draftType).toBe("prose | setting");
+    expect(cliResourceDefinitions.draft.create.properties.volumeId).toContain("分卷 ID");
     expect(cliResourceDefinitions.draft.actions).toEqual(["list", "get", "create", "update", "history", "restore"]);
   });
 

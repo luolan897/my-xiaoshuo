@@ -16,19 +16,22 @@ describe("作品草稿 API", () => {
   afterEach(() => runtime.close());
 
   it("创建、分类、编辑、删除并恢复正文草稿和设定草稿", async () => {
+    const volume = runtime.store.createVolume(workId, { title: "第一卷" });
     const prose = await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
       draftType: "prose",
+      volumeId: volume.id,
       title: "开场备选",
       content: "## 备选方向\n\n让主角从失忆中醒来。"
     }).expect(201);
     const setting = await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
       draftType: "setting",
+      settingModule: "races",
       title: "跃迁代价猜想",
       content: "可能让每次跃迁消耗一段记忆，但不一定采用。"
     }).expect(201);
 
-    expect(prose.body.data).toMatchObject({ draftType: "prose", title: "开场备选", versionNo: 1 });
-    expect(setting.body.data).toMatchObject({ draftType: "setting", title: "跃迁代价猜想", versionNo: 1 });
+    expect(prose.body.data).toMatchObject({ draftType: "prose", volumeId: volume.id, volumeTitle: "第一卷", title: "开场备选", versionNo: 1 });
+    expect(setting.body.data).toMatchObject({ draftType: "setting", settingModule: "races", title: "跃迁代价猜想", versionNo: 1 });
 
     const listed = await request(runtime.app).get(`/api/works/${workId}/drafts`).expect(200);
     expect(listed.body.data).toHaveLength(2);
@@ -42,16 +45,18 @@ describe("作品草稿 API", () => {
 
     const updated = await request(runtime.app).patch(`/api/drafts/${prose.body.data.id}`).send({
       draftType: "setting",
+      settingModule: "settings",
       title: "失忆机制备选",
       content: "失忆可能来自跃迁副作用。",
       expectedVersionNo: 1,
       changeNote: "转为设定方向"
     }).expect(200);
-    expect(updated.body.data).toMatchObject({ draftType: "setting", title: "失忆机制备选", versionNo: 2 });
+    expect(updated.body.data).toMatchObject({ draftType: "setting", volumeId: null, settingModule: "settings", title: "失忆机制备选", versionNo: 2 });
 
     const versions = await request(runtime.app).get(`/api/entity-versions/draft/${prose.body.data.id}`).expect(200);
     expect(versions.body.data.map((version: { versionNo: number }) => version.versionNo)).toEqual([2, 1]);
-    expect(versions.body.data[0]).toMatchObject({ changeNote: "转为设定方向" });
+    expect(versions.body.data[0]).toMatchObject({ changeNote: "转为设定方向", snapshot: { volumeId: null, settingModule: "settings" } });
+    expect(versions.body.data[1]).toMatchObject({ snapshot: { volumeId: volume.id, settingModule: null } });
 
     await request(runtime.app).delete(`/api/drafts/${prose.body.data.id}`).send({ expectedVersionNo: 2 }).expect(204);
     await request(runtime.app).get(`/api/drafts/${prose.body.data.id}`).expect(404);
@@ -59,7 +64,7 @@ describe("作品草稿 API", () => {
       versionNo: 2,
       expectedVersionNo: 3
     }).expect(200);
-    expect(restored.body.data).toMatchObject({ title: "失忆机制备选", content: "失忆可能来自跃迁副作用。", versionNo: 4 });
+    expect(restored.body.data).toMatchObject({ title: "失忆机制备选", content: "失忆可能来自跃迁副作用。", settingModule: "settings", versionNo: 4 });
 
     const exported = await request(runtime.app).get(`/api/works/${workId}/export?format=json`).expect(200);
     expect(exported.body.data).toMatchObject({ schemaVersion: 8 });
@@ -94,5 +99,51 @@ describe("作品草稿 API", () => {
     expect(runtime.store.searchDrafts(workId, "_", "prose", 20)).toEqual([
       expect.objectContaining({ content: expect.stringContaining("下划线_") })
     ]);
+  });
+
+  it("拒绝跨作品分卷和与想法类型不匹配的绑定", async () => {
+    const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
+    const otherVolume = runtime.store.createVolume(String(otherWork.body.data.id), { title: "外部分卷" });
+
+    await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
+      draftType: "prose",
+      volumeId: otherVolume.id,
+      title: "越权绑定",
+      content: "不会创建"
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
+      draftType: "setting",
+      volumeId: otherVolume.id,
+      title: "错误绑定类型",
+      content: "不会创建"
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
+      draftType: "prose",
+      settingModule: "characters",
+      title: "错误绑定模块",
+      content: "不会创建"
+    }).expect(400);
+    await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
+      draftType: "setting",
+      settingModule: "reviews",
+      title: "无效设定模块",
+      content: "不会创建"
+    }).expect(400);
+  });
+
+  it("删除已绑定分卷后将正文想法回退为全局并记录版本", async () => {
+    const volume = runtime.store.createVolume(workId, { title: "待删除分卷" });
+    const draft = await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
+      draftType: "prose",
+      volumeId: volume.id,
+      title: "随分卷回退",
+      content: "分卷删除后继续保留。"
+    }).expect(201);
+
+    await request(runtime.app).delete(`/api/volumes/${volume.id}`).send({ expectedVersionNo: volume.versionNo }).expect(204);
+    const globalDraft = await request(runtime.app).get(`/api/drafts/${draft.body.data.id}`).expect(200);
+    expect(globalDraft.body.data).toMatchObject({ volumeId: null, volumeTitle: null, versionNo: 2 });
+    const versions = await request(runtime.app).get(`/api/entity-versions/draft/${draft.body.data.id}`).expect(200);
+    expect(versions.body.data[0]).toMatchObject({ changeNote: "绑定的分卷已删除", snapshot: { volumeId: null } });
   });
 });

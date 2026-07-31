@@ -1,6 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260730-table-wrap-menu-v1";
+import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
@@ -904,6 +904,7 @@ let chapterEditorReadOnly = true;
 let characterListPage = 1;
 let taskListPage = 1;
 let draftTypeFilter = "all";
+let draftBindingFilters = [];
 let draftFiltersPanelOpen = false;
 const moduleListPages = {
   drafts: 1,
@@ -2484,7 +2485,7 @@ async function refreshAuthCaptcha(target = "login") {
   if (answerInput) answerInput.value = "";
 }
 
-function showAuth(setupRequired, registrationOpen = false) {
+function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = false) {
   if (state.user) return;
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
@@ -2501,6 +2502,10 @@ function showAuth(setupRequired, registrationOpen = false) {
   registerTab.disabled = !canRegister;
   registerTab.setAttribute("aria-disabled", String(!canRegister));
   registerTab.textContent = canRegister ? "注册" : "注册已禁用";
+  const setupTokenField = $("#register-setup-token-field");
+  const setupTokenInput = setupTokenField.querySelector('input[name="setupToken"]');
+  setupTokenField.classList.toggle("hidden", !setupTokenRequired);
+  setupTokenInput.required = setupTokenRequired;
   selectAuthMode(setupRequired && canRegister ? "register" : "login");
 }
 
@@ -2579,7 +2584,7 @@ async function initializeAuthentication() {
   if (!session.authenticated) {
     // 未登录时一律转到登录页路由；登录页本身则保持原样
     if (route.view !== "login") window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-    showAuth(session.setupRequired, session.registrationOpen === true);
+    showAuth(session.setupRequired, session.registrationOpen === true, session.setupTokenRequired === true);
     return false;
   }
   // 已登录却停在登录页路由时，回到书架首页
@@ -3623,6 +3628,7 @@ function resetWorkScopedUiCaches() {
   state.races = [];
   characterListPage = 1;
   draftTypeFilter = "all";
+  draftBindingFilters = [];
   draftFiltersPanelOpen = false;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
@@ -4627,12 +4633,44 @@ function draftTypeLabel(draftType) {
   return draftType === "setting" ? "设定想法" : "正文想法";
 }
 
+const draftSettingModules = Object.freeze([
+  ["settings", "设定库"],
+  ["characters", "角色"],
+  ["races", "种族"],
+  ["organizations", "组织"],
+  ["timeline", "时间轴"],
+  ["relationships", "关系"],
+  ["outlines", "大纲/伏笔"]
+]);
+
+function draftSettingModuleLabel(module) {
+  return draftSettingModules.find(([value]) => value === module)?.[1] ?? "未知模块";
+}
+
+function draftBindingKey(item) {
+  if (item.draftType === "prose" && item.volumeId) return `volume:${item.volumeId}`;
+  if (item.draftType === "setting" && item.settingModule) return `module:${item.settingModule}`;
+  return "global";
+}
+
+function draftBindingLabel(item) {
+  if (item.draftType === "prose" && item.volumeId) return `分卷 · ${item.volumeTitle || "已删除分卷"}`;
+  if (item.draftType === "setting" && item.settingModule) return `设定模块 · ${draftSettingModuleLabel(item.settingModule)}`;
+  return "全局";
+}
+
 async function deleteDraft(item) {
   if (!item || !canEditModule("drafts")) return;
-  const dialog = $("#form-dialog");
-  dialog.close();
+  $("#form-dialog").close();
   if (!await confirmToast(`确认删除想法“${item.title}”吗？想法将从当前列表移除。`, {
     title: "删除想法",
+    confirmLabel: "继续删除"
+  })) {
+    openDraftDialog(item);
+    return;
+  }
+  if (!await confirmToast(`删除想法“${item.title}”后将从想法列表移除，版本历史仍会保留。仍要删除吗？`, {
+    title: "删除操作需要再次确认",
     confirmLabel: "确认删除"
   })) {
     openDraftDialog(item);
@@ -4654,23 +4692,31 @@ async function deleteDraft(item) {
 
 function openDraftDialog(item = null, { readOnly = false } = {}) {
   const viewOnly = readOnly || !canEditModule("drafts");
+  const volumeOptions = [["", "全局（不绑定分卷）"], ...(state.work?.volumes ?? []).map((volume) => [volume.id, volume.title])];
+  const settingModuleOptions = [["", "全局（不绑定设定模块）"], ...draftSettingModules];
   const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="想法操作">
     <div><strong>想法操作</strong><small>删除后将从想法列表移除，版本历史仍会保留。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除想法</button></div>
   </section>` : "";
   const fields = `<p class="form-field-note">这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。</p>`
     + field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
+    + `<div class="draft-binding-field" data-draft-binding-field="prose">${field("volumeId", "绑定分卷", "select", item?.volumeId ?? "", volumeOptions)}</div>`
+    + `<div class="draft-binding-field" data-draft-binding-field="setting">${field("settingModule", "绑定设定模块", "select", item?.settingModule ?? "", settingModuleOptions)}</div>`
     + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
+      attachmentModule: "drafts",
       readOnly: viewOnly
     }) + management;
   openDialog(item ? viewOnly ? "查看想法" : "编辑想法" : "新建想法", fields, async (form) => {
     if (viewOnly) return;
     const title = String(form.get("title") ?? "").trim();
     if (!title) throw new Error("请填写想法标题");
+    const draftType = form.get("draftType") === "setting" ? "setting" : "prose";
     const body = {
-      draftType: form.get("draftType"),
+      draftType,
+      volumeId: draftType === "prose" ? String(form.get("volumeId") ?? "") || null : null,
+      settingModule: draftType === "setting" ? String(form.get("settingModule") ?? "") || null : null,
       title,
       content: String(form.get("content") ?? ""),
       ...(item ? { expectedVersionNo: item.versionNo } : {})
@@ -4687,6 +4733,18 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     editor: true,
     errorPrefix: "想法保存失败："
   });
+  const draftTypeSelect = $("#dialog-fields").querySelector('select[name="draftType"]');
+  const syncDraftBindingFields = () => {
+    const draftType = draftTypeSelect?.value === "setting" ? "setting" : "prose";
+    $("#dialog-fields").querySelectorAll("[data-draft-binding-field]").forEach((bindingField) => {
+      const active = bindingField.dataset.draftBindingField === draftType;
+      bindingField.classList.toggle("hidden", !active);
+      const select = bindingField.querySelector("select");
+      if (select) select.disabled = !active || viewOnly;
+    });
+  };
+  draftTypeSelect?.addEventListener("change", syncDraftBindingFields);
+  syncDraftBindingFields();
   if (viewOnly) {
     $("#dialog-fields").querySelectorAll("input, select, textarea").forEach((control) => {
       if (control instanceof HTMLSelectElement) control.disabled = true;
@@ -4700,9 +4758,14 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
 
 async function renderDrafts(page = moduleListPages.drafts) {
   const allDrafts = await moduleApiAllPages("drafts", `/api/works/${state.work.id}/drafts`);
-  const drafts = draftTypeFilter === "all"
+  const typeDrafts = draftTypeFilter === "all"
     ? allDrafts
     : allDrafts.filter((draft) => draft.draftType === draftTypeFilter);
+  const selectedBindingKeys = new Set(draftBindingFilters);
+  const drafts = selectedBindingKeys.size
+    ? typeDrafts.filter((draft) => selectedBindingKeys.has(draftBindingKey(draft)))
+    : typeDrafts;
+  const hasDraftFilters = draftTypeFilter !== "all" || selectedBindingKeys.size > 0;
   mountModuleCount(drafts.length);
   const pageResult = paginateModuleItems(drafts, page, "drafts");
   moduleListPages.drafts = pageResult.page;
@@ -4710,21 +4773,26 @@ async function renderDrafts(page = moduleListPages.drafts) {
   if (drafts.length) mountModuleLayoutToggle(layout, "想法列表样式");
   else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
   mountDraftFilterToggle();
-  const filterToolbar = `<section id="draft-filter-panel" class="draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="想法筛选">
-    <label for="draft-type-filter">想法类型</label>
-    <select id="draft-type-filter" aria-label="按想法类型筛选">
+  const bindingOptions = [
+    ["global", "全局（未绑定）"],
+    ...(state.work?.volumes ?? []).map((volume) => [`volume:${volume.id}`, `分卷 · ${volume.title}`]),
+    ...draftSettingModules.map(([value, label]) => [`module:${value}`, `设定模块 · ${label}`])
+  ];
+  const filterToolbar = `<section id="draft-filter-panel" class="character-filter-toolbar draft-filter-toolbar${draftFiltersPanelOpen ? "" : " hidden"}" aria-label="想法筛选">
+    <label class="draft-type-filter-field" for="draft-type-filter"><span>按想法类型筛选</span><select id="draft-type-filter" aria-label="按想法类型筛选">
       <option value="all" ${draftTypeFilter === "all" ? "selected" : ""}>全部想法</option>
       <option value="prose" ${draftTypeFilter === "prose" ? "selected" : ""}>正文想法</option>
       <option value="setting" ${draftTypeFilter === "setting" ? "selected" : ""}>设定想法</option>
-    </select>
-    ${draftTypeFilter === "all" ? "" : `<span aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>`}
+    </select></label>
+    <details class="character-filter-dropdown"><summary><span>按绑定位置筛选</span><strong>${selectedBindingKeys.size ? `已选 ${selectedBindingKeys.size} 项` : "全部位置"}</strong></summary><div id="draft-binding-filter" class="character-filter-options">${bindingOptions.map(([value, label]) => `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedBindingKeys.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("")}</div></details>
+    <div class="character-filter-toolbar-actions">${hasDraftFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${drafts.length} 条想法</span>` : ""}<button id="clear-draft-filters" class="ghost-button" type="button" ${hasDraftFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
   const actions = (item) => canEditModule("drafts")
     ? `${recordCardEditButton("edit-draft", item.id, `想法“${item.title}”`)}${recordHistoryButton("draft", item.id, item.title)}`
     : recordHistoryButton("draft", item.id, item.title);
   const cards = `<div class="card-grid">${pageResult.items.map((item) => `
     <article class="record-card preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
-      <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
+      <small>${esc(draftTypeLabel(item.draftType))} · ${esc(draftBindingLabel(item))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
       <h3>${esc(item.title)}</h3>
       <div class="record-markdown-preview">${esc(item.contentPreview || "暂无内容")}</div>
       <div class="card-actions">${actions(item)}</div>
@@ -4732,19 +4800,32 @@ async function renderDrafts(page = moduleListPages.drafts) {
   const rows = `<div class="module-row-list">${pageResult.items.map((item) => {
     const preview = moduleRowPreview(item.contentPreview || "暂无内容");
     return `<article class="record-card module-row preview-record-card" data-open-draft="${esc(item.id)}" role="button" tabindex="0" aria-label="查看想法 ${esc(item.title)}">
-      <small>${esc(draftTypeLabel(item.draftType))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
+      <small>${esc(draftTypeLabel(item.draftType))} · ${esc(draftBindingLabel(item))} · 更新于 ${esc(formatDateTime(item.updatedAt))}</small>
       <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
       <div class="card-actions">${actions(item)}</div>
     </article>`;
   }).join("")}</div>`;
   const emptyDrafts = allDrafts.length
-    ? emptyModule("没有符合筛选条件的想法", "可以切换想法类型查看其他内容。")
+    ? emptyModule("没有符合筛选条件的想法", "可以切换想法类型、绑定位置或重置筛选。")
     : emptyModule("还没有想法", "把不一定会进入正文或设定的片段、方向和备选想法先记在这里。");
   $("#module-content").innerHTML = filterToolbar + (drafts.length
     ? `${layout === "rows" ? rows : cards}${renderModulePagination(pageResult, "drafts", "想法列表")}`
     : emptyDrafts);
   $("#draft-type-filter").addEventListener("change", async (event) => {
     draftTypeFilter = ["prose", "setting"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    draftFiltersPanelOpen = true;
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
+  $("#draft-binding-filter").addEventListener("change", async () => {
+    draftBindingFilters = [...$("#draft-binding-filter").querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
+    draftFiltersPanelOpen = true;
+    moduleListPages.drafts = 1;
+    await renderDrafts(1);
+  });
+  $("#clear-draft-filters")?.addEventListener("click", async () => {
+    draftTypeFilter = "all";
+    draftBindingFilters = [];
     draftFiltersPanelOpen = true;
     moduleListPages.drafts = 1;
     await renderDrafts(1);
@@ -6912,7 +6993,7 @@ async function ensureAiReferencesLoaded() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
-  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
+  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-attachment-module="${esc(options.attachmentModule ?? "settings")}" data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
@@ -7598,10 +7679,10 @@ function markdownImageLabel(file, fallback = "图片附件") {
   return String(file?.name ?? "").replace(/[\[\]\r\n]/gu, "").trim() || fallback;
 }
 
-async function uploadMarkdownAttachment(file) {
+async function uploadMarkdownAttachment(file, module = "settings") {
   const body = new FormData();
   body.append("file", file);
-  const attachment = await api(`/api/works/${state.work.id}/attachments`, { method: "POST", body });
+  const attachment = await api(`/api/works/${state.work.id}/attachments?module=${encodeURIComponent(module)}`, { method: "POST", body });
   if (!attachment.deduplicated) markdownEditorPendingAttachments.push(String(attachment.id));
   return { attachment, imageLabel: markdownImageLabel(file) };
 }
@@ -7632,7 +7713,7 @@ function createVditorUploadHandler(uploadAttachment, getEditor) {
   };
 }
 
-function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = uploadMarkdownAttachment, placeholder = "", readOnly = false, width = "auto" } = {}) {
+function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = null, attachmentModule = "settings", placeholder = "", readOnly = false, width = "auto" } = {}) {
   if (!window.Vditor) {
     toast("Markdown 编辑器资源加载失败，请刷新页面后重试", "error");
     return null;
@@ -7663,7 +7744,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
       accept: "image/*",
       max: 10 * 1024 * 1024,
       multiple: true,
-      handler: createVditorUploadHandler(uploadAttachment, () => editor)
+      handler: createVditorUploadHandler(uploadAttachment ?? ((file) => uploadMarkdownAttachment(file, attachmentModule)), () => editor)
     },
     input: (markdown) => {
       normalizeVditorAttachmentImages(editor);
@@ -7892,6 +7973,7 @@ function bindVditorEditors(container) {
         if (valueField) valueField.value = markdown;
         markEntityEditorDirty();
       },
+      attachmentModule: host.dataset.attachmentModule ?? "settings",
       placeholder: host.dataset.placeholder ?? "",
       readOnly: Boolean(valueField?.readOnly)
     });
@@ -7907,7 +7989,7 @@ function characterSectionImageLabel(file, fallback = "图片附件") {
 async function uploadCharacterSectionAttachment(file) {
   const body = new FormData();
   body.append("file", file);
-  const attachment = await api(`/api/works/${state.work.id}/attachments`, { method: "POST", body });
+  const attachment = await api(`/api/works/${state.work.id}/attachments?module=characters`, { method: "POST", body });
   if (!attachment.deduplicated) characterSectionPendingAttachments.push(String(attachment.id));
   return {
     attachment,
@@ -7980,6 +8062,7 @@ async function openKnowledgeSectionEditor(index = null) {
   host.querySelectorAll("input, textarea").forEach((control) => control.addEventListener("input", () => { knowledgeSectionEditorDirty = true; }));
   knowledgeSectionVditor = createVditorEditor($("#knowledge-section-markdown"), section?.contentMarkdown ?? "", {
     onInput: () => { knowledgeSectionEditorDirty = true; },
+    attachmentModule: knowledgeEditorKind === "race" ? "races" : "organizations",
     placeholder: "从这里开始写 Markdown 设定…",
     width: "100%"
   });
@@ -10381,6 +10464,7 @@ $("#register-form").addEventListener("submit", async (event) => {
         username: form.get("username"),
         password: form.get("password"),
         passwordConfirmation: form.get("passwordConfirmation"),
+        setupToken: form.get("setupToken") || undefined,
         captchaId: form.get("captchaId"),
         captchaAnswer: form.get("captchaAnswer")
       }

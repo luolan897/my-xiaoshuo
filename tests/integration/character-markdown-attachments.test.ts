@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import request from "supertest";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRuntime, createWork } from "../helpers.js";
 
 describe("人物 Markdown 章节与附件", () => {
@@ -53,6 +53,35 @@ describe("人物 Markdown 章节与附件", () => {
     expect(existsSync(storagePath)).toBe(true);
 
     await request(runtime.app).delete(`/api/works/${String(work.id)}`).expect(204);
+    expect(existsSync(storagePath)).toBe(false);
+  });
+
+  it("附件文件删除失败时保留可重试的清理任务", async () => {
+    const work = await createWork(runtime);
+    const png = await sharp({
+      create: { width: 96, height: 96, channels: 3, background: { r: 60, g: 120, b: 180 } }
+    }).png().toBuffer();
+    const upload = await request(runtime.app)
+      .post(`/api/works/${String(work.id)}/attachments`)
+      .attach("file", png, { filename: "待重试.png", contentType: "image/png" })
+      .expect(201);
+    const attachmentId = String(upload.body.data.id);
+    const storageKey = String(upload.body.data.storageKey);
+    const storagePath = runtime.attachmentStorage.path(storageKey);
+    const remove = runtime.attachmentStorage.remove.bind(runtime.attachmentStorage);
+    runtime.attachmentStorage.remove = vi.fn(async () => { throw new Error("simulated cleanup failure"); });
+
+    await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(204);
+    expect(runtime.database.get("SELECT id FROM attachments WHERE id = ?", attachmentId)).toBeUndefined();
+    expect(runtime.database.get("SELECT attempts, last_error FROM attachment_cleanup_queue WHERE storage_key = ?", storageKey)).toMatchObject({
+      attempts: 1,
+      last_error: "simulated cleanup failure"
+    });
+    expect(existsSync(storagePath)).toBe(true);
+
+    runtime.attachmentStorage.remove = remove;
+    await runtime.cleanupAttachments();
+    expect(runtime.database.get("SELECT storage_key FROM attachment_cleanup_queue WHERE storage_key = ?", storageKey)).toBeUndefined();
     expect(existsSync(storagePath)).toBe(false);
   });
 
@@ -108,9 +137,31 @@ describe("人物 Markdown 章节与附件", () => {
     expect(restored.body.data.contentMarkdown).toContain(`attachment://${attachmentId}`);
     await request(runtime.app).patch(`/api/character-sections/${sectionId}`).send({ contentMarkdown: "无附件" });
 
-    const deleted = await request(runtime.app).delete(`/api/attachments/${attachmentId}`);
-    expect(deleted.status).toBe(204);
-    expect(existsSync(runtime.attachmentStorage.path(storageKey))).toBe(false);
+    runtime.database.run("UPDATE attachments SET created_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", attachmentId);
+    await runtime.cleanupAttachments();
+    expect(runtime.database.get("SELECT id FROM attachments WHERE id = ?", attachmentId)).toEqual({ id: attachmentId });
+    const retained = await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(409);
+    expect(retained.body.error.code).toBe("ATTACHMENT_IN_VERSION_HISTORY");
+    expect(existsSync(runtime.attachmentStorage.path(storageKey))).toBe(true);
+  });
+
+  it("自动回收超过保留期且未被当前或历史版本引用的附件", async () => {
+    const work = await createWork(runtime);
+    const image = await sharp({
+      create: { width: 64, height: 64, channels: 3, background: { r: 15, g: 30, b: 45 } }
+    }).png().toBuffer();
+    const upload = await request(runtime.app)
+      .post(`/api/works/${String(work.id)}/attachments`)
+      .attach("file", image, { filename: "未使用.png", contentType: "image/png" })
+      .expect(201);
+    const attachmentId = String(upload.body.data.id);
+    const storagePath = runtime.attachmentStorage.path(String(upload.body.data.storageKey));
+    runtime.database.run("UPDATE attachments SET created_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", attachmentId);
+
+    await runtime.cleanupAttachments();
+
+    expect(runtime.database.get("SELECT id FROM attachments WHERE id = ?", attachmentId)).toBeUndefined();
+    expect(existsSync(storagePath)).toBe(false);
   });
 
   it("拒绝在人物章节中引用其他作品的附件", async () => {
@@ -164,7 +215,8 @@ describe("人物 Markdown 章节与附件", () => {
     await request(runtime.app).patch(`/api/races/${String(race.body.data.id)}`).send({ settingsMarkdown: "无附件种族" }).expect(200);
     await request(runtime.app).patch(`/api/organizations/${String(organization.body.data.id)}`).send({ settingsMarkdown: "无附件组织" }).expect(200);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count).toBe(0);
-    await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(204);
+    const retained = await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(409);
+    expect(retained.body.error.code).toBe("ATTACHMENT_IN_VERSION_HISTORY");
   });
 
   it("按中文短词和正文片段检索人物 Markdown 章节", async () => {

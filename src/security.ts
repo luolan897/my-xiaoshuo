@@ -23,26 +23,37 @@ export type RuntimeSecurityOptions = {
   enforceSameOrigin?: boolean;
   allowPrivateAiEndpoints?: boolean;
   allowRegistration?: boolean;
+  setupToken?: string;
 };
 
 type RateEntry = { count: number; resetAt: number };
+const maximumRateEntries = 10_000;
 
 const digest = (value: string): Buffer => createHash("sha256").update(value).digest();
 const constantTimeEqual = (left: string, right: string): boolean => timingSafeEqual(digest(left), digest(right));
+
+export function verifySetupToken(expected: string | undefined, provided: string | undefined): boolean {
+  return Boolean(expected && provided) && constantTimeEqual(expected ?? "", provided ?? "");
+}
 
 function requestKey(request: Request): string {
   return request.ip || request.socket.remoteAddress || "unknown";
 }
 
-function consumeRate(entries: Map<string, RateEntry>, key: string, limit: number, windowMs: number): { allowed: boolean; retryAfter: number } {
+function consumeRate(entries: Map<string, RateEntry>, key: string, limit: number, windowMs: number, entryLimit = maximumRateEntries): { allowed: boolean; retryAfter: number } {
   const currentTime = Date.now();
   const existing = entries.get(key);
   const entry = !existing || existing.resetAt <= currentTime ? { count: 0, resetAt: currentTime + windowMs } : existing;
   entry.count += 1;
-  entries.set(key, entry);
-  if (entries.size > 10_000) {
+  if (!existing && entries.size >= entryLimit) {
     for (const [candidate, value] of entries) if (value.resetAt <= currentTime) entries.delete(candidate);
+    while (entries.size >= entryLimit) {
+      const oldest = entries.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      entries.delete(oldest);
+    }
   }
+  entries.set(key, entry);
   return { allowed: entry.count <= limit, retryAfter: Math.max(1, Math.ceil((entry.resetAt - currentTime) / 1000)) };
 }
 
@@ -95,7 +106,7 @@ export function createBasicAuthMiddleware(options: BasicAuthOptions): RequestHan
 
 export function createSecurityHeadersMiddleware(): RequestHandler {
   return (request, response, next) => {
-    response.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob: https:; manifest-src 'self'; media-src 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'none'");
+    response.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; manifest-src 'self'; media-src 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'none'");
     response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
     response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
@@ -138,11 +149,11 @@ export function createSameOriginMiddleware(): RequestHandler {
   };
 }
 
-export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000): RequestHandler {
+export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
     if (!request.path.startsWith("/api/") || request.path === "/api/health") return next();
-    const rate = consumeRate(entries, requestKey(request), limit, windowMs);
+    const rate = consumeRate(entries, requestKey(request), limit, windowMs, entryLimit);
     if (rate.allowed) return next();
     logger.warn("security.request.blocked", { control: "api_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
@@ -150,7 +161,7 @@ export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000): Re
   };
 }
 
-export function createAuthenticationRateLimitMiddleware(limit = 20, windowMs = 15 * 60_000): RequestHandler {
+export function createAuthenticationRateLimitMiddleware(limit = 10, windowMs = 15 * 60_000): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
     const authenticationWrite = request.method === "POST" && ["/api/auth/login", "/api/auth/register"].includes(request.path);
@@ -160,6 +171,24 @@ export function createAuthenticationRateLimitMiddleware(limit = 20, windowMs = 1
     logger.warn("security.request.blocked", { control: "authentication_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
     response.status(429).json({ error: { code: "AUTH_RATE_LIMITED", message: "登录或注册尝试过于频繁，请稍后重试" } });
+  };
+}
+
+export function createUploadRateLimitMiddleware(limit = 30, windowMs = 10 * 60_000, entryLimit = maximumRateEntries): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    const uploadWrite = (request.method === "POST" || request.method === "PUT") && (
+      request.path === "/api/auth/avatar"
+      || request.path === "/api/works/import"
+      || /^\/api\/works\/[^/]+\/(?:import|cover|attachments)$/u.test(request.path)
+    );
+    if (!uploadWrite) return next();
+    const actorKey = request.authUser?.userId ?? requestKey(request);
+    const rate = consumeRate(entries, actorKey, limit, windowMs, entryLimit);
+    if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "upload_rate_limit", retryAfterSeconds: rate.retryAfter });
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "UPLOAD_RATE_LIMITED", message: "文件上传过于频繁，请稍后重试" } });
   };
 }
 
@@ -231,6 +260,9 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
       throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址指向受保护的本机、内网或链路本地网络");
     }
   }
+  if (endpoint.protocol === "http:" && addresses.some(({ address }) => unsafeIpKind(address) !== "private")) {
+    throw new AppError(400, "INSECURE_PROVIDER_ENDPOINT", "公网 AI 供应商地址必须使用 HTTPS");
+  }
   return addresses;
 }
 
@@ -238,7 +270,7 @@ const redirectStatuses = new Set([301, 302, 303, 307, 308]);
 
 /**
  * 出站 AI 请求：禁止浏览器式自动跟随重定向。
- * 每一跳都重新做 SSRF 校验；跨主机跳转时剥离 Authorization，避免密钥泄露到跳转目标。
+ * 每一跳都重新做 SSRF 校验；只允许同源跳转，避免密钥或请求正文泄露到其他目标。
  */
 export async function fetchSafeAiEndpoint(
   fetchImpl: typeof fetch,
@@ -274,7 +306,7 @@ export async function fetchSafeAiEndpoint(
       throw new AppError(502, "PROVIDER_REDIRECT_INVALID", "AI 供应商返回了无效的重定向地址");
     }
     if (nextUrl.origin !== new URL(currentUrl).origin) {
-      baseHeaders.delete("authorization");
+      throw new AppError(502, "PROVIDER_REDIRECT_CROSS_ORIGIN", "AI 供应商返回了不安全的跨域重定向");
     }
     if (response.status === 303) {
       init = { ...init, method: "GET", body: undefined };
@@ -294,12 +326,16 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
   const trustProxyValue = environment.APP_TRUST_PROXY?.trim() ?? "";
   const trustProxy = trustProxyValue === "true" ? true : /^\d+$/u.test(trustProxyValue) ? Number(trustProxyValue) : false;
   if (typeof trustProxy === "number" && (trustProxy < 0 || trustProxy > 10)) throw new Error("APP_TRUST_PROXY 只能是 true 或 0-10 的整数");
+  const allowRegistration = environment.APP_ALLOW_REGISTRATION === "true";
+  const setupToken = environment.APP_SETUP_TOKEN ?? "";
+  if (allowRegistration && setupToken.length < 32) throw new Error("开放注册时 APP_SETUP_TOKEN 至少需要 32 个字符");
   return {
     ...(username ? { auth: { username, password } } : {}),
     trustProxy,
     enforceSameOrigin: true,
     allowPrivateAiEndpoints: environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS === "true" || !production,
-    allowRegistration: environment.APP_ALLOW_REGISTRATION === "true"
+    allowRegistration,
+    ...(setupToken ? { setupToken } : {})
   };
 }
 
