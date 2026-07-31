@@ -103,6 +103,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       devAuthBypass,
       developmentServer: isDevelopmentServer(options.env)
     });
+    await runtime.cleanupAttachments();
   } catch (error) {
     logger.error("server.initialization_failed", { host: options.host, port: options.port, error: sanitizeError(error) });
     throw error;

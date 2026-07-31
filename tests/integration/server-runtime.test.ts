@@ -98,7 +98,7 @@ describe("本地服务运行时", () => {
     roots.push(root);
     const databasePath = join(root, "novel.db");
     const legacy = new Database(databasePath);
-    legacy.raw.exec("DROP TABLE attachment_access_modules; DELETE FROM schema_migrations WHERE version = 58");
+    legacy.raw.exec("DROP TABLE attachment_cleanup_queue; DROP TABLE attachment_access_modules; DELETE FROM schema_migrations WHERE version >= 58");
     legacy.close();
     const masterKey = loadMasterSecret(join(root, "master.key"));
     const attachmentsDirectory = join(root, "attachments", "fixture");

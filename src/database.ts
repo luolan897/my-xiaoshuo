@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 58;
+export const DATABASE_SCHEMA_VERSION = 59;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2429,6 +2429,25 @@ export class Database {
             SELECT 1 FROM attachment_access_modules access WHERE access.attachment_id = attachment.id
           )`, timestamp);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (58, ?)", timestamp);
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(59)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS attachment_cleanup_queue (
+          storage_key TEXT PRIMARY KEY,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) WITHOUT ROWID`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_attachment_cleanup_queue_updated ON attachment_cleanup_queue(updated_at, storage_key)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (59, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

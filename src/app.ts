@@ -541,6 +541,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
 
@@ -771,6 +772,30 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  let attachmentCleanupChain = Promise.resolve();
+  const cleanupAttachments = (): Promise<void> => {
+    const cleanup = attachmentCleanupChain.then(async () => {
+      for (const queued of store.listAttachmentCleanupQueue()) {
+        if (!store.attachmentCleanupStillRequired(queued.storageKey)) {
+          store.completeAttachmentCleanup(queued.storageKey);
+          continue;
+        }
+        try {
+          await attachmentStorage.remove(queued.storageKey);
+          store.completeAttachmentCleanup(queued.storageKey);
+        } catch (error) {
+          store.failAttachmentCleanup(queued.storageKey, error instanceof Error ? error.message : "Attachment cleanup failed");
+          logger.warn("attachment.cleanup.failed", {
+            storageKey: queued.storageKey,
+            attempts: queued.attempts + 1,
+            error: sanitizeError(error)
+          });
+        }
+      }
+    });
+    attachmentCleanupChain = cleanup.catch(() => undefined);
+    return cleanup;
+  };
   const requestPermissions = (request: Request, workId?: string): WorkModulePermissions => {
     if (!request.authUser) return fullWorkModulePermissions();
     const resolvedWorkId = workId ?? auth.resolveWorkId(request.path) ?? undefined;
@@ -1074,8 +1099,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.delete("/api/works/:workId", async (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    const removableStorageKeys = store.deleteWork(request.params.workId, input.expectedVersionNo);
-    await Promise.all(removableStorageKeys.map((storageKey) => attachmentStorage.remove(storageKey)));
+    store.deleteWork(request.params.workId, input.expectedVersionNo);
+    await cleanupAttachments();
     noContent(response);
   });
   app.get("/api/works/:workId/cover", (request, response) => {
@@ -1499,8 +1524,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!store.attachmentModules(request.params.attachmentId).some((module) => canWriteWorkModule(permissions, module))) {
       throw new AppError(403, "WORK_MODULE_WRITE_DENIED", "你没有编辑该附件所属资料模块的权限");
     }
-    const deleted = store.deleteAttachment(request.params.attachmentId);
-    if (deleted.removeStoredFile) await attachmentStorage.remove(deleted.storageKey);
+    store.deleteAttachment(request.params.attachmentId);
+    await cleanupAttachments();
     noContent(response);
   });
 
@@ -2327,7 +2352,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
     database.close();

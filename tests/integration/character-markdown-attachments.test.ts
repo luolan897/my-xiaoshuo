@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import request from "supertest";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRuntime, createWork } from "../helpers.js";
 
 describe("人物 Markdown 章节与附件", () => {
@@ -53,6 +53,35 @@ describe("人物 Markdown 章节与附件", () => {
     expect(existsSync(storagePath)).toBe(true);
 
     await request(runtime.app).delete(`/api/works/${String(work.id)}`).expect(204);
+    expect(existsSync(storagePath)).toBe(false);
+  });
+
+  it("附件文件删除失败时保留可重试的清理任务", async () => {
+    const work = await createWork(runtime);
+    const png = await sharp({
+      create: { width: 96, height: 96, channels: 3, background: { r: 60, g: 120, b: 180 } }
+    }).png().toBuffer();
+    const upload = await request(runtime.app)
+      .post(`/api/works/${String(work.id)}/attachments`)
+      .attach("file", png, { filename: "待重试.png", contentType: "image/png" })
+      .expect(201);
+    const attachmentId = String(upload.body.data.id);
+    const storageKey = String(upload.body.data.storageKey);
+    const storagePath = runtime.attachmentStorage.path(storageKey);
+    const remove = runtime.attachmentStorage.remove.bind(runtime.attachmentStorage);
+    runtime.attachmentStorage.remove = vi.fn(async () => { throw new Error("simulated cleanup failure"); });
+
+    await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(204);
+    expect(runtime.database.get("SELECT id FROM attachments WHERE id = ?", attachmentId)).toBeUndefined();
+    expect(runtime.database.get("SELECT attempts, last_error FROM attachment_cleanup_queue WHERE storage_key = ?", storageKey)).toMatchObject({
+      attempts: 1,
+      last_error: "simulated cleanup failure"
+    });
+    expect(existsSync(storagePath)).toBe(true);
+
+    runtime.attachmentStorage.remove = remove;
+    await runtime.cleanupAttachments();
+    expect(runtime.database.get("SELECT storage_key FROM attachment_cleanup_queue WHERE storage_key = ?", storageKey)).toBeUndefined();
     expect(existsSync(storagePath)).toBe(false);
   });
 

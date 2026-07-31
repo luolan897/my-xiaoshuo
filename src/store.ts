@@ -1316,10 +1316,11 @@ export class Store {
       this.db.run("DELETE FROM races WHERE work_id = ?", workId);
       this.db.run("DELETE FROM works WHERE id = ?", workId);
       this.db.run("DELETE FROM relationship_source_index_queue WHERE work_id = ?", workId);
+      for (const storageKey of storageKeys) {
+        if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
+      }
     });
-    return storageKeys.filter((storageKey) => Number(
-      this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0
-    ) === 0);
+    return storageKeys.filter((storageKey) => !this.attachmentStorageKeyInUse(storageKey));
   }
 
   setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer, expectedVersionNo?: number): Record<string, unknown> {
@@ -4674,12 +4675,15 @@ export class Store {
     this.getWork(workId);
     const existing = this.db.get("SELECT * FROM attachments WHERE work_id = ? AND stored_sha256 = ?", workId, input.storedSha256);
     if (existing) {
-      this.db.run(
-        "INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
-        requiredString(existing, "id"),
-        accessModule,
-        now()
-      );
+      this.db.transaction(() => {
+        this.db.run(
+          "INSERT OR IGNORE INTO attachment_access_modules (attachment_id, module, created_at) VALUES (?, ?, ?)",
+          requiredString(existing, "id"),
+          accessModule,
+          now()
+        );
+        this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", requiredString(existing, "storage_key"));
+      });
       return { attachment: this.mapAttachment(existing), created: false };
     }
     const attachmentId = id("attachment");
@@ -4713,6 +4717,7 @@ export class Store {
         accessModule,
         timestamp
       );
+      this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", input.storageKey);
       this.audit(workId, "attachment.created", "attachment", attachmentId, {
         originalMimeType: input.originalMimeType,
         storedMimeType: input.storedMimeType,
@@ -4764,7 +4769,46 @@ export class Store {
     return [...modules];
   }
 
-  deleteAttachment(attachmentId: string): { storageKey: string; removeStoredFile: boolean } {
+  private attachmentStorageKeyInUse(storageKey: string): boolean {
+    return Number(this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0) > 0;
+  }
+
+  private enqueueAttachmentCleanup(storageKey: string): void {
+    const timestamp = now();
+    this.db.run(
+      `INSERT INTO attachment_cleanup_queue (storage_key, attempts, last_error, created_at, updated_at)
+       VALUES (?, 0, NULL, ?, ?) ON CONFLICT(storage_key) DO UPDATE SET updated_at = excluded.updated_at`,
+      storageKey,
+      timestamp,
+      timestamp
+    );
+  }
+
+  listAttachmentCleanupQueue(limit = 100): Array<{ storageKey: string; attempts: number }> {
+    return this.db.all(
+      "SELECT storage_key, attempts FROM attachment_cleanup_queue ORDER BY updated_at, storage_key LIMIT ?",
+      Math.max(1, Math.min(1_000, Math.trunc(limit)))
+    ).map((row) => ({ storageKey: requiredString(row, "storage_key"), attempts: numberValue(row, "attempts") }));
+  }
+
+  attachmentCleanupStillRequired(storageKey: string): boolean {
+    return !this.attachmentStorageKeyInUse(storageKey);
+  }
+
+  completeAttachmentCleanup(storageKey: string): void {
+    this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", storageKey);
+  }
+
+  failAttachmentCleanup(storageKey: string, message: string): void {
+    this.db.run(
+      "UPDATE attachment_cleanup_queue SET attempts = attempts + 1, last_error = ?, updated_at = ? WHERE storage_key = ?",
+      message.slice(0, 500),
+      now(),
+      storageKey
+    );
+  }
+
+  deleteAttachment(attachmentId: string): { storageKey: string; cleanupQueued: boolean } {
     const attachment = this.getAttachment(attachmentId);
     const references = Number(this.db.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count ?? 0);
     if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被资料引用，无法删除");
@@ -4772,9 +4816,9 @@ export class Store {
     this.db.transaction(() => {
       this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
       this.audit(String(attachment.workId), "attachment.deleted", "attachment", attachmentId, { storageKey });
+      if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
     });
-    const remaining = Number(this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0);
-    return { storageKey, removeStoredFile: remaining === 0 };
+    return { storageKey, cleanupQueued: !this.attachmentStorageKeyInUse(storageKey) };
   }
 
   getCharacter(characterId: string): Record<string, unknown> {
