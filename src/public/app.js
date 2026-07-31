@@ -10199,7 +10199,12 @@ $("#onboarding-dialog").addEventListener("cancel", (event) => {
 $("#system-restart-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
 });
+function hasUnsavedEditorChanges() {
+  return state.dirty || entityEditorDirty || characterSectionEditorDirty;
+}
+
 $("#system-restart-confirm").addEventListener("click", () => {
+  if (hasUnsavedEditorChanges() && !window.confirm("检测到尚未保存的编辑内容。确定放弃这些内容并重新登录吗？")) return;
   systemRestartReloading = true;
   window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
   window.location.reload();
@@ -11348,7 +11353,7 @@ document.addEventListener("visibilitychange", () => {
   void refreshSystemHealth();
 });
 window.addEventListener("beforeunload", (event) => {
-  if (!systemRestartReloading && (state.dirty || entityEditorDirty || characterSectionEditorDirty)) event.preventDefault();
+  if (!systemRestartReloading && hasUnsavedEditorChanges()) event.preventDefault();
 });
 window.addEventListener("online", () => {
   updateSystemHealth({ status: "checking" });
