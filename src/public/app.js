@@ -2395,9 +2395,9 @@ function formatAiFailureMessage(error) {
   if (status) lines.push(`服务端状态：HTTP ${status}`);
   if (providerName || providerId) lines.push(`模型供应商：${providerName || providerId}`);
   if (modelId) lines.push(`模型 ID：${modelId}`);
-  if (failure && failure !== message) lines.push(`详细原因：${failure}`);
   if (callId) lines.push(`调用 ID：${callId}`);
-  return lines.join("\n\n");
+  if (failure && failure !== message) lines.push(`详细原因：${failure}`);
+  return lines.join("\n");
 }
 
 async function apiPage(path, page = 1, limit = 30) {

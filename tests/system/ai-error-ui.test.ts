@@ -18,6 +18,10 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain("error.modelId = typeof source.modelId === \"string\" ? source.modelId : undefined;");
     expect(application).toContain("lines.push(`模型供应商：${providerName || providerId}`)");
     expect(application).toContain("lines.push(`模型 ID：${modelId}`)");
+    expect(application).toContain("lines.push(`调用 ID：${callId}`)");
+    expect(application).toContain("lines.push(`详细原因：${failure}`)");
+    expect(application).toContain('return lines.join("\\n");');
+    expect(application).not.toContain('return lines.join("\\n\\n");');
     expect(sendAiSource).toContain("const failureMessage = formatAiFailureMessage(error);");
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
     expect(application).toContain('const isFailure = role === "assistant" && text.startsWith("调用失败：");');
