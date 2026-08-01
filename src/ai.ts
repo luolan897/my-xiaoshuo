@@ -608,7 +608,6 @@ export type AiProcessStep = {
   createdAt: string;
 };
 
-const MAX_AGENT_TOOL_ROUNDS = 6;
 const MAX_AGENT_TOOL_CALLS = 12;
 const MAX_CONFIGURED_AGENT_TOOL_CALLS = 48;
 const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
@@ -2747,10 +2746,11 @@ export class AiManager {
       && titleModelId
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
-    const generated = this.enabledAgentTools(input.workId, "chat").length
+    const chatTools = this.enabledAgentTools(input.workId, "chat", undefined, input.conversationId);
+    const generated = chatTools.length
       ? await this.generate({ ...input, taskType: "chat" })
       : await this.generateStream({ ...input, taskType: "chat" }, onDelta);
-    if (this.enabledAgentTools(input.workId, "chat").length) onDelta(generated.content);
+    if (chatTools.length) onDelta(generated.content);
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -3245,7 +3245,7 @@ export class AiManager {
       : 0;
     const conversationBudgetTokens = Math.max(256, Math.floor(availableInputTokens * 0.32));
     const instructionTokens = estimateAiTokens(input.instruction);
-    const functionTokens = estimateAiTokens(JSON.stringify(this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds)));
+    const functionTokens = estimateAiTokens(JSON.stringify(this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId)));
     const workContextBudgetTokens = Math.max(256, availableInputTokens
       - Math.min(conversationTokens, conversationBudgetTokens)
       - Math.min(instructionTokens, Math.floor(availableInputTokens * 0.25))
@@ -3270,7 +3270,7 @@ export class AiManager {
     const contextPlan = this.buildContextPlan(input, model, budget);
     const context = contextPlan.context;
     const messages = this.buildMessages(input, context);
-    const tools = this.enabledAgentTools(input.workId, input.taskType);
+    const tools = this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const messageTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content ?? ""), 0);
     const systemPromptTokens = estimateAiTokens(messages[0]?.content ?? "");
@@ -3429,7 +3429,7 @@ export class AiManager {
   private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">, context: string): CompletionMessage[] {
     const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
-    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds);
+    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId);
     const toolGuidance = enabledToolIds.length > 0
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
@@ -3509,10 +3509,19 @@ export class AiManager {
     return collapseAiBlankLines(this.buildContextPlan(input, model).context);
   }
 
-  private enabledAgentToolIds(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): AgentToolId[] {
+  private enabledAgentToolIds(
+    workId: string,
+    taskType: TaskType,
+    requestedToolIds?: AgentToolId[],
+    conversationId?: string
+  ): AgentToolId[] {
     if (taskType !== "chat" && requestedToolIds === undefined) return [];
-    const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
+    const sourceTools = conversationId && taskType === "chat"
+      ? this.store.ensureAiConversationAgentTools(conversationId, workId)
+      : this.store.getWorkAiSettings(workId).agentTools;
+    const enabled = new Set((sourceTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
+    // 对话锁定只替换「作品当前设置」作为来源；若调用方显式传入 requestedToolIds（含空数组禁用），仍取交集。
     const requested = requestedToolIds ? new Set(requestedToolIds) : null;
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
     return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
@@ -3520,8 +3529,13 @@ export class AiManager {
       && this.canReadWithAgentTool(permissions, toolId));
   }
 
-  private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): Record<string, unknown>[] {
-    return this.enabledAgentToolIds(workId, taskType, requestedToolIds).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+  private enabledAgentTools(
+    workId: string,
+    taskType: TaskType,
+    requestedToolIds?: AgentToolId[],
+    conversationId?: string
+  ): Record<string, unknown>[] {
+    return this.enabledAgentToolIds(workId, taskType, requestedToolIds, conversationId).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private canReadWithAgentTool(permissions: WorkModulePermissions, toolId: AgentToolId): boolean {
@@ -3540,7 +3554,8 @@ export class AiManager {
   private async executeAgentTool(
     workId: string,
     toolCall: CompletionToolCall,
-    maximumResultChars = AGENT_TOOL_RESULT_MAX_CHARS
+    maximumResultChars = AGENT_TOOL_RESULT_MAX_CHARS,
+    allowedToolIds?: ReadonlySet<AgentToolId>
   ): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -3571,7 +3586,7 @@ export class AiManager {
       : name === "search_drafts" ? searchDraftsArguments
       : null;
     const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
-    const enabledTools = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
+    const enabledTools = allowedToolIds ?? new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
     if (!schema || !toolId || !enabledTools.has(toolId) || !this.canReadWithAgentTool(permissions, toolId)) {
@@ -3879,7 +3894,10 @@ export class AiManager {
     let effectiveInput = input;
     let context = this.buildContext(effectiveInput, model);
     let messages = this.buildMessages(effectiveInput, context);
-    let tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds);
+    const allowedToolIds = new Set(this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId));
+    let tools = input.disableTools
+      ? []
+      : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId);
     let parameters: Record<string, unknown>;
     try {
       parameters = this.constrainParametersForContext(model, messages, requestedParameters, tools);
@@ -3890,6 +3908,7 @@ export class AiManager {
       context = this.buildContext(effectiveInput, model);
       messages = this.buildMessages(effectiveInput, context);
       tools = [];
+      allowedToolIds.clear();
       try {
         parameters = this.constrainParametersForContext(model, messages, requestedParameters);
       } catch (fallbackError) {
@@ -4152,6 +4171,7 @@ export class AiManager {
       let toolCallQuotaUsed = 0;
       let globalToolCallUsed = 0;
       let toolContextCompactCount = 0;
+      // 配额与全局熔断只控制循环是否继续，不得改写 tools 定义、tool_choice 或系统前缀（否则破坏 prompt cache）。
       const compactToolContext = async (additionalMessages: CompletionMessage[] = [], round = 1): Promise<void> => {
         const existingToolContext = completionMessages.slice(toolContextStartIndex);
         const sourceMessages = [
@@ -4320,7 +4340,7 @@ export class AiManager {
         const maximumResultChars = toolResultMaximumChars(assistantToolMessage, toolCalls.length);
         const currentRoundMessages: CompletionMessage[] = [assistantToolMessage];
         for (const toolCall of toolCalls) {
-          const execution = await this.executeAgentTool(input.workId, toolCall, maximumResultChars);
+          const execution = await this.executeAgentTool(input.workId, toolCall, maximumResultChars, allowedToolIds);
           logger.info("ai.tool_call.completed", {
             callId,
             toolName: execution.name,
@@ -4348,18 +4368,8 @@ export class AiManager {
           await compactToolContext(currentRoundMessages, round);
         }
         toolRound += 1;
-        const forceFinalAnswer = toolRound >= MAX_AGENT_TOOL_ROUNDS;
-        if (forceFinalAnswer) {
-          completionMessages.push({
-            role: "user",
-            content: "工具调用阶段已经结束，不得再请求任何工具。请立即根据已有工具结果生成最终答案，并严格遵守最初用户消息要求的输出格式。"
-          });
-        }
-        payload = await requestCompletion(forceFinalAnswer ? "none" : "auto");
+        payload = await requestCompletion("auto");
         choice = payload.choices?.[0];
-        if (forceFinalAnswer && choice?.message?.tool_calls?.length) {
-          throw new Error(`AI returned tool calls after tool_choice was set to none at the ${MAX_AGENT_TOOL_ROUNDS}-round safety limit.`);
-        }
       }
       recordChoiceProcess(choice, toolRound + 1, false);
       const content = choice?.message?.content;

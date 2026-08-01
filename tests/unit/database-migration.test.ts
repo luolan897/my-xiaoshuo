@@ -185,7 +185,7 @@ describe("数据库版本化迁移", () => {
       expect.arrayContaining(["attempt_count", "next_attempt_at", "last_attempt_at"])
     );
     expect(first.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).toEqual(
-      expect.arrayContaining(["compacted_summary", "compacted_message_count", "context_warning_at"])
+      expect.arrayContaining(["compacted_summary", "compacted_message_count", "context_warning_at", "agent_tools_json"])
     );
     expect(first.all("PRAGMA table_info(user_api_keys)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["user_id", "key_hash", "key_prefix", "created_at", "rotated_at", "last_used_at"])

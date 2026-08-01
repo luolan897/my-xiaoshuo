@@ -506,6 +506,7 @@ export class Database {
         compacted_summary TEXT NOT NULL DEFAULT '',
         compacted_message_count INTEGER NOT NULL DEFAULT 0,
         context_warning_at TEXT,
+        agent_tools_json TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -2593,8 +2594,12 @@ export class Database {
     }
     if (!applied.has(65)) {
       this.transaction(() => {
-        const columns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
-        if (!columns.has("daily_token_quota")) {
+        const conversationColumns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!conversationColumns.has("agent_tools_json")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN agent_tools_json TEXT");
+        }
+        const workSettingsColumns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!workSettingsColumns.has("daily_token_quota")) {
           this.run("ALTER TABLE work_ai_settings ADD COLUMN daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000)");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (65, ?)", new Date().toISOString());

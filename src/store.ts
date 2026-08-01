@@ -39,6 +39,31 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
 
 export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+export const WORK_AGENT_TOOL_IDS = [
+  "story_index",
+  "read_chapters",
+  "grep",
+  "search_story_entities",
+  "read_character_sections",
+  "search_drafts"
+] as const;
+export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
+const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+
+export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? json<unknown[]>(value, DEFAULT_WORK_AGENT_TOOLS)
+      : DEFAULT_WORK_AGENT_TOOLS;
+  const enabled = new Set<WorkAgentToolId>();
+  for (const item of source) {
+    if (typeof item !== "string") continue;
+    const toolId = item === "query_story_knowledge" ? "search_story_entities" : item;
+    if (WORK_AGENT_TOOL_IDS.includes(toolId as WorkAgentToolId)) enabled.add(toolId as WorkAgentToolId);
+  }
+  return WORK_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
+}
 export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
 
 type PlatformPageSizes = {
@@ -1121,9 +1146,7 @@ export class Store {
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
-        .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
-        .filter((tool, index, tools) => tools.indexOf(tool) === index),
+      agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
       titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
         ? null
         : String(row.title_generation_model_id),
@@ -1162,7 +1185,7 @@ export class Store {
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
     const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
-    const nextAgentTools = input.agentTools ?? current.agentTools as string[];
+    const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
     const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
       ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
       : input.titleGenerationModelId?.trim() || null;
@@ -6239,11 +6262,13 @@ export class Store {
     this.getWork(workId);
     const conversationId = id("conversation");
     const timestamp = now();
+    const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
     this.db.run(
-      "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO ai_conversations (id, work_id, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
       conversationId,
       workId,
       title.trim() || "新对话",
+      JSON.stringify(agentTools),
       timestamp,
       timestamp,
       currentRequestActor()?.userId ?? null
@@ -6449,12 +6474,15 @@ export class Store {
     const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
         title.slice(0, 200),
         forkSummary,
         forkCompactedCount,
+        conversation.agent_tools_json == null
+          ? JSON.stringify(normalizeWorkAgentTools(this.getWorkAiSettings(requiredString(conversation, "work_id")).agentTools))
+          : String(conversation.agent_tools_json),
         timestamp,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -6487,9 +6515,33 @@ export class Store {
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
+      agentTools: row.agent_tools_json == null || row.agent_tools_json === undefined
+        ? null
+        : normalizeWorkAgentTools(row.agent_tools_json),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
+  }
+
+  /** 锁定本对话可用工具集；已锁定则保持不变，避免中途改作品设置破坏 prompt cache。 */
+  ensureAiConversationAgentTools(conversationId: string, workId: string): WorkAgentToolId[] {
+    const conversation = this.db.get("SELECT id, work_id, agent_tools_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) {
+      throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    }
+    if (conversation.agent_tools_json != null && conversation.agent_tools_json !== undefined) {
+      return normalizeWorkAgentTools(conversation.agent_tools_json);
+    }
+    const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
+    this.db.run(
+      "UPDATE ai_conversations SET agent_tools_json = ?, updated_at = ? WHERE id = ? AND agent_tools_json IS NULL",
+      JSON.stringify(agentTools),
+      now(),
+      conversationId
+    );
+    const locked = this.db.get("SELECT agent_tools_json FROM ai_conversations WHERE id = ?", conversationId);
+    return normalizeWorkAgentTools(locked?.agent_tools_json ?? agentTools);
   }
 
   private mapAiConversationMessage(row: Row): Record<string, unknown> {
