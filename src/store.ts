@@ -385,6 +385,9 @@ type AiConversationMessageInput = {
   };
 };
 
+export const aiConversationTaskTypes = ["chat", "roleplay", "continue", "polish"] as const;
+export type AiConversationTaskType = typeof aiConversationTaskTypes[number];
+
 export function defaultAiConversationTitle(prompt: string): string {
   const normalized = prompt.replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
@@ -6215,14 +6218,15 @@ export class Store {
     return row ? this.mapContinuationGuard(row) : null;
   }
 
-  createAiConversation(workId: string, title = "新对话"): Record<string, unknown> {
+  createAiConversation(workId: string, title = "新对话", taskType: AiConversationTaskType | null = null): Record<string, unknown> {
     this.getWork(workId);
     const conversationId = id("conversation");
     const timestamp = now();
     this.db.run(
-      "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO ai_conversations (id, work_id, task_type, title, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
       conversationId,
       workId,
+      taskType,
       title.trim() || "新对话",
       timestamp,
       timestamp,
@@ -6400,7 +6404,8 @@ export class Store {
     }
     this.db.transaction(() => {
       this.db.run(
-        "UPDATE ai_conversations SET roleplay_character_id = ?, updated_at = ? WHERE id = ?",
+        "UPDATE ai_conversations SET roleplay_character_id = ?, task_type = CASE WHEN ? IS NOT NULL THEN 'roleplay' ELSE task_type END, updated_at = ? WHERE id = ?",
+        characterId,
         characterId,
         now(),
         conversationId
@@ -6408,6 +6413,36 @@ export class Store {
       this.audit(workId, "ai-conversation.roleplay-updated", "ai-conversation", conversationId, {
         previousCharacterId,
         characterId
+      });
+    });
+    return this.getAiConversationSummary(conversationId);
+  }
+
+  setAiConversationTaskType(conversationId: string, taskType: AiConversationTaskType): Record<string, unknown> {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const workId = requiredString(conversation, "work_id");
+    const previousCharacterId = optionalString(conversation, "roleplay_character_id");
+    const previousTaskType = optionalString(conversation, "task_type") ?? (previousCharacterId ? "roleplay" : "chat");
+    if (previousTaskType === taskType) return this.getAiConversationSummary(conversationId);
+    const messageCount = Number(this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
+      conversationId
+    )?.count ?? 0);
+    if (messageCount > 0) {
+      throw new AppError(409, "AI_CONVERSATION_TASK_LOCKED", "对话开始后不能切换任务类型");
+    }
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversations SET task_type = ?, roleplay_character_id = CASE WHEN ? = 'roleplay' THEN roleplay_character_id ELSE NULL END, updated_at = ? WHERE id = ?",
+        taskType,
+        taskType,
+        now(),
+        conversationId
+      );
+      this.audit(workId, "ai-conversation.task-type-updated", "ai-conversation", conversationId, {
+        previousTaskType,
+        taskType
       });
     });
     return this.getAiConversationSummary(conversationId);
@@ -6471,10 +6506,11 @@ export class Store {
     const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
         optionalString(conversation, "roleplay_character_id"),
+        optionalString(conversation, "task_type"),
         title.slice(0, 200),
         forkSummary,
         forkCompactedCount,
@@ -6514,6 +6550,7 @@ export class Store {
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
+      taskType: optionalString(row, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat"),
       roleplayCharacter: roleplayCharacter ? {
         id: requiredString(roleplayCharacter, "id"),
         name: requiredString(roleplayCharacter, "name"),

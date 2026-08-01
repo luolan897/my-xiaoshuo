@@ -15,10 +15,11 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain('id="ai-roleplay-character" class="ai-roleplay-character hidden"');
     expect(page).toContain("选择角色卡");
     expect(application).toContain("/roleplay`");
-    expect(application).toContain("角色扮演对话开始后不能切换模式");
-    expect(application).toContain('$("#ai-task").disabled = active;');
+    expect(application).toContain("对话开始后不能切换任务类型");
+    expect(application).toContain('$("#ai-task").disabled = state.aiPromptSent;');
+    expect(application).toContain("当前对话已经开始，请新建对话后再切换任务类型");
     expect(application).toContain("角色扮演模式只使用角色自身的记忆");
-    expect(application).toContain("当前对话已经开始，请新建对话后再进入角色扮演");
+    expect(application).toContain("/task-type`");
     expect(application).toContain("Agent 只能查询与该角色自身有关的记忆");
     expect(application).toContain("recall_self: \"回忆自身\"");
     expect(application).toContain("function syncAiTaskOptions()");

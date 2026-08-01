@@ -984,6 +984,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const roleplay = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
       characterId: role.body.data.id
     }).expect(200);
+    expect(roleplay.body.data.taskType).toBe("roleplay");
     expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
     const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
@@ -1032,10 +1033,12 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("我记得第一次看见星舰");
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    expect(reloaded.body.data.taskType).toBe("roleplay");
     expect(reloaded.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
       messageId: reloaded.body.data.messages.at(-1).id
     }).expect(201);
+    expect(forked.body.data.taskType).toBe("roleplay");
     expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
     const lockedRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
       characterId: otherRole.body.data.id
@@ -1055,6 +1058,41 @@ describe("AI 供应商、模型与建议 API", () => {
       characterId: role.body.data.id
     }).expect(409);
     expect(started.body.error.code).toBe("ROLEPLAY_CONVERSATION_STARTED");
+  });
+
+  it("对话开始后锁定问答、角色扮演、续写和润色任务类型", async () => {
+    const taskTypes = ["chat", "roleplay", "continue", "polish"] as const;
+    const draftConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+      taskType: "chat"
+    }).expect(201);
+    for (const taskType of taskTypes) {
+      const changed = await request(runtime.app).patch(`/api/ai-conversations/${draftConversation.body.data.id}/task-type`).send({
+        taskType
+      }).expect(200);
+      expect(changed.body.data.taskType).toBe(taskType);
+    }
+
+    for (const initialTaskType of taskTypes) {
+      const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+        taskType: initialTaskType
+      }).expect(201);
+      await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
+        role: "user",
+        content: `已开始 ${initialTaskType} 对话`
+      }).expect(201);
+      const unchanged = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/task-type`).send({
+        taskType: initialTaskType
+      }).expect(200);
+      expect(unchanged.body.data.taskType).toBe(initialTaskType);
+      for (const nextTaskType of taskTypes.filter((taskType) => taskType !== initialTaskType)) {
+        const locked = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/task-type`).send({
+          taskType: nextTaskType
+        }).expect(409);
+        expect(locked.body.error.code).toBe("AI_CONVERSATION_TASK_LOCKED");
+      }
+    }
+
+    await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "analysis" }).expect(400);
   });
 
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {

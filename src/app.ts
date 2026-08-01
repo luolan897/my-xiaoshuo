@@ -18,7 +18,7 @@ import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } f
 import { AppError } from "./errors.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
-import { attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
+import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -52,6 +52,7 @@ const identifier = z.string().trim().min(1).max(200);
 const optionalStrings = z.array(z.string()).optional();
 const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
+const aiConversationTaskTypeSchema = z.enum(aiConversationTaskTypes);
 const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
@@ -2040,8 +2041,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     )));
   });
   app.post("/api/works/:workId/ai-conversations", (request, response) => {
-    const input = parse(z.object({ title: z.string().max(200).optional() }), request.body ?? {});
-    data(response, store.createAiConversation(request.params.workId, input.title), 201);
+    const input = parse(z.object({
+      title: z.string().max(200).optional(),
+      taskType: aiConversationTaskTypeSchema.optional()
+    }).strict(), request.body ?? {});
+    data(response, store.createAiConversation(request.params.workId, input.title, input.taskType), 201);
   });
   app.get("/api/ai-conversations/:conversationId", (request, response) => {
     const pagination = parsePagination(request.query);
@@ -2056,6 +2060,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const forked = store.forkAiConversation(request.params.conversationId, input.messageId, input.title);
     const permissions = requestPermissions(request, String(forked.workId));
     data(response, redactAiConversation(forked, permissions), 201);
+  });
+  app.patch("/api/ai-conversations/:conversationId/task-type", (request, response) => {
+    const input = parse(z.object({ taskType: aiConversationTaskTypeSchema }).strict(), request.body);
+    const updated = store.setAiConversationTaskType(request.params.conversationId, input.taskType);
+    const permissions = requestPermissions(request, String(updated.workId));
+    data(response, redactAiConversation(updated, permissions));
   });
   app.patch("/api/ai-conversations/:conversationId/roleplay", (request, response) => {
     const input = parse(z.object({ characterId: identifier.nullable() }).strict(), request.body);
