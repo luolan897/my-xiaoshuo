@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260801-google-vertex-typography-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260801-ai-setting-context-google-vertex-typography-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -315,7 +315,12 @@
               <option value="chapter-summary">当前章节 + 全书概要</option>
               <option value="volume">当前卷</option>
               <option value="book">全书</option>
+              <option value="settings-catalog">设定库</option>
             </select>
+            <label class="ai-include-setting-info" for="ai-include-setting-info">
+              <input id="ai-include-setting-info" type="checkbox" checked>
+              <span>注入设定信息</span>
+            </label>
           </div>
           <div class="field-label prompt-model-field">
             <select id="ai-model" aria-label="实际使用模型"></select>
@@ -946,6 +951,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-google-vertex-typography-v1"></script>
+    <script type="module" src="/app.js?v=20260801-ai-setting-context-google-vertex-typography-v1"></script>
   </body>
 </html>

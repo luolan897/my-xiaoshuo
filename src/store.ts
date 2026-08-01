@@ -1,4 +1,4 @@
-import { DRAFT_SETTING_MODULES, type DraftSettingModule, type ParsedNovel } from "./domain.js";
+import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
@@ -422,6 +422,7 @@ export type AiConversationContext = {
   compactedMessageCount: number;
   totalMessageCount: number;
   warningPending: boolean;
+  injectedEntities: AiInjectedEntities;
   messages: Array<{
     id: string;
     role: "user" | "assistant";
@@ -530,6 +531,32 @@ function booleanValue(row: Row, key: string): boolean {
 
 export function normalizeCharacterName(value: string): string {
   return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("zh-CN");
+}
+
+const EMPTY_AI_INJECTED_ENTITIES: AiInjectedEntities = {
+  characters: [],
+  races: [],
+  organizations: []
+};
+
+function parseAiInjectedEntities(value: unknown): AiInjectedEntities {
+  const parsed = typeof value === "string" ? json<Record<string, unknown>>(value, {}) : isRecord(value) ? value : {};
+  const uniqueIds = (items: unknown): string[] => [...new Set((Array.isArray(items) ? items : [])
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim()))];
+  return {
+    characters: uniqueIds(parsed.characters),
+    races: uniqueIds(parsed.races),
+    organizations: uniqueIds(parsed.organizations)
+  };
+}
+
+function mergeAiInjectedEntities(base: AiInjectedEntities, extra: Partial<AiInjectedEntities>): AiInjectedEntities {
+  return {
+    characters: [...new Set([...base.characters, ...(extra.characters ?? [])])],
+    races: [...new Set([...base.races, ...(extra.races ?? [])])],
+    organizations: [...new Set([...base.organizations, ...(extra.organizations ?? [])])]
+  };
 }
 
 export class Store {
@@ -6364,6 +6391,7 @@ export class Store {
       compactedMessageCount,
       totalMessageCount: rows.length,
       warningPending: Boolean(optionalString(conversation, "context_warning_at")),
+      injectedEntities: parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
       messages: rows.slice(compactedMessageCount)
         .filter((message) => requiredString(message, "id") !== excludeMessageId)
         .map((message) => ({
@@ -6373,6 +6401,65 @@ export class Store {
           metadata: json<Record<string, unknown>>(requiredString(message, "metadata_json"), {})
         }))
     };
+  }
+
+  getAiConversationInjectedEntities(conversationId: string, workId: string): AiInjectedEntities {
+    const conversation = this.db.get("SELECT work_id, injected_entities_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    return parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES);
+  }
+
+  mergeAiConversationInjectedEntities(conversationId: string, workId: string, extra: Partial<AiInjectedEntities>): AiInjectedEntities {
+    const conversation = this.db.get("SELECT work_id, injected_entities_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const merged = mergeAiInjectedEntities(
+      parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
+      extra
+    );
+    this.db.run(
+      "UPDATE ai_conversations SET injected_entities_json = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify(merged),
+      now(),
+      conversationId
+    );
+    return merged;
+  }
+
+  /** 对话首轮写入 system 时钟文案；已有值则原样返回，禁止后续覆盖。 */
+  ensureAiConversationSystemClock(conversationId: string, workId: string, candidate: string): string {
+    const conversation = this.db.get("SELECT work_id, system_clock_text FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const existing = (optionalString(conversation, "system_clock_text") ?? "").trim();
+    if (existing) return existing;
+    const clock = candidate.trim();
+    if (!clock) return "";
+    this.db.run(
+      "UPDATE ai_conversations SET system_clock_text = ? WHERE id = ? AND TRIM(system_clock_text) = ''",
+      clock,
+      conversationId
+    );
+    const refreshed = this.db.get("SELECT system_clock_text FROM ai_conversations WHERE id = ?", conversationId);
+    return (optionalString(refreshed ?? {}, "system_clock_text") ?? clock).trim() || clock;
+  }
+
+  listCharacterNameEntries(workId: string): Array<{ characterId: string; normalizedName: string; displayName: string; kind: "primary" | "alias" }> {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT character_id, normalized_name, display_name, kind FROM character_names
+       WHERE work_id = ?
+         AND character_id NOT IN (SELECT id FROM characters WHERE work_id = ? AND merged_into_character_id IS NOT NULL)
+       ORDER BY LENGTH(normalized_name) DESC, sort_order ASC`,
+      workId,
+      workId
+    ).map((row) => ({
+      characterId: requiredString(row, "character_id"),
+      normalizedName: requiredString(row, "normalized_name"),
+      displayName: requiredString(row, "display_name"),
+      kind: requiredString(row, "kind") === "alias" ? "alias" as const : "primary" as const
+    }));
   }
 
   getAiConversationTitleContext(conversationId: string, workId: string): AiConversationTitleContext {
@@ -6472,9 +6559,12 @@ export class Store {
     const sourceCompactedCount = Math.max(0, numberValue(conversation, "compacted_message_count"));
     const forkCompactedCount = targetIndex + 1 >= sourceCompactedCount ? Math.min(sourceCompactedCount, targetIndex + 1) : 0;
     const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
+    const injectedEntitiesJson = optionalString(conversation, "injected_entities_json")
+      ?? JSON.stringify(EMPTY_AI_INJECTED_ENTITIES);
+    const systemClockText = optionalString(conversation, "system_clock_text") ?? "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+"INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
         title.slice(0, 200),
@@ -6483,6 +6573,8 @@ export class Store {
         conversation.agent_tools_json == null
           ? JSON.stringify(normalizeWorkAgentTools(this.getWorkAiSettings(requiredString(conversation, "work_id")).agentTools))
           : String(conversation.agent_tools_json),
+        injectedEntitiesJson,
+        systemClockText,
         timestamp,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -7916,6 +8008,9 @@ export class Store {
     }
     if (scope.type === "settings") {
       return [{ type: "settings", title: "仅设定集" }];
+    }
+    if (scope.type === "settings-catalog") {
+      return [{ type: "settings-catalog", title: "设定库" }];
     }
     if (scope.type === "selection" && typeof scope.selection === "string") {
       return [{ type: "selection", selection: scope.selection }];
