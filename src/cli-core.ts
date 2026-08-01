@@ -133,6 +133,17 @@ function emitText(stream: OutputStream, value: string): void {
   stream.write(value.endsWith("\n") ? value : `${value}\n`);
 }
 
+function emitHttpServerWarning(stream: OutputStream, server: string, compact: boolean): void {
+  if (new URL(server).protocol !== "http:") return;
+  emitJson(stream, {
+    warning: {
+      code: "CLI_SERVER_HTTP_WARNING",
+      message: "当前服务端使用 HTTP，API Key 和业务数据将以明文传输；请仅在可信局域网中使用，公网访问请配置 HTTPS",
+      server
+    }
+  }, compact);
+}
+
 function configPath(parsed: ParsedArguments, dependencies: Required<Pick<CliDependencies, "env" | "cwd" | "homeDirectory">>): string {
   const configured = option(parsed, "config") ?? dependencies.env.SCRIVERSE_CONFIG;
   if (configured) return isAbsolute(configured) ? configured : resolve(dependencies.cwd, configured);
@@ -149,14 +160,6 @@ function normalizeServer(value: string): string {
   }
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new CliError("CLI_SERVER_INVALID", "服务端地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
-  }
-  const loopbackHttp = url.protocol === "http:" && (
-    url.hostname === "localhost"
-    || url.hostname === "127.0.0.1"
-    || url.hostname === "[::1]"
-  );
-  if (url.protocol === "http:" && !loopbackHttp) {
-    throw new CliError("CLI_SERVER_INSECURE", "远程服务端地址必须使用 HTTPS；HTTP 仅允许连接本机回环地址");
   }
   if (url.pathname !== "/" && url.pathname !== "") {
     throw new CliError("CLI_SERVER_INVALID", "服务端地址不能包含路径，请只填写协议、主机和端口");
@@ -499,7 +502,7 @@ function helpText(): string {
   scriverse work get <workId>
   scriverse work history <workId>
   scriverse work restore <workId> --version <number>
-  scriverse manuscript get <workId> [--format json|markdown|txt] [--output <path>]
+  scriverse manuscript get <workId> [--format json|markdown|txt|docx] [--output <path>]
   scriverse search <workId> --query <text> [--type <type>] [--limit <number>]
   scriverse audit <workId>
   scriverse writing progress <workId>
@@ -536,7 +539,7 @@ AI 编辑辅助：
 
 function schemaList(): Record<string, unknown> {
   return {
-    output: "除 manuscript 的 markdown/txt 外，所有成功结果都输出 JSON；错误输出到 stderr 并返回非零状态码。",
+    output: "除 manuscript 的 markdown/txt/docx 外，所有成功结果都输出 JSON；错误输出到 stderr 并返回非零状态码。",
     input: {
       json: "create/update 使用 --input file.json 或 --input - 从标准输入读取 JSON 对象",
       longText: "使用可重复的 --field-file field=path 注入长文本字段",
@@ -599,8 +602,11 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
     const config = readOptionalConfig(path);
     const requested = parsed.positionals[1];
     if (requested) {
-      config.defaultServer = normalizeServer(requested);
+      const server = normalizeServer(requested);
+      const shouldWarn = server !== config.defaultServer;
+      config.defaultServer = server;
       writeConfig(path, config);
+      if (shouldWarn) emitHttpServerWarning(dependencies.stderr, server, compact);
     }
     emitJson(dependencies.stdout, {
       defaultServer: config.defaultServer,
@@ -624,6 +630,7 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
         throw new CliError("CLI_API_KEY_REQUIRED", "请通过 --api-key、--api-key-file 或 SCRIVERSE_API_KEY 三者之一提供 API Key");
       }
       const apiKey = supplied[0]!;
+      emitHttpServerWarning(dependencies.stderr, server, compact);
       const temporary: CliRequestConfig = {
         server,
         apiKey,
@@ -767,12 +774,12 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
     const workId = requiredPosition(parsed.positionals, 2, "workId");
     assertPositionCount(parsed.positionals, 3);
     const format = option(parsed, "format") ?? "json";
-    if (!["json", "markdown", "txt"].includes(format)) throw new CliError("CLI_FORMAT_INVALID", "format 必须是 json、markdown 或 txt");
+    if (!["json", "markdown", "txt", "docx"].includes(format)) throw new CliError("CLI_FORMAT_INVALID", "format 必须是 json、markdown、txt 或 docx");
     if (format === "json") {
       if (option(parsed, "output")) throw new CliError("CLI_OUTPUT_UNSUPPORTED", "JSON 格式直接输出到标准输出，不支持 --output");
       emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}`), compact);
-    } else if (format === "markdown") {
-      const outputPath = option(parsed, "output") ?? `novel-${workId}.zip`;
+    } else if (format === "markdown" || format === "docx") {
+      const outputPath = option(parsed, "output") ?? (format === "docx" ? `novel-${workId}.docx` : `novel-${workId}.zip`);
       emitJson(dependencies.stdout, {
         format,
         ...(await downloadToFile(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/export?format=${format}`, outputPath, dependencies.cwd))

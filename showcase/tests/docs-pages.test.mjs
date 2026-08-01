@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+test("Vercel 仅允许 main 分支自动部署", async () => {
+  const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
+  assert.deepEqual(vercel.git?.deploymentEnabled, { "*": false, main: true });
+});
+
 test("docs 路由提供全局工具调用限制说明页", async () => {
   const indexHtml = await readFile(new URL("../public/docs/index.html", import.meta.url), "utf8");
   const docHtml = await readFile(new URL("../public/docs/global-tool-call-limit.html", import.meta.url), "utf8");

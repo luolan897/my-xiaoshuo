@@ -167,7 +167,6 @@ let systemBootId = null;
 let systemBootCheckTimer = null;
 let systemBootCheckPromise = null;
 let systemRestartDetected = false;
-let systemRestartReloading = false;
 let chapterAnnotations = [];
 let workAuditRecords = [];
 let workAuditNextPage = null;
@@ -3196,7 +3195,7 @@ function renderSettingsHub() {
   const hasWork = Boolean(state.work);
   const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
   const canReadAggregate = hasWork && canReadAggregateContent();
-  const canReadFullExport = canReadAggregate && canReadModule("drafts");
+  const canExportManuscript = hasWork && canReadModule("editor");
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
@@ -3206,10 +3205,11 @@ function renderSettingsHub() {
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !canReadAggregate;
-  $("#export-button").disabled = !canReadFullExport;
+  $("#export-button").disabled = !canExportManuscript;
+  $("#export-button").setAttribute("aria-expanded", "false");
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
-    ? `当前作品：《${state.work.title}》。导出的 ZIP 内含 Markdown 正文，仅包含分卷、章节标题与正文。`
+    ? `当前作品：《${state.work.title}》。导出正文时可选择 Markdown ZIP 或 DOCX；DOCX 在有封面时会嵌入为首页。`
     : "当前未选择作品；打开作品后可使用导出。";
 }
 
@@ -7588,9 +7588,39 @@ function bindWorkCoverControls(work) {
   });
 }
 
-function downloadWorkManuscript(work) {
+function downloadWorkManuscript(work, format = "markdown") {
   if (!work?.id) return;
-  window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=markdown`;
+  const exportFormat = format === "docx" ? "docx" : "markdown";
+  window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=${exportFormat}`;
+}
+
+let manuscriptExportWork = null;
+
+function closeManuscriptExportMenu() {
+  const menu = $("#manuscript-export-menu");
+  if (!menu) return;
+  menu.classList.add("hidden");
+  manuscriptExportWork = null;
+  $("#export-button")?.setAttribute("aria-expanded", "false");
+  $("#work-export-button")?.setAttribute("aria-expanded", "false");
+}
+
+function showManuscriptExportMenu(anchor, work) {
+  if (!work?.id || !anchor) return;
+  const menu = $("#manuscript-export-menu");
+  if (!menu) return;
+  manuscriptExportWork = work;
+  menu.classList.remove("hidden");
+  const anchorRect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - menuRect.width - 8));
+  const top = Math.max(8, Math.min(anchorRect.bottom + 6, window.innerHeight - menuRect.height - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  if (anchor.id === "export-button" || anchor.id === "work-export-button") {
+    anchor.setAttribute("aria-expanded", "true");
+  }
+  menu.querySelector("button[data-export-format]")?.focus();
 }
 
 function openWorkSettingsDialog(work) {
@@ -7610,8 +7640,8 @@ function openWorkSettingsDialog(work) {
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
   const exportField = `<section class="work-access-field" aria-labelledby="work-export-settings-title">
-    <div><strong id="work-export-settings-title">导出正文</strong><small>服务器将分卷、章节标题与正文压缩为 ZIP，压缩包内含 Markdown 文件；不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
-    <button id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>
+    <div><strong id="work-export-settings-title">导出正文</strong><small>点击后选择导出 Markdown ZIP 或 DOCX（书名、分卷、章节为一级至三级标题；若已设置封面则嵌入为首页）。不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
+    <button id="work-export-button" class="ghost-button" type="button" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false">导出正文</button>
   </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
     <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>恢复已软删除的章节，或彻底删除正文、版本和关联资料。</small></div>
@@ -7645,7 +7675,11 @@ function openWorkSettingsDialog(work) {
     $("#form-dialog").close();
     void openImportHistory();
   });
-  $("#work-export-button")?.addEventListener("click", () => downloadWorkManuscript(work));
+  $("#work-export-button")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showManuscriptExportMenu(event.currentTarget, work);
+  });
   $("#chapter-recycle-bin-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openChapterRecycleBin();
@@ -10261,35 +10295,26 @@ $("#onboarding-dialog").addEventListener("cancel", (event) => {
 });
 $("#system-restart-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
-  if (!$("#system-restart-discard-confirmation").classList.contains("hidden")) hideSystemRestartDiscardConfirmation();
 });
 function hasUnsavedEditorChanges() {
   return state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty;
 }
 
-function reloadAfterSystemRestart() {
-  systemRestartReloading = true;
+function redirectToLoginAfterSystemRestart() {
+  state.user = null;
+  state.csrfToken = null;
+  moduleRequestCache.clear();
+  document.documentElement.classList.remove("dev-auth-bypass");
+  document.documentElement.classList.add("login-route");
   window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-  window.location.reload();
+  const toastRegion = $("#toast-region");
+  toastRegion.replaceChildren();
+  if (typeof toastRegion.hidePopover === "function" && toastRegion.matches(":popover-open")) toastRegion.hidePopover();
+  $("#system-restart-dialog").close();
+  showAuth(false);
 }
 
-function hideSystemRestartDiscardConfirmation() {
-  $("#system-restart-discard-confirmation").classList.add("hidden");
-  const button = $("#system-restart-confirm");
-  button.disabled = false;
-  button.setAttribute("aria-expanded", "false");
-  button.focus();
-}
-
-$("#system-restart-confirm").addEventListener("click", () => {
-  if (!hasUnsavedEditorChanges()) return reloadAfterSystemRestart();
-  $("#system-restart-discard-confirmation").classList.remove("hidden");
-  $("#system-restart-confirm").disabled = true;
-  $("#system-restart-confirm").setAttribute("aria-expanded", "true");
-  $("#system-restart-discard-cancel").focus();
-});
-$("#system-restart-discard-cancel").addEventListener("click", hideSystemRestartDiscardConfirmation);
-$("#system-restart-discard-confirm").addEventListener("click", reloadAfterSystemRestart);
+$("#system-restart-confirm").addEventListener("click", redirectToLoginAfterSystemRestart);
 $("#onboarding-dialog").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
@@ -10894,6 +10919,7 @@ $("#form-dialog").addEventListener("close", () => {
   formDialogVditors.forEach(destroyVditorEditor);
   formDialogVditors = [];
   void discardPendingMarkdownAttachments();
+  closeManuscriptExportMenu();
   if (relationshipPresenceId && !$("#form-dialog").open) setRelationshipPresence(null);
 });
 $("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));
@@ -11253,6 +11279,9 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#chapter-type-menu")) closeChapterTypeMenu();
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
   if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
+  if (!event.target.closest("#manuscript-export-menu") && !event.target.closest("#export-button") && !event.target.closest("#work-export-button")) {
+    closeManuscriptExportMenu();
+  }
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
@@ -11275,6 +11304,7 @@ document.addEventListener("keydown", (event) => {
     closeChapterTypeMenu();
     closeLineCitationMenu();
     closeMarkdownTableMenu(true);
+    closeManuscriptExportMenu();
     hideAiMentionMenu();
     setAiContextDistributionVisible(false);
   }
@@ -11427,14 +11457,33 @@ $("#search-form").addEventListener("submit", async (event) => {
     $("#search-results").innerHTML = `<p class="search-results-status">${esc(error.message)}</p>`;
   });
 });
-$("#export-button").addEventListener("click", () => downloadWorkManuscript(state.work));
+$("#export-button").addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (!state.work) return;
+  const menu = $("#manuscript-export-menu");
+  const expanded = menu && !menu.classList.contains("hidden") && manuscriptExportWork?.id === state.work.id;
+  if (expanded) {
+    closeManuscriptExportMenu();
+    return;
+  }
+  showManuscriptExportMenu(event.currentTarget, state.work);
+});
+$("#manuscript-export-menu").addEventListener("click", (event) => {
+  const option = event.target.closest("[data-export-format]");
+  if (!option || !manuscriptExportWork) return;
+  const format = option.getAttribute("data-export-format") === "docx" ? "docx" : "markdown";
+  const work = manuscriptExportWork;
+  closeManuscriptExportMenu();
+  downloadWorkManuscript(work, format);
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (state.user && !systemRestartDetected) scheduleSystemBootCheck(0);
   void refreshSystemHealth();
 });
 window.addEventListener("beforeunload", (event) => {
-  if (!systemRestartReloading && hasUnsavedEditorChanges()) event.preventDefault();
+  if (hasUnsavedEditorChanges()) event.preventDefault();
 });
 window.addEventListener("online", () => {
   updateSystemHealth({ status: "checking" });

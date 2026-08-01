@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260801-daily-token-quota-server-tz">
+    <link rel="stylesheet" href="/styles.css?v=20260801-merge-pr-296-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -58,7 +58,7 @@
         <p id="auth-error" class="auth-error" role="alert"></p>
       </div>
       <footer class="product-footer auth-product-footer" data-product-footer aria-label="叙界项目信息">
-        <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
+        <span class="product-footer-meta"><span>© <time data-product-footer-year></time></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
         <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
       </footer>
     </section>
@@ -159,7 +159,7 @@
           </div>
           <div id="book-shelf" class="book-shelf" data-testid="book-shelf"></div>
           <footer class="product-footer" data-product-footer aria-label="叙界项目信息">
-            <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
+            <span class="product-footer-meta"><span>© <time data-product-footer-year></time></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
             <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
           </footer>
         </section>
@@ -200,11 +200,11 @@
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
-            <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">ZIP</span><strong>导出正文</strong><small>以 ZIP 下载 Markdown 正文，不包含角色和设定资料</small></button>
+            <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false"><span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择导出 Markdown ZIP 或 DOCX；不包含角色和设定资料</small></button>
           </div>
           <p id="settings-work-note" class="settings-work-note"></p>
           <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
-            <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
+            <span class="product-footer-meta"><span>© <time data-product-footer-year></time></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
             <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
           </footer>
         </section>
@@ -346,6 +346,17 @@
         <small>关闭时可横向滚动</small>
       </button>
     </div>
+    <div id="manuscript-export-menu" class="manuscript-export-menu hidden" role="menu" aria-label="导出正文格式">
+      <strong>选择导出格式</strong>
+      <button type="button" role="menuitem" data-export-format="markdown">
+        <span>导出 Markdown</span>
+        <small>打包为 ZIP，内含 Markdown 正文</small>
+      </button>
+      <button type="button" role="menuitem" data-export-format="docx">
+        <span>导出 DOCX</span>
+        <small>Word 正文；有封面时嵌入为首页</small>
+      </button>
+    </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
     <input id="avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
@@ -390,17 +401,9 @@
       </div>
       <div class="dialog-fields">
         <p id="system-restart-dialog-description" class="system-restart-message">本次登录已经失效，请重新登录。</p>
-        <section id="system-restart-discard-confirmation" class="system-restart-discard-confirmation hidden" role="alertdialog" aria-labelledby="system-restart-discard-title" aria-describedby="system-restart-discard-description">
-          <strong id="system-restart-discard-title">放弃未保存修改</strong>
-          <p id="system-restart-discard-description">检测到尚未保存的编辑内容。确定放弃这些内容并重新登录吗？</p>
-          <div class="system-restart-confirmation-actions">
-            <button id="system-restart-discard-cancel" class="ghost-button" type="button">继续编辑</button>
-            <button id="system-restart-discard-confirm" class="primary-button" type="button">放弃并重新登录</button>
-          </div>
-        </section>
       </div>
       <div class="dialog-actions">
-        <button id="system-restart-confirm" class="primary-button" type="button" aria-controls="system-restart-discard-confirmation" aria-expanded="false">我知道了</button>
+        <button id="system-restart-confirm" class="primary-button" type="button">我知道了</button>
       </div>
     </dialog>
 
@@ -917,6 +920,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-daily-token-quota-server-tz"></script>
+    <script type="module" src="/app.js?v=20260801-merge-pr-296-v1"></script>
   </body>
 </html>
