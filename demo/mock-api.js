@@ -712,7 +712,11 @@ async function mockApi(input, init = {}) {
     const provider = {
       id: demoId("provider"),
       name: String(body.name ?? "").trim(),
-      protocol: body.protocol === "anthropic-messages" ? "anthropic-messages" : "openai-chat-completions",
+      protocol: body.protocol === "anthropic-messages"
+        ? "anthropic-messages"
+        : body.protocol === "google-vertex"
+          ? "google-vertex"
+          : "openai-chat-completions",
       baseUrl: normalizeProviderBaseUrl(body.baseUrl),
       apiKey: String(body.apiKey ?? "").trim(),
       concurrencyLimit: Number(body.concurrencyLimit ?? 10),

@@ -68,7 +68,8 @@ export function providerConnectionLabel(value) {
 export function providerProtocolLabel(value) {
   return enumLabel({
     "openai-chat-completions": "OpenAI Chat Completions",
-    "anthropic-messages": "Anthropic Messages"
+    "anthropic-messages": "Anthropic Messages",
+    "google-vertex": "Google Vertex"
   }, value, "未知接口协议");
 }
 

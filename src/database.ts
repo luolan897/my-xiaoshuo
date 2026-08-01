@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 65;
+export const DATABASE_SCHEMA_VERSION = 66;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -382,7 +382,7 @@ export class Database {
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         base_url TEXT NOT NULL,
-        protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages')),
+        protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages', 'google-vertex')),
         encrypted_key TEXT NOT NULL,
         key_iv TEXT NOT NULL,
         key_tag TEXT NOT NULL,
@@ -2604,6 +2604,56 @@ export class Database {
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (65, ?)", new Date().toISOString());
       });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(66)) {
+      this.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.transaction(() => {
+          this.run(`CREATE TABLE providers_v66 (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            base_url TEXT NOT NULL,
+            protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages', 'google-vertex')),
+            encrypted_key TEXT NOT NULL,
+            key_iv TEXT NOT NULL,
+            key_tag TEXT NOT NULL,
+            key_hint TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'disabled',
+            connection_status TEXT NOT NULL DEFAULT 'unchecked',
+            concurrency_limit INTEGER NOT NULL DEFAULT 10 CHECK(concurrency_limit BETWEEN 1 AND 100),
+            rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
+            max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
+            default_model_id TEXT,
+            note TEXT NOT NULL DEFAULT '',
+            last_error TEXT,
+            last_success_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )`);
+          this.run(`INSERT INTO providers_v66 (
+            id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
+            connection_status, concurrency_limit, rpm_limit, max_tokens, default_model_id, note,
+            last_error, last_success_at, created_at, updated_at
+          )
+          SELECT
+            id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
+            connection_status, concurrency_limit, rpm_limit, max_tokens, default_model_id, note,
+            last_error, last_success_at, created_at, updated_at
+          FROM providers`);
+          this.run("DROP TABLE providers");
+          this.run("ALTER TABLE providers_v66 RENAME TO providers");
+          this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (66, ?)", new Date().toISOString());
+        });
+      } finally {
+        this.raw.exec("PRAGMA foreign_keys = ON");
+      }
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
         throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
