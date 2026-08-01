@@ -25,9 +25,8 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("/context-scope`");
     expect(application).toContain("if (state.aiPromptSent) {");
     expect(application).toContain("state.aiContextScope ?? { type: \"none\" }");
-    expect(application).toContain("await persistAiConversationContextScope(requestScope.scope);");
-    expect(application).toContain("当前对话的上下文引用已锁定，请新建对话后再添加引用");
-    expect(application).toContain("当前对话的上下文引用已锁定，请新建对话后再引用正文");
+    expect(application).toContain("await persistAiConversationContextScope(requestScope.conversationScope);");
+    expect(application).toContain("mergeAiReferenceScope(conversationScope, state.aiReferences)");
     expect(application).toContain("Agent 只能查询与该角色自身有关的记忆");
     expect(application).toContain("recall_self: \"回忆自身\"");
     expect(application).toContain("function syncAiTaskOptions()");

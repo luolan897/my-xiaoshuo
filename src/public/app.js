@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
-import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
+import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-lock-v2";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
@@ -2030,7 +2030,6 @@ function syncAiReferencesWithPrompt() {
 
 function updateAiMentionMenu() {
   syncAiReferencesWithPrompt();
-  if (state.aiPromptSent) return hideAiMentionMenu();
   const prompt = $("#ai-prompt");
   const match = findAiMention(aiPromptTextBeforeCursor());
   if (!match) return hideAiMentionMenu();
@@ -2051,7 +2050,6 @@ function updateAiMentionMenu() {
 }
 
 function selectAiMention(button) {
-  if (state.aiPromptSent) return toast("当前对话的上下文引用已锁定，请新建对话后再添加引用", "error");
   if (!aiMentionMatch || !aiMentionRange) return;
   const prompt = $("#ai-prompt");
   const reference = {
@@ -2084,7 +2082,6 @@ function selectAiMention(button) {
 
 function addSelectedLinesAsCitation() {
   if (!state.chapter || !chapterLineSelection) return;
-  if (state.aiPromptSent) return toast("当前对话的上下文引用已锁定，请新建对话后再引用正文", "error");
   const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
   const citation = {
     id: `${state.chapter.id}:${selection.safeStart}:${selection.safeEnd}`,
@@ -7256,8 +7253,9 @@ function currentAiRequestScope() {
   const roleplaySelected = selectedTaskType === "roleplay";
   const taskType = roleplaySelected ? "chat" : selectedTaskType;
   if (state.aiPromptSent) {
-    const scope = JSON.parse(JSON.stringify(state.aiContextScope ?? { type: "none" }));
-    return { taskType, scope, selection: typeof scope.selection === "string" ? scope.selection : "" };
+    const conversationScope = JSON.parse(JSON.stringify(state.aiContextScope ?? { type: "none" }));
+    const scope = mergeAiReferenceScope(conversationScope, state.aiReferences);
+    return { taskType, scope, conversationScope, selection: typeof conversationScope.selection === "string" ? conversationScope.selection : "" };
   }
   const scopeType = roleplaySelected ? "none" : $("#ai-scope").value;
   const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";
@@ -7265,14 +7263,14 @@ function currentAiRequestScope() {
   const selection = state.chapter ? $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd) : "";
   const volume = state.chapter ? state.work.volumes.find((item) => item.id === state.chapter.volumeId) : null;
   const includeBookSummary = scopeType === "chapter-summary";
-  const scope = taskType === "polish" ? { type: "chapter", chapterId: state.chapter?.id, selection }
+  const conversationScope = taskType === "polish" ? { type: "chapter", chapterId: state.chapter?.id, selection }
     : scopeType === "none" ? { type: "none", ...(taskType === "continue" && state.chapter ? { chapterId: state.chapter.id } : {}) }
     : scopeType === "book" ? { type: "book" }
     : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
     : { type: "chapter", chapterId: state.chapter?.id };
-  Object.assign(scope, buildAiReferenceScope(state.aiReferences));
-  if (includeBookSummary) scope.includeBookSummary = true;
-  return { taskType, scope, selection };
+  if (includeBookSummary) conversationScope.includeBookSummary = true;
+  const scope = mergeAiReferenceScope(conversationScope, state.aiReferences);
+  return { taskType, scope, conversationScope, selection };
 }
 
 function renderAiContextDistribution(usage) {
@@ -9716,7 +9714,7 @@ async function sendAi() {
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
   try {
     await persistAiConversationTaskType($("#ai-task").value);
-    await persistAiConversationContextScope(requestScope.scope);
+    await persistAiConversationContextScope(requestScope.conversationScope);
   } catch (error) {
     return toast(`对话配置锁定失败：${error.message}`, "error");
   }
