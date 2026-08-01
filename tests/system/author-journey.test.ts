@@ -321,7 +321,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260801-ai-roleplay-chat-merge-v1');
-    expect(page.text).toContain('/styles.css?v=20260801-ai-roleplay-chat-merge-v1');
+    expect(page.text).toContain('/styles.css?v=20260801-left-panel-spacing-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -738,8 +738,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".book-card-settings {");
     expect(styles.text).toContain("padding: 2px 6px;");
     expect(styles.text).toContain(".left-panel { display: flex; flex-direction: column; border-right: 1px solid var(--line); padding: 0; overflow: hidden; }");
-    expect(styles.text).toContain(".left-panel-body { flex: 1 1 auto; min-height: 0; padding: 18px 24px 16px 14px; overflow-y: auto; scrollbar-gutter: stable; }");
-    expect(styles.text).toContain(".left-panel-body { padding-inline: 10px 24px; }");
+    expect(styles.text).toContain(".left-panel-body { flex: 1 1 auto; min-height: 0; padding: 18px 14px 16px; overflow-y: auto; }");
+    expect(styles.text).toContain(".left-panel-body { padding-inline: 10px; }");
+    expect(styles.text).not.toContain(".left-panel-body { flex: 1 1 auto; min-height: 0; padding: 18px 24px 16px 14px; overflow-y: auto; scrollbar-gutter: stable; }");
     expect(page.text).toContain('class="left-panel-body"');
     expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
     expect(styles.text).toContain(".file-button { min-height: 30px; font-size: 11px;");
