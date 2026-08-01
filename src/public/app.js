@@ -1837,12 +1837,12 @@ function renderAiRoleplayCharacterSelect() {
   const select = $("#ai-roleplay-character");
   const selectedId = String(state.aiRoleplayCharacter?.id ?? "");
   const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
-  const options = [{ id: "", name: "角色扮演：关闭" }, ...availableCharacters.map((character) => ({
+  const options = [{ id: "", name: "不使用角色扮演" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: `角色扮演：${String(character.name)}`
+    name: `扮演 ${String(character.name)}`
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
-    options.push({ id: selectedId, name: `角色扮演：${String(state.aiRoleplayCharacter.name)}` });
+    options.push({ id: selectedId, name: `扮演 ${String(state.aiRoleplayCharacter.name)}` });
   }
   select.replaceChildren(...options.map((option) => {
     const element = document.createElement("option");
@@ -1860,6 +1860,12 @@ function renderAiRoleplayCharacterSelect() {
     : "当前账户没有角色模块读取权限";
 }
 
+function syncAiChatOptionsVisibility() {
+  const visible = $("#ai-task").value === "chat";
+  $("#ai-chat-options").classList.toggle("hidden", !visible);
+  $("#ai-chat-options").setAttribute("aria-hidden", String(!visible));
+}
+
 function applyAiRoleplayCharacter(character) {
   state.aiRoleplayCharacter = character?.id ? character : null;
   const active = Boolean(state.aiRoleplayCharacter);
@@ -1874,6 +1880,7 @@ function applyAiRoleplayCharacter(character) {
     ? `以 ${String(state.aiRoleplayCharacter.name)} 的身份开始对话……`
     : "告诉 AI 你想讨论或修改什么……";
   renderAiRoleplayCharacterSelect();
+  syncAiChatOptionsVisibility();
   renderAiQuickActions();
   resetAiContextMeter();
 }
@@ -11185,7 +11192,10 @@ $("#ai-roleplay-character").addEventListener("change", async (event) => {
     renderAiRoleplayCharacterSelect();
   }
 });
-$("#ai-task").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-task").addEventListener("change", () => {
+  syncAiChatOptionsVisibility();
+  setAiContextMeter(null);
+});
 $("#ai-scope").addEventListener("change", () => setAiContextMeter(null));
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
@@ -11466,6 +11476,7 @@ $(".quick-actions").addEventListener("click", (event) => {
   const button = event.target.closest("[data-task]");
   if (!button) return;
   $("#ai-task").value = button.dataset.task;
+  syncAiChatOptionsVisibility();
   setAiPromptText(button.dataset.prompt);
   $("#ai-prompt").focus();
 });
