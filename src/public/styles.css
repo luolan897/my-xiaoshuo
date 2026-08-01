@@ -2017,11 +2017,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .book-summary-context-percent-field { width: min(100%, 280px); }
 .context-compact-threshold-field { width: min(100%, 280px); }
 .agent-tool-call-limit-field { width: min(100%, 280px); }
-.book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px; font-family: var(--font-latin), monospace; }
+.agent-tool-call-global-multiplier-field { width: min(100%, 280px); }
+.book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input, .agent-tool-call-global-multiplier-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px; font-family: var(--font-latin), monospace; }
 .config-inline-save { display: flex; align-items: flex-end; gap: 10px; margin: 14px 0 4px; flex-wrap: wrap; }
 .config-inline-save .book-summary-context-percent-field,
 .config-inline-save .context-compact-threshold-field,
-.config-inline-save .agent-tool-call-limit-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
+.config-inline-save .agent-tool-call-limit-field,
+.config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
 .relationship-index-summary { display: grid; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .relationship-index-state-row { display: flex; align-items: center; gap: 12px 18px; flex-wrap: wrap; color: var(--muted); font-size: 10px; }
 .relationship-index-state-row strong { color: var(--ink); font-family: var(--font-latin), monospace; font-weight: 600; }

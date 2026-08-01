@@ -1116,6 +1116,7 @@ export class Store {
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
+      agentToolCallGlobalMultiplier: Math.min(10, Math.max(2, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
         .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
         .filter((tool, index, tools) => tools.indexOf(tool) === index),
@@ -1136,6 +1137,7 @@ export class Store {
     bookSummaryContextPercent?: number;
     contextCompactThreshold?: number;
     agentToolCallLimit?: number;
+    agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
     titleGenerationModelId?: string | null;
   }): Record<string, unknown> {
@@ -1151,6 +1153,7 @@ export class Store {
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
+    const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
     const nextAgentTools = input.agentTools ?? current.agentTools as string[];
     const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
       ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
@@ -1160,8 +1163,9 @@ export class Store {
          work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
-         context_compact_threshold, agent_tool_call_limit, agent_tools_json, title_generation_model_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
+         agent_tools_json, title_generation_model_id, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          auto_run_enabled = excluded.auto_run_enabled,
@@ -1176,6 +1180,7 @@ export class Store {
          book_summary_context_percent = excluded.book_summary_context_percent,
          context_compact_threshold = excluded.context_compact_threshold,
          agent_tool_call_limit = excluded.agent_tool_call_limit,
+         agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
          updated_at = excluded.updated_at`,
@@ -1193,6 +1198,7 @@ export class Store {
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
       Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      Math.min(10, Math.max(2, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
       timestamp
@@ -1207,6 +1213,7 @@ export class Store {
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
       agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      agentToolCallGlobalMultiplier: Math.min(10, Math.max(2, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
       titleGenerationModelId: nextTitleGenerationModelId
     });

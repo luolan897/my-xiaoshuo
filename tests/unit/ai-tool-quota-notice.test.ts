@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentToolCallGlobalLimit,
   agentToolCallQuotaNoticeBudgetChars,
   agentToolCallQuotaUsedAfterCompact,
   agentToolCallSoftWarningThreshold,
   buildAgentToolCallQuotaNotice,
+  clampAgentToolCallGlobalMultiplier,
   shouldRejectAgentToolCalls,
+  shouldRejectGlobalToolCalls,
   withAgentToolCallQuotaNotice
 } from "../../src/ai-tool-results.js";
 
@@ -21,6 +24,16 @@ describe("AI 工具调用配额提醒", () => {
     expect(agentToolCallQuotaUsedAfterCompact(12)).toBe(2);
     expect(agentToolCallQuotaUsedAfterCompact(5)).toBe(1);
     expect(agentToolCallQuotaUsedAfterCompact(48)).toBe(9);
+  });
+
+  it("全局上限默认按调用上限的 3 倍计算，且独立于 compact 重置", () => {
+    expect(agentToolCallGlobalLimit(15, 3)).toBe(45);
+    expect(agentToolCallGlobalLimit(12, 3)).toBe(36);
+    expect(clampAgentToolCallGlobalMultiplier(1)).toBe(2);
+    expect(clampAgentToolCallGlobalMultiplier(11)).toBe(10);
+    expect(shouldRejectGlobalToolCalls(44, 1, 45)).toBe(false);
+    expect(shouldRejectGlobalToolCalls(45, 1, 45)).toBe(true);
+    expect(shouldRejectGlobalToolCalls(43, 3, 45)).toBe(true);
   });
 
   it("配额提醒字段的额外字符会计入 compact 体积预算估算", () => {

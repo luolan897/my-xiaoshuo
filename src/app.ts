@@ -439,6 +439,7 @@ const workAiSettingsSchema = z.object({
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentToolCallLimit: z.number().int().min(5).max(48).optional(),
+  agentToolCallGlobalMultiplier: z.number().int().min(2).max(10).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"])).max(6).optional(),
   titleGenerationModelId: z.string().trim().max(200).optional()
 }).strict();
