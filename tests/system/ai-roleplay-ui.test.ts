@@ -11,18 +11,19 @@ describe("AI 角色扮演界面", () => {
       readFile(join(publicPath, "styles.css"), "utf8")
     ]);
 
-    expect(page).toContain('id="ai-roleplay-character"');
-    expect(page).toContain('id="ai-chat-options" class="ai-chat-options" aria-label="问答设置"');
-    expect(page).toContain("不使用角色扮演");
-    expect(page.indexOf('id="ai-task"')).toBeLessThan(page.indexOf('id="ai-chat-options"'));
+    expect(page).toContain('<option value="roleplay">角色扮演</option>');
+    expect(page).toContain('id="ai-roleplay-character" class="ai-roleplay-character hidden"');
+    expect(page).toContain("选择角色卡");
     expect(application).toContain("/roleplay`");
-    expect(application).toContain("角色扮演模式只支持问答");
+    expect(application).toContain("角色扮演对话开始后不能切换模式");
+    expect(application).toContain('$("#ai-task").disabled = active;');
     expect(application).toContain("角色扮演模式只使用角色自身的记忆");
+    expect(application).toContain("当前对话已经开始，请新建对话后再进入角色扮演");
     expect(application).toContain("Agent 只能查询与该角色自身有关的记忆");
     expect(application).toContain("recall_self: \"回忆自身\"");
-    expect(application).toContain("function syncAiChatOptionsVisibility()");
-    expect(styles).toContain(".ai-chat-options { display: grid; grid-column: 1 / -1;");
-    expect(styles).toContain(".ai-chat-options.hidden { display: none; }");
+    expect(application).toContain("function syncAiTaskOptions()");
+    expect(application).toContain('const taskType = roleplaySelected ? "chat" : selectedTaskType;');
+    expect(styles).toContain(".prompt-options .ai-roleplay-character { min-width: 0; }");
     expect(styles).toContain(".ai-panel.is-roleplaying .ai-roleplay-character");
   });
 });

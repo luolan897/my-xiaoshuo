@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260801-ai-roleplay-v2">
+    <link rel="stylesheet" href="/styles.css?v=20260801-ai-roleplay-v3">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -293,6 +293,7 @@
           <div class="prompt-options">
             <select id="ai-task" aria-label="任务类型">
               <option value="chat">问答</option>
+              <option value="roleplay">角色扮演</option>
               <option value="continue">续写</option>
               <option value="polish">润色选中文本</option>
             </select>
@@ -303,12 +304,9 @@
               <option value="volume">当前卷</option>
               <option value="book">全书</option>
             </select>
-            <section id="ai-chat-options" class="ai-chat-options" aria-label="问答设置">
-              <span>问答设置</span>
-              <select id="ai-roleplay-character" class="ai-roleplay-character" aria-label="问答角色扮演角色卡">
-                <option value="">不使用角色扮演</option>
-              </select>
-            </section>
+            <select id="ai-roleplay-character" class="ai-roleplay-character hidden" aria-label="角色扮演角色卡">
+              <option value="">选择角色卡</option>
+            </select>
           </div>
           <div class="field-label prompt-model-field">
             <select id="ai-model" aria-label="实际使用模型"></select>
@@ -923,6 +921,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-ai-roleplay-v2"></script>
+    <script type="module" src="/app.js?v=20260801-ai-roleplay-v3"></script>
   </body>
 </html>

@@ -1797,8 +1797,8 @@ async function openAiConversation(conversationId, hideHistory = true) {
   const conversation = await api(`/api/ai-conversations/${conversationId}?page=1&limit=100`);
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
-  applyAiRoleplayCharacter(conversation.roleplayCharacter);
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
+  applyAiRoleplayCharacter(conversation.roleplayCharacter);
   resetAiContextMeter();
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
@@ -1823,8 +1823,8 @@ async function createNewAiConversation() {
   const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: {} });
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
-  applyAiRoleplayCharacter(conversation.roleplayCharacter);
   state.aiPromptSent = false;
+  applyAiRoleplayCharacter(conversation.roleplayCharacter);
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   hideAiContextWarning();
@@ -1837,12 +1837,12 @@ function renderAiRoleplayCharacterSelect() {
   const select = $("#ai-roleplay-character");
   const selectedId = String(state.aiRoleplayCharacter?.id ?? "");
   const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
-  const options = [{ id: "", name: "不使用角色扮演" }, ...availableCharacters.map((character) => ({
+  const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: `扮演 ${String(character.name)}`
+    name: String(character.name)
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
-    options.push({ id: selectedId, name: `扮演 ${String(state.aiRoleplayCharacter.name)}` });
+    options.push({ id: selectedId, name: String(state.aiRoleplayCharacter.name) });
   }
   select.replaceChildren(...options.map((option) => {
     const element = document.createElement("option");
@@ -1854,25 +1854,30 @@ function renderAiRoleplayCharacterSelect() {
   const canSelectCharacter = Boolean(state.work)
     && canReadModule("characters")
     && canWritePermissionModule(state.work, "ai-chat");
-  select.disabled = !canSelectCharacter;
+  select.disabled = !canSelectCharacter || Boolean(state.aiPromptSent && state.aiRoleplayCharacter);
   select.title = canSelectCharacter
     ? "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
     : "当前账户没有角色模块读取权限";
 }
 
-function syncAiChatOptionsVisibility() {
-  const visible = $("#ai-task").value === "chat";
-  $("#ai-chat-options").classList.toggle("hidden", !visible);
-  $("#ai-chat-options").setAttribute("aria-hidden", String(!visible));
+function syncAiTaskOptions() {
+  const roleplaySelected = $("#ai-task").value === "roleplay";
+  $("#ai-scope").classList.toggle("hidden", roleplaySelected);
+  $("#ai-scope").setAttribute("aria-hidden", String(roleplaySelected));
+  $("#ai-roleplay-character").classList.toggle("hidden", !roleplaySelected);
+  $("#ai-roleplay-character").setAttribute("aria-hidden", String(!roleplaySelected));
+  const roleplayOption = $("#ai-task").querySelector('option[value="roleplay"]');
+  if (roleplayOption) roleplayOption.disabled = state.aiPromptSent && !state.aiRoleplayCharacter;
 }
 
 function applyAiRoleplayCharacter(character) {
   state.aiRoleplayCharacter = character?.id ? character : null;
   const active = Boolean(state.aiRoleplayCharacter);
-  if (active) $("#ai-task").value = "chat";
+  if (active) $("#ai-task").value = "roleplay";
+  else if (state.aiPromptSent && $("#ai-task").value === "roleplay") $("#ai-task").value = "chat";
   if (active) $("#ai-scope").value = "none";
   $("#ai-task").disabled = active;
-  $("#ai-task").title = active ? "角色扮演模式只支持问答" : "";
+  $("#ai-task").title = active ? "角色扮演对话开始后不能切换模式" : "";
   $("#ai-scope").disabled = active;
   $("#ai-scope").title = active ? "角色扮演模式只使用角色自身的记忆" : "";
   $(".ai-panel").classList.toggle("is-roleplaying", active);
@@ -1880,7 +1885,7 @@ function applyAiRoleplayCharacter(character) {
     ? `以 ${String(state.aiRoleplayCharacter.name)} 的身份开始对话……`
     : "告诉 AI 你想讨论或修改什么……";
   renderAiRoleplayCharacterSelect();
-  syncAiChatOptionsVisibility();
+  syncAiTaskOptions();
   renderAiQuickActions();
   resetAiContextMeter();
 }
@@ -7195,8 +7200,10 @@ async function ensureAiModelsLoaded() {
 
 function currentAiRequestScope() {
   if (!state.work) return null;
-  const taskType = $("#ai-task").value;
-  const scopeType = $("#ai-scope").value;
+  const selectedTaskType = $("#ai-task").value;
+  const roleplaySelected = selectedTaskType === "roleplay";
+  const taskType = roleplaySelected ? "chat" : selectedTaskType;
+  const scopeType = roleplaySelected ? "none" : $("#ai-scope").value;
   const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";
   if (requiresChapter && !state.chapter) return null;
   const selection = state.chapter ? $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd) : "";
@@ -9646,6 +9653,7 @@ async function sendAi() {
   if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
   const instruction = aiPromptText().trim();
   if (!instruction) return toast("请输入指令", "error");
+  if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
@@ -9661,6 +9669,8 @@ async function sendAi() {
       return toast(`对话记录创建失败：${error.message}`, "error");
     }
     state.aiPromptSent = true;
+    syncAiTaskOptions();
+    renderAiRoleplayCharacterSelect();
     renderAiQuickActions();
     appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
     clearAiPromptComposer();
@@ -9810,6 +9820,8 @@ async function streamChat(body) {
           state.aiConversationId = persistedUserMessage.conversationId;
           updateAiConversationSummaryFromMessage(persistedUserMessage);
           state.aiPromptSent = true;
+          syncAiTaskOptions();
+          renderAiRoleplayCharacterSelect();
           renderAiQuickActions();
           appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
           clearAiPromptComposer();
@@ -11192,8 +11204,14 @@ $("#ai-roleplay-character").addEventListener("change", async (event) => {
     renderAiRoleplayCharacterSelect();
   }
 });
-$("#ai-task").addEventListener("change", () => {
-  syncAiChatOptionsVisibility();
+$("#ai-task").addEventListener("change", (event) => {
+  const select = event.currentTarget;
+  if (select.value === "roleplay" && state.aiPromptSent && !state.aiRoleplayCharacter) {
+    select.value = select.dataset.previousValue || "chat";
+    toast("当前对话已经开始，请新建对话后再进入角色扮演", "error");
+  }
+  select.dataset.previousValue = select.value;
+  syncAiTaskOptions();
   setAiContextMeter(null);
 });
 $("#ai-scope").addEventListener("change", () => setAiContextMeter(null));
@@ -11476,7 +11494,8 @@ $(".quick-actions").addEventListener("click", (event) => {
   const button = event.target.closest("[data-task]");
   if (!button) return;
   $("#ai-task").value = button.dataset.task;
-  syncAiChatOptionsVisibility();
+  $("#ai-task").dataset.previousValue = $("#ai-task").value;
+  syncAiTaskOptions();
   setAiPromptText(button.dataset.prompt);
   $("#ai-prompt").focus();
 });

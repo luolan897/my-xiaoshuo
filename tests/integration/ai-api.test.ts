@@ -973,7 +973,7 @@ describe("AI 供应商、模型与建议 API", () => {
       contentMarkdown: "林舟记得十二岁那年第一次看见星舰。",
       summary: "第一次看见星舰"
     }).expect(201);
-    await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+    const otherRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "顾潮",
       profile: { secret: "这段其他角色的私密档案不得被读取" }
     }).expect(201);
@@ -985,6 +985,12 @@ describe("AI 供应商、模型与建议 API", () => {
       characterId: role.body.data.id
     }).expect(200);
     expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
+    const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
+    const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: foreignCharacter.body.data.id
+    }).expect(400);
+    expect(mismatch.body.error.code).toBe("ROLEPLAY_CHARACTER_WORK_MISMATCH");
 
     let completionCount = 0;
     fetchMock.mockImplementation(async (input, init) => {
@@ -1031,13 +1037,24 @@ describe("AI 供应商、模型与建议 API", () => {
       messageId: reloaded.body.data.messages.at(-1).id
     }).expect(201);
     expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    const lockedRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: otherRole.body.data.id
+    }).expect(409);
+    expect(lockedRole.body.error.code).toBe("ROLEPLAY_CHARACTER_LOCKED");
+    const exitLockedRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: null
+    }).expect(409);
+    expect(exitLockedRole.body.error.code).toBe("ROLEPLAY_CHARACTER_LOCKED");
 
-    const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
-    const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
-    const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
-      characterId: foreignCharacter.body.data.id
-    }).expect(400);
-    expect(mismatch.body.error.code).toBe("ROLEPLAY_CHARACTER_WORK_MISMATCH");
+    const ordinaryConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${ordinaryConversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "普通问答已经开始"
+    }).expect(201);
+    const started = await request(runtime.app).patch(`/api/ai-conversations/${ordinaryConversation.body.data.id}/roleplay`).send({
+      characterId: role.body.data.id
+    }).expect(409);
+    expect(started.body.error.code).toBe("ROLEPLAY_CONVERSATION_STARTED");
   });
 
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {

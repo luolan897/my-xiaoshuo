@@ -6377,6 +6377,18 @@ export class Store {
     if (!conversation) throw notFound("AI 对话");
     const workId = requiredString(conversation, "work_id");
     const previousCharacterId = optionalString(conversation, "roleplay_character_id");
+    if (previousCharacterId === characterId) return this.getAiConversationSummary(conversationId);
+    const messageCount = Number(this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
+      conversationId
+    )?.count ?? 0);
+    if (messageCount > 0) {
+      throw new AppError(
+        409,
+        previousCharacterId ? "ROLEPLAY_CHARACTER_LOCKED" : "ROLEPLAY_CONVERSATION_STARTED",
+        previousCharacterId ? "角色扮演对话开始后不能退出模式或更换角色卡" : "当前对话已经开始，不能中途切换为角色扮演"
+      );
+    }
     if (characterId) {
       const character = this.getCharacter(characterId);
       if (String(character.workId) !== workId) {
