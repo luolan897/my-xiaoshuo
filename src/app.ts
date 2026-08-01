@@ -785,7 +785,7 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
   return { ...result, restricted: true };
 }
 
-/** SSE 错误事件只暴露 AppError 的公开信息，避免透传内部异常 message。 */
+/** SSE 错误事件只暴露 AppError 的公开信息；AI_CALL_FAILED 的 failure 已在 AI 层完成密钥脱敏。 */
 export function publicAiStreamError(error: unknown): {
   code: string;
   message: string;
@@ -805,7 +805,7 @@ export function publicAiStreamError(error: unknown): {
       code: error.code,
       message: error.message,
       status: error.status,
-      ...(error.status < 500 && typeof details?.failure === "string" ? { failure: details.failure } : {}),
+      ...((error.status < 500 || error.code === "AI_CALL_FAILED") && typeof details?.failure === "string" ? { failure: details.failure } : {}),
       ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
       ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),

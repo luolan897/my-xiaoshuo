@@ -1311,8 +1311,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain(`"providerId":"${providerId}"`);
     expect(streamed.text).toContain('"modelId":"mock-novel-model"');
     expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
-    expect(streamed.text).not.toContain('"failure"');
-    expect(streamed.text).not.toContain("上游参数无效");
+    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-s*****lue\\"}}"');
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
