@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 65;
+export const DATABASE_SCHEMA_VERSION = 66;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -507,6 +507,8 @@ export class Database {
         compacted_message_count INTEGER NOT NULL DEFAULT 0,
         context_warning_at TEXT,
         agent_tools_json TEXT,
+        injected_entities_json TEXT NOT NULL DEFAULT '{"characters":[],"races":[],"organizations":[]}',
+        system_clock_text TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -2603,6 +2605,24 @@ export class Database {
           this.run("ALTER TABLE work_ai_settings ADD COLUMN daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000)");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (65, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(66)) {
+      this.transaction(() => {
+        const conversationColumns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!conversationColumns.has("injected_entities_json")) {
+          this.run(`ALTER TABLE ai_conversations ADD COLUMN injected_entities_json TEXT NOT NULL DEFAULT '{"characters":[],"races":[],"organizations":[]}'`);
+        }
+        if (!conversationColumns.has("system_clock_text")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN system_clock_text TEXT NOT NULL DEFAULT ''");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (66, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

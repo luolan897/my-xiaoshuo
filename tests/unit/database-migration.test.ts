@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 65 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 66 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -185,7 +185,14 @@ describe("数据库版本化迁移", () => {
       expect.arrayContaining(["attempt_count", "next_attempt_at", "last_attempt_at"])
     );
     expect(first.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).toEqual(
-      expect.arrayContaining(["compacted_summary", "compacted_message_count", "context_warning_at", "agent_tools_json"])
+      expect.arrayContaining([
+        "compacted_summary",
+        "compacted_message_count",
+        "context_warning_at",
+        "agent_tools_json",
+        "injected_entities_json",
+        "system_clock_text"
+      ])
     );
     expect(first.all("PRAGMA table_info(user_api_keys)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["user_id", "key_hash", "key_prefix", "created_at", "rotated_at", "last_used_at"])

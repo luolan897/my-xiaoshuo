@@ -2205,6 +2205,27 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-context-warning button:first-child:hover, .ai-context-warning button:first-child:focus-visible { background: var(--accent-dark); color: #fff; }
 .prompt-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
 .prompt-options select { padding: 6px; color: var(--muted); font-size: 10px; }
+.prompt-options .ai-include-setting-info {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.prompt-options .ai-include-setting-info input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.prompt-options .ai-include-setting-info:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .prompt-model-field { margin: 0 0 7px; }
 .prompt-model-field select { padding: 6px; color: var(--muted); font-size: 10px; }
 .prompt-composer { position: relative; }

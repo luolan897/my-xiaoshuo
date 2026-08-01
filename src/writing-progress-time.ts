@@ -58,6 +58,15 @@ export function resolveServerTimeZone(
   return DEFAULT_WRITING_TIME_ZONE;
 }
 
+/** 按服务端 TZ 格式化当前本地日期、时刻与星期，供 AI system prompt 使用。 */
+export function formatServerLocalClock(date: Date = new Date(), timeZone = resolveServerTimeZone()): string {
+  const parts = formatterParts(date, timeZone, true);
+  const weekday = new Intl.DateTimeFormat("zh-CN", { timeZone, weekday: "long" }).format(date);
+  const hour = String(parts.hour ?? 0).padStart(2, "0");
+  const minute = String(parts.minute ?? 0).padStart(2, "0");
+  return `当前时间：${dateKeyFromParts(parts)} ${hour}:${minute} ${weekday}（${timeZone}）`;
+}
+
 export function writingDateKey(date: Date, timeZone: string): string {
   return dateKeyFromParts(formatterParts(date, timeZone, false));
 }

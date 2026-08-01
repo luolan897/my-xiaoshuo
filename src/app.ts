@@ -446,14 +446,18 @@ const workAiSettingsSchema = z.object({
 }).strict();
 
 const contextSchema = z.object({
-  type: z.enum(["none", "selection", "chapter", "volume", "book", "entities"]),
+  type: z.enum(["none", "selection", "chapter", "volume", "book", "settings-catalog", "entities"]),
   chapterId: identifier.optional(),
   volumeId: identifier.optional(),
   selection: z.string().max(200_000).optional(),
   chapterIds: z.array(identifier).max(20).optional(),
   characterIds: optionalStrings,
+  mentionCharacterIds: optionalStrings,
   settingIds: optionalStrings,
-  includeBookSummary: z.boolean().optional()
+  raceIds: optionalStrings,
+  organizationIds: optionalStrings,
+  includeBookSummary: z.boolean().optional(),
+  includeSettingInfo: z.boolean().optional()
 });
 
 const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
@@ -713,6 +717,18 @@ function redactAiCallContext(record: Record<string, unknown>, permissions: WorkM
   }
   if (permissions.characters === "none" && "characterIds" in redactedScope) {
     delete redactedScope.characterIds;
+    restricted = true;
+  }
+  if (permissions.characters === "none" && "mentionCharacterIds" in redactedScope) {
+    delete redactedScope.mentionCharacterIds;
+    restricted = true;
+  }
+  if (permissions.races === "none" && "raceIds" in redactedScope) {
+    delete redactedScope.raceIds;
+    restricted = true;
+  }
+  if (permissions.organizations === "none" && "organizationIds" in redactedScope) {
+    delete redactedScope.organizationIds;
     restricted = true;
   }
   if (permissions.settings === "none" && "settingIds" in redactedScope) {

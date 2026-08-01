@@ -6,7 +6,7 @@ describe("AI 上下文组装", () => {
   const runtimes: ReturnType<typeof createTestRuntime>[] = [];
   afterEach(() => runtimes.splice(0).forEach((runtime) => runtime.close()));
 
-  it("始终带入锁定设定和锁定角色字段", async () => {
+  it("正文范围默认注入轻量组织/种族与锁定设定，不含组织设定正文", async () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);
     const { work, chapter } = await seedChapter(runtime);
@@ -40,6 +40,11 @@ describe("AI 上下文组装", () => {
       keywords: ["未经作者确认"],
       confirmationStatus: "pending"
     });
+    runtime.store.createRace(String(work.id), {
+      name: "航道人类",
+      description: "以星图为信的航海族群。",
+      settings: ["不应出现在轻量表中的种族设定正文 RACE_SETTING_FULL"]
+    });
     runtime.store.createOrganization(String(work.id), {
       name: "北港守望会",
       description: "维护航道与旧约。",
@@ -59,12 +64,24 @@ describe("AI 上下文组装", () => {
       characterIds: [String(character.id)]
     });
 
+    expect(context).toContain("<story_context>");
+    expect(context).toContain("<locked_settings>");
+    expect(context).toContain("<world_organizations>");
+    expect(context).toContain("<world_races>");
+    expect(context).toContain("<selected_characters>");
+    expect(context).toContain("<chapter>");
     expect(context).toContain("跃迁限制");
     expect(context).toContain("每日只能跃迁一次");
     expect(context).toContain("species=人类");
     expect(context).toContain("location=北港");
+    expect(context).toContain("世界内组织");
     expect(context).toContain("北港守望会");
-    expect(context).toContain("成员以星图为信物");
+    expect(context).toContain("维护航道与旧约");
+    expect(context).toContain("成员=林舟");
+    expect(context).not.toContain("成员以星图为信物");
+    expect(context).toContain("世界内种族");
+    expect(context).toMatch(/<world_races>\n世界内种族：\n- 航道人类：以星图为信的航海族群。\n<\/world_races>/u);
+    expect(context).not.toMatch(/<world_races>[\s\S]*?RACE_SETTING_FULL[\s\S]*?<\/world_races>/u);
     expect(context).toContain(String(profileSection.id));
     expect(context).toContain("远古背景");
     expect(context).not.toContain("CHARACTER_SECTION_FULL_CONTENT");
@@ -72,6 +89,103 @@ describe("AI 上下文组装", () => {
     expect(context).toContain("长期信任、失联重逢");
     expect(context).not.toContain("未经作者确认");
     expect(context).toContain("林舟抵达北港");
+  });
+
+  it("关闭注入设定信息后正文范围只保留章节正文", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work, chapter } = await seedChapter(runtime, "章节正文标记 CHAPTER_ONLY");
+    runtime.store.createSetting(String(work.id), {
+      title: "不应出现",
+      category: "世界规则",
+      content: "锁定设定正文 LOCKED_SETTING",
+      locked: true,
+      status: "confirmed"
+    });
+    runtime.store.createOrganization(String(work.id), {
+      name: "不应出现的组织",
+      description: "组织简介"
+    });
+    runtime.store.createRace(String(work.id), {
+      name: "不应出现的种族",
+      description: "种族简介"
+    });
+
+    const context = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "chapter",
+      chapterId: String(chapter.id),
+      includeSettingInfo: false
+    });
+
+    expect(context).toContain("CHAPTER_ONLY");
+    expect(context).toContain("<chapter>");
+    expect(context).not.toContain("LOCKED_SETTING");
+    expect(context).not.toContain("<locked_settings>");
+    expect(context).not.toContain("世界内组织");
+    expect(context).not.toContain("世界内种族");
+    expect(context).not.toContain("不应出现的组织");
+    expect(context).not.toContain("不应出现的种族");
+  });
+
+  it("设定库范围注入截断目录且不受 includeSettingInfo 关闭影响", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work } = await seedChapter(runtime);
+    const longPrefix = "前".repeat(320);
+    runtime.store.createSetting(String(work.id), {
+      title: "星门协议",
+      category: "世界规则",
+      content: `${longPrefix}UNIQUE_SETTING_TAIL_MARKER`,
+      status: "confirmed"
+    });
+    runtime.store.createOrganization(String(work.id), {
+      name: "设定库不应整表注入的组织",
+      description: "组织简介"
+    });
+
+    const context = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "settings-catalog",
+      includeSettingInfo: false
+    });
+
+    expect(context).toContain("<settings_catalog>");
+    expect(context).toContain("设定库目录");
+    expect(context).toContain("星门协议");
+    expect(context).toContain("前");
+    expect(context).not.toContain("UNIQUE_SETTING_TAIL_MARKER");
+    expect(context).not.toContain("设定库不应整表注入的组织");
+    expect(context).not.toContain("世界内组织");
+  });
+
+  it("提及角色使用轻量卡且不含档案 Markdown 全文", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work } = await seedChapter(runtime);
+    const character = runtime.store.createCharacter(String(work.id), {
+      name: "哥斯拉",
+      aliases: ["王者"],
+      profile: { summary: "地球守护者" },
+      attributes: { size: "巨大" },
+      currentState: { location: "太平洋" }
+    });
+    runtime.store.createCharacterProfileSection(String(character.id), {
+      sectionType: "background",
+      title: "远古背景",
+      summary: "目录摘要",
+      contentMarkdown: "FULL_PROFILE_MARKDOWN"
+    });
+
+    const context = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "none",
+      mentionCharacterIds: [String(character.id)]
+    });
+
+    expect(context).toContain("<mentioned_characters>");
+    expect(context).toContain("提及角色");
+    expect(context).toContain("哥斯拉");
+    expect(context).toContain("地球守护者");
+    expect(context).not.toContain("FULL_PROFILE_MARKDOWN");
+    expect(context).not.toContain("Markdown 档案目录");
   });
 
   it("明确标记选中文本并拒绝跨作品章节", async () => {
@@ -236,8 +350,8 @@ describe("AI 上下文组装", () => {
     const plan = new ContextBuilder(runtime.store).buildPlan(
       String(work.id),
       { type: "book" },
-      260,
-      100,
+      400,
+      160,
       "月蚀密钥藏在哪里？"
     );
 
@@ -245,7 +359,10 @@ describe("AI 上下文组装", () => {
     expect(plan.context).toContain("# 第二卷 北境");
     expect(plan.context).toContain("月蚀密钥藏在旧港钟楼");
     expect(plan.context).toContain("上下文规划");
+    expect(plan.context).toContain("<context_notice>");
+    expect(plan.context).toContain("<book_summary>");
+    expect(plan.context).toContain("<chapter>");
     expect(plan.omittedBlockIds.length).toBeGreaterThan(0);
-    expect(plan.tokenCount).toBeLessThanOrEqual(260);
+    expect(plan.tokenCount).toBeLessThanOrEqual(400);
   });
 });

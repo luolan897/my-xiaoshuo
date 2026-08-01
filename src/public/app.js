@@ -6467,6 +6467,7 @@ function openTaskDetailDialog(task, trace) {
       </li>`;
     }
     if (item.type === "book") return "<li>全书</li>";
+    if (item.type === "settings-catalog") return "<li>设定库</li>";
     if (item.type === "selection") return item.restricted
       ? "<li>选定内容（正文读取权限受限）</li>"
       : `<li>选定内容：${esc(item.selection || "未提供")}</li>`;
@@ -7307,11 +7308,24 @@ async function ensureAiModelsLoaded() {
   }
 }
 
+function syncAiIncludeSettingInfoControl() {
+  const scopeType = $("#ai-scope").value;
+  const checkbox = $("#ai-include-setting-info");
+  const proseScopes = new Set(["chapter", "chapter-summary", "volume", "book"]);
+  const enabled = proseScopes.has(scopeType);
+  checkbox.disabled = !enabled;
+  checkbox.title = enabled
+    ? "在正文上下文中注入锁定设定、组织/种族简表等"
+    : scopeType === "settings-catalog"
+      ? "设定库范围会直接注入设定目录，无需此选项"
+      : "仅在选择正文类上下文范围时可用";
+}
+
 function currentAiRequestScope() {
   if (!state.work) return null;
   const taskType = $("#ai-task").value;
   const scopeType = $("#ai-scope").value;
-  const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";
+  const requiresChapter = taskType === "polish" || taskType === "continue" || (scopeType !== "none" && scopeType !== "settings-catalog");
   if (requiresChapter && !state.chapter) return null;
   const selection = state.chapter ? $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd) : "";
   const volume = state.chapter ? state.work.volumes.find((item) => item.id === state.chapter.volumeId) : null;
@@ -7320,9 +7334,14 @@ function currentAiRequestScope() {
     : scopeType === "none" ? { type: "none", ...(taskType === "continue" && state.chapter ? { chapterId: state.chapter.id } : {}) }
     : scopeType === "book" ? { type: "book" }
     : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
+    : scopeType === "settings-catalog" ? { type: "settings-catalog" }
     : { type: "chapter", chapterId: state.chapter?.id };
   Object.assign(scope, buildAiReferenceScope(state.aiReferences));
   if (includeBookSummary) scope.includeBookSummary = true;
+  const proseScopes = new Set(["chapter", "chapter-summary", "volume", "book"]);
+  if (proseScopes.has(scopeType) || taskType === "polish") {
+    scope.includeSettingInfo = $("#ai-include-setting-info").checked;
+  }
   return { taskType, scope, selection };
 }
 
@@ -11319,7 +11338,12 @@ $("#ai-model").addEventListener("focus", () => {
 });
 $("#ai-model").addEventListener("change", () => setAiContextMeter(null));
 $("#ai-task").addEventListener("change", () => setAiContextMeter(null));
-$("#ai-scope").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-scope").addEventListener("change", () => {
+  syncAiIncludeSettingInfoControl();
+  setAiContextMeter(null);
+});
+$("#ai-include-setting-info").addEventListener("change", () => setAiContextMeter(null));
+syncAiIncludeSettingInfoControl();
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
