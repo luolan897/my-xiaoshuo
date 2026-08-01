@@ -1682,6 +1682,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-section-header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
 .config-section-header h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
 .config-section-header p { margin: 0; color: var(--muted); font-size: 11px; }
+.config-section-header .config-doc-link {
+  display: inline;
+  margin-left: 4px;
+  color: var(--accent-dark);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.config-section-header .config-doc-link:hover,
+.config-section-header .config-doc-link:focus-visible { color: var(--accent); }
 .ai-agent-tools { display: grid; gap: 8px; }
 .ai-agent-tools label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .ai-agent-tools input { width: 16px; margin-top: 2px; }
