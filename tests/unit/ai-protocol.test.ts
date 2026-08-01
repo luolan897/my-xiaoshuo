@@ -85,7 +85,7 @@ describe("AI 供应商协议适配", () => {
     ]);
   });
 
-  it("切换到 OpenAI 协议时不携带 Anthropic 回放字段", () => {
+  it("切换到 OpenAI 协议时不携带 Anthropic 回放字段或空工具调用", () => {
     const body = buildCompletionRequestBody({
       protocol: "openai-chat-completions",
       model: "mock-model",
@@ -94,18 +94,21 @@ describe("AI 供应商协议适配", () => {
         {
           role: "assistant",
           content: "回答",
-          tool_calls: [],
           anthropic_content: [{ type: "thinking", thinking: "内部思考", signature: "opaque" }]
         },
         { role: "user", content: "第二轮" }
       ],
-      parameters: {}
+      parameters: {},
+      tools: [{ type: "function", function: { name: "story_index", parameters: {} } }],
+      toolChoice: "auto"
     });
     expect(body.messages).toEqual([
       { role: "user", content: "第一轮" },
-      { role: "assistant", content: "回答", tool_calls: [] },
+      { role: "assistant", content: "回答" },
       { role: "user", content: "第二轮" }
     ]);
+    expect(body).toHaveProperty("tools");
+    expect((body.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty("tool_calls");
   });
 
   it("为 Google Vertex 使用 OpenAI 兼容端点与 Bearer 头", () => {

@@ -3549,7 +3549,6 @@ export class AiManager {
         role: "assistant",
         content: message.content,
         ...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
-        tool_calls: [],
         ...(anthropicContent.length > 0 ? { anthropic_content: structuredClone(anthropicContent) } : {})
       };
     }) ?? [];

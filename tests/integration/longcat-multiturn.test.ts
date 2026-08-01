@@ -40,6 +40,7 @@ describe("LongCat OpenAI 多轮推理兼容", () => {
           content: "第一轮回答",
           reasoning_content: "第一轮思考"
         });
+        expect(assistant).not.toHaveProperty("tool_calls");
       }
       const suffix = requestCount === 1 ? "第一轮回答" : "第二轮回答";
       const reasoning = requestCount === 1 ? "第一轮思考" : "第二轮思考";

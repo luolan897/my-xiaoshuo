@@ -33,7 +33,7 @@ export type CompletionMessage = AiMessage | {
   role: "assistant";
   content: string | null;
   reasoning_content?: string | null;
-  tool_calls: CompletionToolCall[];
+  tool_calls?: CompletionToolCall[];
   anthropic_content?: AnthropicReplayContentBlock[];
 } | {
   role: "tool";
@@ -106,13 +106,17 @@ function parsedToolInput(value: unknown): Record<string, unknown> {
   }
 }
 
-function anthropicAssistantContent(message: Extract<CompletionMessage, { role: "assistant" }>): Array<Record<string, unknown>> {
+function anthropicAssistantContent(message: {
+  content: string | null;
+  tool_calls?: CompletionToolCall[];
+  anthropic_content?: AnthropicReplayContentBlock[];
+}): Array<Record<string, unknown>> {
   if (Array.isArray(message.anthropic_content) && message.anthropic_content.length > 0) {
     return structuredClone(message.anthropic_content);
   }
   return [
     ...textContent(message.content),
-    ...message.tool_calls.map((toolCall) => ({
+    ...(message.tool_calls ?? []).map((toolCall) => ({
       type: "tool_use",
       id: toolCall.id,
       name: toolCall.function.name,
@@ -159,7 +163,7 @@ function anthropicMessages(messages: CompletionMessage[]): {
       append("user", [anthropicToolResult(message)]);
       continue;
     }
-    if (message.role === "assistant" && "tool_calls" in message) {
+    if (message.role === "assistant") {
       append("assistant", anthropicAssistantContent(message));
       continue;
     }
