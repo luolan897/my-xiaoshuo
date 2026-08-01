@@ -14,6 +14,9 @@ import {
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   MIN_AGENT_TOOL_CALL_LIMIT,
+  agentToolCallQuotaNoticeBudgetChars,
+  agentToolCallQuotaUsedAfterCompact,
+  agentToolCallSoftWarningThreshold,
   paginateToolResultRecords,
   shouldRejectAgentToolCalls,
   structuralToolResultRecords,
@@ -4050,6 +4053,12 @@ export class AiManager {
       let toolContextStartIndex = baseMessageCount;
       let compactedToolContextMessage: CompletionMessage | null = null;
       const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+      const configuredToolCallLimit = Math.min(
+        MAX_CONFIGURED_AGENT_TOOL_CALLS,
+        Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
+      );
+      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, MAX_CONFIGURED_AGENT_TOOL_CALLS));
+      let toolCallQuotaUsed = 0;
       const compactToolContext = async (additionalMessages: CompletionMessage[] = [], round = 1): Promise<void> => {
         const existingToolContext = completionMessages.slice(toolContextStartIndex);
         const sourceMessages = [
@@ -4105,13 +4114,16 @@ export class AiManager {
           ...messages.slice(compactedMessageIndex)
         );
         toolContextStartIndex = completionMessages.length;
+        toolCallQuotaUsed = agentToolCallQuotaUsedAfterCompact(agentToolCallLimit);
         const sourceChars = JSON.stringify(sourceMessages).length;
         const contextUsage = this.completionContextUsage(effectiveInput, model, completionMessages, tools);
         logger.info("ai.tool_context.compacted", {
           callId,
           sourceMessageCount: sourceMessages.length,
           sourceChars,
-          summaryChars: summary.length
+          summaryChars: summary.length,
+          toolCallQuotaUsed,
+          agentToolCallLimit
         });
         const step: AiProcessStep = {
           id: id("process"),
@@ -4143,17 +4155,17 @@ export class AiManager {
         if (!hasRawToolResults) return false;
         const currentTokens = estimateAiTokens(JSON.stringify([...completionMessages, assistantMessage]))
           + estimateAiTokens(JSON.stringify(tools));
-        const maximumNewToolTokens = Math.ceil(AGENT_TOOL_RESULT_MAX_CHARS * 1.1) * Math.max(1, toolCallCount);
+        // 新工具结果可能附带 toolCallQuotaNotice，预估体积时一并计入，避免低估后触发上下文溢出。
+        const noticeBudgetChars = Math.max(
+          agentToolCallQuotaNoticeBudgetChars(1, agentToolCallLimit),
+          agentToolCallQuotaNoticeBudgetChars(agentToolCallSoftWarningThreshold(agentToolCallLimit), agentToolCallLimit)
+        );
+        const maximumNewToolTokens = Math.ceil((AGENT_TOOL_RESULT_MAX_CHARS + noticeBudgetChars) * 1.1) * Math.max(1, toolCallCount);
         return currentTokens + maximumNewToolTokens + TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS >= contextWindow;
       };
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];
       const executedToolCalls: AgentToolCallResult[] = [];
-      const configuredToolCallLimit = Math.min(
-        MAX_CONFIGURED_AGENT_TOOL_CALLS,
-        Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
-      );
-      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, MAX_CONFIGURED_AGENT_TOOL_CALLS));
       const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
         const reasoning = currentChoice?.message?.reasoning_content;
         if (reasoning?.trim()) {
@@ -4173,7 +4185,7 @@ export class AiManager {
         const round = toolRound + 1;
         recordChoiceProcess(choice, round, true);
         const toolCalls = choice.message.tool_calls;
-        if (shouldRejectAgentToolCalls(executedToolCalls.length, toolCalls.length, agentToolCallLimit)) {
+        if (shouldRejectAgentToolCalls(toolCallQuotaUsed, toolCalls.length, agentToolCallLimit)) {
           throw new Error(`AI requested more than ${agentToolCallLimit} tool calls in one response cycle.`);
         }
         const normalizedToolCalls = toolCalls.map((toolCall) => ({
@@ -4206,7 +4218,8 @@ export class AiManager {
             maximumResultChars
           });
           executedToolCalls.push(execution);
-          const remainingToolCalls = Math.max(0, agentToolCallLimit - executedToolCalls.length);
+          toolCallQuotaUsed += 1;
+          const remainingToolCalls = Math.max(0, agentToolCallLimit - toolCallQuotaUsed);
           execution.result = withAgentToolCallQuotaNotice(execution.result, remainingToolCalls, agentToolCallLimit);
           toolTraceRound?.toolExecutions.push(execution);
           saveTrace();

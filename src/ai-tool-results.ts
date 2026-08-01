@@ -16,6 +16,11 @@ export function agentToolCallSoftWarningThreshold(limit: number): number {
   return Math.max(AGENT_TOOL_CALL_SOFT_WARNING_FLOOR, Math.floor(limit * 0.2) + 1);
 }
 
+export function agentToolCallQuotaUsedAfterCompact(limit: number): number {
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.floor(limit * 0.2);
+}
+
 export function buildAgentToolCallQuotaNotice(remaining: number, limit: number): AgentToolCallQuotaNotice | null {
   if (!Number.isFinite(remaining) || remaining <= 0) return null;
   if (remaining === 1) {
@@ -25,6 +30,13 @@ export function buildAgentToolCallQuotaNotice(remaining: number, limit: number):
     return `[warning] 提醒：本轮工具调用配额即将用尽，当前剩余 ${remaining} 次。请尽快收敛并准备最终答案，避免继续大规模检索。`;
   }
   return null;
+}
+
+/** 估算把 toolCallQuotaNotice 并入工具结果后，额外占用的字符数（用于 compact 体积预估）。 */
+export function agentToolCallQuotaNoticeBudgetChars(remaining: number, limit: number): number {
+  const notice = buildAgentToolCallQuotaNotice(remaining, limit);
+  if (!notice) return 0;
+  return Math.max(0, serializedToolResultChars({ toolCallQuotaNotice: notice }) - 2);
 }
 
 export function withAgentToolCallQuotaNotice(

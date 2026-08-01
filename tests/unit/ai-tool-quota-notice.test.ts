@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentToolCallQuotaNoticeBudgetChars,
+  agentToolCallQuotaUsedAfterCompact,
   agentToolCallSoftWarningThreshold,
   buildAgentToolCallQuotaNotice,
   shouldRejectAgentToolCalls,
@@ -12,6 +14,22 @@ describe("AI 工具调用配额提醒", () => {
     expect(agentToolCallSoftWarningThreshold(5)).toBe(3);
     expect(agentToolCallSoftWarningThreshold(48)).toBe(10);
     expect(agentToolCallSoftWarningThreshold(20)).toBe(5);
+  });
+
+  it("compact 后把已用次数重置为上限的 20%（向下取整）", () => {
+    expect(agentToolCallQuotaUsedAfterCompact(15)).toBe(3);
+    expect(agentToolCallQuotaUsedAfterCompact(12)).toBe(2);
+    expect(agentToolCallQuotaUsedAfterCompact(5)).toBe(1);
+    expect(agentToolCallQuotaUsedAfterCompact(48)).toBe(9);
+  });
+
+  it("配额提醒字段的额外字符会计入 compact 体积预算估算", () => {
+    expect(agentToolCallQuotaNoticeBudgetChars(4, 12)).toBe(0);
+    const warningBudget = agentToolCallQuotaNoticeBudgetChars(3, 12);
+    const criticalBudget = agentToolCallQuotaNoticeBudgetChars(1, 12);
+    expect(warningBudget).toBeGreaterThan(0);
+    expect(criticalBudget).toBeGreaterThan(warningBudget);
+    expect(criticalBudget).toBeGreaterThan(buildAgentToolCallQuotaNotice(1, 12)?.length ?? 0);
   });
 
   it("默认上限 12 时仅在剩余不超过 3 次时注入提醒字符串", () => {
