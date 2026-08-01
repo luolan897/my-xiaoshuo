@@ -1682,6 +1682,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-section-header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
 .config-section-header h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
 .config-section-header p { margin: 0; color: var(--muted); font-size: 11px; }
+.config-section-header .config-doc-link {
+  display: inline;
+  margin-left: 4px;
+  color: var(--accent-dark);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.config-section-header .config-doc-link:hover,
+.config-section-header .config-doc-link:focus-visible { color: var(--accent); }
 .ai-agent-tools { display: grid; gap: 8px; }
 .ai-agent-tools label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .ai-agent-tools input { width: 16px; margin-top: 2px; }
@@ -2016,10 +2025,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .field-label select { padding: 8px; font-size: 12px; }
 .book-summary-context-percent-field { width: min(100%, 280px); }
 .context-compact-threshold-field { width: min(100%, 280px); }
-.book-summary-context-percent-field input, .context-compact-threshold-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px; font-family: var(--font-latin), monospace; }
+.agent-tool-call-limit-field { width: min(100%, 280px); }
+.agent-tool-call-global-multiplier-field { width: auto; min-width: 0; }
+.book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px; font-family: var(--font-latin), monospace; }
 .config-inline-save { display: flex; align-items: flex-end; gap: 10px; margin: 14px 0 4px; flex-wrap: wrap; }
 .config-inline-save .book-summary-context-percent-field,
-.config-inline-save .context-compact-threshold-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
+.config-inline-save .context-compact-threshold-field,
+.config-inline-save .agent-tool-call-limit-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
+.config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto; margin: 0; color: var(--muted); font-size: 10px; }
+.agent-tool-call-global-multiplier-toggle button { min-width: 32px; padding: 0 10px; font-family: var(--font-latin), monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
 .relationship-index-summary { display: grid; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .relationship-index-state-row { display: flex; align-items: center; gap: 12px 18px; flex-wrap: wrap; color: var(--muted); font-size: 10px; }
 .relationship-index-state-row strong { color: var(--ink); font-family: var(--font-latin), monospace; font-weight: 600; }
