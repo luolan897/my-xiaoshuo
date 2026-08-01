@@ -486,6 +486,85 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
   });
 
+  it("已开始的对话锁定工具集，中途改作品设置不影响该对话", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]
+    }).expect(200);
+
+    const created = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "锁定工具对话" }).expect(201);
+    const conversationId = created.body.data.id as string;
+    expect(created.body.data.agentTools).toEqual([
+      "story_index",
+      "read_chapters",
+      "grep",
+      "search_story_entities",
+      "read_character_sections",
+      "search_drafts"
+    ]);
+
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentTools: ["story_index"]
+    }).expect(200);
+
+    let lockedTools: string[] | undefined;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as {
+        tools?: Array<{ function?: { name?: string } }>;
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      lockedTools = body.tools?.map((tool) => tool.function?.name).filter((name): name is string => Boolean(name));
+      expect(body.messages?.[0]?.content).toContain("当前可用作品查询工具：story_index、read_chapters、grep、search_story_entities、read_character_sections、search_drafts");
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "仍可使用创建时锁定的工具集。" } }]
+      }), { status: 200 });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "确认本对话工具是否仍完整。",
+      scope: { type: "none" },
+      modelId,
+      conversationId
+    }).expect(200);
+
+    expect(streamed.text).toContain("仍可使用创建时锁定的工具集。");
+    expect(lockedTools).toEqual([
+      "story_index",
+      "read_chapters",
+      "grep",
+      "search_story_entities",
+      "read_character_sections",
+      "search_drafts"
+    ]);
+
+    const summary = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(summary.body.data.agentTools).toEqual(lockedTools);
+
+    let newConversationTools: string[] | undefined;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }> };
+      newConversationTools = body.tools?.map((tool) => tool.function?.name).filter((name): name is string => Boolean(name));
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "新对话只看到 story_index。" } }]
+      }), { status: 200 });
+    });
+
+    const fresh = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "新对话应使用最新设置。",
+      scope: { type: "none" },
+      modelId
+    }).expect(200);
+    expect(fresh.text).toContain("新对话只看到 story_index。");
+    expect(newConversationTools).toEqual(["story_index"]);
+  });
+
   it("聊天默认暴露聚合查询工具并把结果回传给模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
