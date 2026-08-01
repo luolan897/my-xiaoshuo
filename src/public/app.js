@@ -635,7 +635,7 @@ function presencePageForRoute(route = currentPageRoute()) {
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
   if (route.view === "module") return { kind: "module", module: route.module };
-  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage") return { kind: "settings" };
+  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "work-audit") return { kind: "settings" };
   return { kind: "welcome" };
 }
 
@@ -801,6 +801,7 @@ function currentPageRoute() {
   if (!$("#settings-hub-view").classList.contains("hidden")) return { view: "settings", workId, ...settingsRouteContext() };
   if (!$("#platform-ai-view").classList.contains("hidden")) return { view: "platform-ai", workId, ...settingsRouteContext() };
   if (!$("#platform-usage-view").classList.contains("hidden")) return { view: "platform-usage", workId, ...settingsRouteContext() };
+  if (!$("#work-audit-view").classList.contains("hidden")) return { view: "work-audit", workId, ...settingsRouteContext() };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
   if (!workId) return { view: "shelf" };
   if (!$("#editor-view").classList.contains("hidden")) return { view: "editor", workId, chapterId: state.chapter?.id ?? null };
@@ -3152,6 +3153,11 @@ async function initializePage() {
     if (route.view === "platform-usage") {
       await showPlatformUsage();
       settingsReturnContext = restoredSettingsReturnContext(route);
+      return;
+    }
+    if (route.view === "work-audit") {
+      await showWorkAudit();
+      settingsReturnContext = restoredSettingsReturnContext(route);
     }
   } finally {
     document.body.classList.remove("auth-pending");
@@ -3171,6 +3177,7 @@ function showShelf() {
   $("#shelf-view").classList.remove("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -3278,36 +3285,173 @@ async function openWritingProgressDialog() {
 const workAuditActionLabels = {
   "work.created": "创建作品",
   "work.updated": "更新作品",
+  "work.cover.updated": "更新作品封面",
+  "work.cover.deleted": "删除作品封面",
+  "work.member-added": "添加作品成员",
+  "work.member-role-updated": "更新成员权限",
+  "work.member-removed": "移除作品成员",
+  "work.writing_goal.updated": "更新写作目标",
   "volume.created": "创建分卷",
   "volume.updated": "更新分卷",
   "volume.deleted": "删除分卷",
+  "volume.restored": "恢复分卷",
   "chapter.created": "创建章节",
   "chapter.saved": "保存章节",
   "chapter.moved": "移动章节",
   "chapter.deleted": "删除章节",
   "chapter.purged": "彻底删除章节",
   "chapter.restored": "恢复章节",
+  "chapter.annotation.created": "添加正文评论",
+  "chapter.annotation.updated": "更新正文评论",
+  "chapter.annotation.deleted": "删除正文评论",
   "draft.created": "创建想法",
   "draft.updated": "更新想法",
   "draft.deleted": "删除想法",
   "draft.restored": "恢复想法",
+  "setting.created": "创建设定",
+  "setting.updated": "更新设定",
+  "setting.deleted": "删除设定",
+  "setting.restored": "恢复设定",
+  "character.created": "创建角色",
+  "character.updated": "更新角色",
+  "character.deleted": "删除角色",
+  "character.restored": "恢复角色",
+  "race.created": "创建种族",
+  "race.updated": "更新种族",
+  "race.deleted": "删除种族",
+  "race.restored": "恢复种族",
+  "organization.created": "创建组织",
+  "organization.updated": "更新组织",
+  "organization.deleted": "删除组织",
+  "organization.restored": "恢复组织",
+  "timeline-track.created": "创建时间轴",
+  "timeline-track.updated": "更新时间轴",
+  "timeline-track.deleted": "删除时间轴",
+  "timeline-track.restored": "恢复时间轴",
+  "timeline.created": "创建时间事件",
+  "timeline.updated": "更新时间事件",
+  "timeline.deleted": "删除时间事件",
+  "timeline.restored": "恢复时间事件",
+  "relationship.created": "创建人物关系",
+  "relationship.updated": "更新人物关系",
+  "relationship.deleted": "删除人物关系",
+  "relationship.restored": "恢复人物关系",
+  "outline.created": "创建章节大纲",
+  "outline.updated": "更新章节大纲",
+  "outline.deleted": "删除章节大纲",
+  "foreshadow.created": "创建伏笔",
+  "foreshadow.updated": "更新伏笔",
+  "foreshadow.deleted": "删除伏笔",
+  "foreshadow.restored": "恢复伏笔",
+  "task.created": "创建 AI 分析任务",
+  "task.cancelled": "取消 AI 分析任务",
+  "attachment.created": "创建附件",
+  "attachment.deleted": "删除附件",
+  "attachment.garbage-collected": "清理未引用附件",
+  "file.restored": "恢复导入快照",
   "work.imported": "导入正文"
 };
 
 function workAuditEntityLabel(type) {
-  return ({ work: "作品", volume: "分卷", chapter: "章节", draft: "想法", user: "用户" })[type] ?? type;
+  return ({
+    work: "作品",
+    volume: "分卷",
+    chapter: "章节",
+    draft: "想法",
+    user: "用户",
+    setting: "设定",
+    character: "角色",
+    race: "种族",
+    organization: "组织",
+    "timeline-track": "时间轴",
+    "timeline-event": "时间事件",
+    relationship: "人物关系",
+    "chapter-outline": "章节大纲",
+    foreshadow: "伏笔",
+    "chapter-annotation": "正文评论",
+    attachment: "附件",
+    "file-version": "导入快照",
+    "analysis-task": "AI 分析任务",
+    review: "审核"
+  })[type] ?? type;
 }
 
-function workAuditDetailText(detail) {
-  const entries = Object.entries(detail ?? {}).filter(([, value]) => value !== null && value !== undefined && value !== "").slice(0, 6);
-  return entries.map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`).join(" · ");
+const workAuditDetailLabels = {
+  fields: "变更字段",
+  versionNo: "版本号",
+  fromVersion: "来源版本",
+  source: "操作来源",
+  sourceRef: "来源引用",
+  changeNote: "变更说明",
+  name: "名称",
+  description: "说明",
+  chapterType: "章节类型",
+  volumeId: "所属分卷",
+  previousVolumeId: "原分卷",
+  sortOrder: "排序位置",
+  timeLabel: "时间标签",
+  location: "地点",
+  eventType: "事件类型",
+  batch: "批量操作",
+  recoverable: "可恢复",
+  excludedFromAnalysis: "排除 AI 分析",
+  startLine: "起始行",
+  endLine: "结束行",
+  characterId: "角色 ID",
+  restorePointId: "恢复点 ID",
+  storageKey: "存储位置",
+  byteLength: "文件字节数",
+  mimeType: "文件类型",
+  role: "成员角色",
+  status: "状态",
+  previousStatus: "原状态",
+  dailyGoal: "每日目标",
+  targetTotal: "总字数目标",
+  deadline: "计划完成日期",
+  title: "标题",
+  reason: "原因"
+};
+
+function workAuditDetailValue(value) {
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (Array.isArray(value)) return value.map((item) => typeof item === "object" ? JSON.stringify(item) : String(item)).join("、");
+  if (typeof value === "object" && value !== null) return JSON.stringify(value);
+  return String(value);
+}
+
+function workAuditDetailEntries(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return [];
+  return Object.entries(detail)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => ({ label: workAuditDetailLabels[key] ?? key, value: workAuditDetailValue(value) }));
+}
+
+function workAuditTimestamp(createdAt) {
+  const formatted = formatDateTime(createdAt);
+  const parts = formatted.split(/\s+/u);
+  return { date: parts[0] || "—", time: parts.slice(1).join(" ") || "—" };
 }
 
 function renderWorkAuditRecords() {
-  $("#work-audit-list").innerHTML = workAuditRecords.length ? workAuditRecords.map((record) => `<article class="work-audit-row">
-    <time>${esc(formatDateTime(record.createdAt))}</time>
-    <div><strong>${esc(workAuditActionLabels[record.action] ?? record.action)}</strong><span>${esc(record.actor)} · ${esc(workAuditEntityLabel(record.entityType))}${record.entityId ? ` · ${esc(record.entityId)}` : ""}</span>${workAuditDetailText(record.detail) ? `<small>${esc(workAuditDetailText(record.detail))}</small>` : ""}</div>
-  </article>`).join("") : '<p class="entity-history-empty">当前作品还没有操作记录。</p>';
+  $("#work-audit-list").innerHTML = workAuditRecords.length ? workAuditRecords.map((record) => {
+    const timestamp = workAuditTimestamp(record.createdAt);
+    const details = workAuditDetailEntries(record.detail);
+    return `<article class="work-audit-row">
+      <header class="work-audit-time"><time datetime="${esc(record.createdAt)}"><span>${esc(timestamp.date)}</span><strong>${esc(timestamp.time)}</strong></time></header>
+      <div class="work-audit-event">
+        <div class="work-audit-event-heading"><strong>${esc(workAuditActionLabels[record.action] ?? record.action)}</strong><code>${esc(record.action)}</code></div>
+        <dl class="work-audit-meta">
+          <div><dt>操作者</dt><dd>${esc(record.actor || "system")}</dd></div>
+          <div><dt>对象类型</dt><dd>${esc(workAuditEntityLabel(record.entityType))}</dd></div>
+          <div><dt>对象 ID</dt><dd><code>${record.entityId ? esc(record.entityId) : "—"}</code></dd></div>
+        </dl>
+        ${details.length ? `<dl class="work-audit-details">${details.map((detail) => `<div><dt>${esc(detail.label)}</dt><dd><code>${esc(detail.value)}</code></dd></div>`).join("")}</dl>` : ""}
+      </div>
+    </article>`;
+  }).join("") : '<p class="entity-history-empty">当前作品还没有操作记录。</p>';
+  $("#work-audit-summary").textContent = workAuditRecords.length
+    ? `已显示 ${workAuditRecords.length} 条记录${workAuditNextPage === null ? "，已加载全部记录" : "，还有更多记录可继续加载"}`
+    : "当前作品还没有操作记录。";
   $("#work-audit-load-more").classList.toggle("hidden", workAuditNextPage === null);
 }
 
@@ -3319,18 +3463,36 @@ async function loadWorkAuditPage(page = 1, append = false) {
   renderWorkAuditRecords();
 }
 
-async function openWorkAuditDialog() {
-  if (!state.work || !["admin", "owner"].includes(String(state.work.accessRole))) return;
+async function showWorkAudit() {
+  if (!state.work || !["admin", "owner"].includes(String(state.work.accessRole))) return false;
   workAuditRecords = [];
   workAuditNextPage = null;
+  dismissChapterInsightToast();
+  updateDocumentTitle(state.work);
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#work-audit-view").classList.remove("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-audit-eyebrow").textContent = `作品安全 · 《${state.work.title}》`;
+  $("#work-meta").textContent = "操作记录";
+  $("#settings-button").setAttribute("aria-current", "page");
+  setTopbarViewState("操作记录");
+  $("#work-audit-summary").textContent = "正在读取操作记录……";
   $("#work-audit-list").innerHTML = '<p class="entity-history-empty">正在加载操作记录…</p>';
-  $("#work-audit-dialog").showModal();
+  replacePageRoute({ view: "work-audit", workId: state.work.id, ...settingsRouteContext() });
   try {
     await loadWorkAuditPage();
   } catch (error) {
-    $("#work-audit-dialog").close();
+    $("#work-audit-summary").textContent = "操作记录加载失败。";
+    $("#work-audit-list").innerHTML = '<p class="entity-history-empty">暂时无法读取操作记录，请稍后刷新。</p>';
     toast(error.message, "error");
   }
+  return true;
 }
 
 async function saveWritingGoal(event) {
@@ -3631,7 +3793,8 @@ async function openSearchResult(result) {
   $("#search-dialog").close();
   const inSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
-    || !$("#platform-usage-view").classList.contains("hidden");
+    || !$("#platform-usage-view").classList.contains("hidden")
+    || !$("#work-audit-view").classList.contains("hidden");
   if (inSettings) await returnFromSettings();
   if (target.kind === "chapter") {
     await selectChapter(target.id);
@@ -3657,7 +3820,8 @@ async function openSearchResult(result) {
 async function showSettingsHub() {
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
-    || !$("#platform-usage-view").classList.contains("hidden");
+    || !$("#platform-usage-view").classList.contains("hidden")
+    || !$("#work-audit-view").classList.contains("hidden");
   if (!alreadyInSettings) {
     if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？"))) return false;
     settingsReturnContext = captureSettingsReturnContext();
@@ -3669,6 +3833,7 @@ async function showSettingsHub() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -3695,6 +3860,7 @@ async function returnFromSettings() {
   $("#settings-hub-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#work-audit-view").classList.add("hidden");
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -3714,6 +3880,7 @@ async function showPlatformAi() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.remove("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -3734,6 +3901,7 @@ async function showPlatformUsage() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.remove("hidden");
+  $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -3834,6 +4002,7 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#settings-button").removeAttribute("aria-current");
   settingsReturnContext = null;
@@ -10853,10 +11022,20 @@ $("#writing-progress-button").addEventListener("click", () => openWritingProgres
 $("#writing-progress-close").addEventListener("click", () => $("#writing-progress-dialog").close());
 $("#writing-progress-refresh").addEventListener("click", () => loadWritingProgress().catch((error) => toast(error.message, "error")));
 $("#writing-goal-form").addEventListener("submit", saveWritingGoal);
-$("#work-audit-button").addEventListener("click", () => openWorkAuditDialog().catch((error) => toast(error.message, "error")));
-$("#work-audit-close").addEventListener("click", () => $("#work-audit-dialog").close());
-$("#work-audit-settings-return").addEventListener("click", () => returnToSettingsHub("#work-audit-button", "#work-audit-dialog").catch((error) => toast(error.message, "error")));
-$("#work-audit-refresh").addEventListener("click", () => loadWorkAuditPage().catch((error) => toast(error.message, "error")));
+$("#work-audit-button").addEventListener("click", () => showWorkAudit().catch((error) => toast(error.message, "error")));
+$("#work-audit-return").addEventListener("click", () => returnToSettingsHub("#work-audit-button").catch((error) => toast(error.message, "error")));
+$("#work-audit-refresh").addEventListener("click", async () => {
+  const button = $("#work-audit-refresh");
+  button.disabled = true;
+  try {
+    await loadWorkAuditPage();
+    toast("操作记录已刷新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 $("#work-audit-load-more").addEventListener("click", () => {
   if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
 });
