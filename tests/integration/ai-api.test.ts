@@ -1149,8 +1149,15 @@ describe("AI 供应商、模型与建议 API", () => {
       characterId: foreignCharacter.body.data.id
     }).expect(400);
     expect(mismatch.body.error.code).toBe("ROLEPLAY_CHARACTER_WORK_MISMATCH");
+    await request(runtime.app).patch("/api/platform/ai/settings").send({
+      systemPrompt: "平台创作助手提示不得进入角色扮演。"
+    }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      systemPrompt: "作品创作助手提示不得进入角色扮演。"
+    }).expect(200);
 
     let completionCount = 0;
+    const roleplaySystemPrompts: string[] = [];
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
@@ -1158,7 +1165,22 @@ describe("AI 供应商、模型与建议 API", () => {
         messages: Array<{ role?: string; content?: string }>;
         tools?: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }>;
       };
-      expect(body.messages[0]?.content).toContain("你现在扮演角色“林舟”");
+      const systemPrompt = String(body.messages[0]?.content ?? "");
+      roleplaySystemPrompts.push(systemPrompt);
+      expect(systemPrompt).toContain("<roleplay_main_prompt>");
+      expect(systemPrompt).toContain("你是沉浸式角色扮演引擎");
+      expect(systemPrompt).toContain("<character_card>");
+      expect(systemPrompt).toContain('"name":"林舟"');
+      expect(systemPrompt).not.toContain("小说作者的创作协作助手");
+      expect(systemPrompt).not.toContain("平台创作助手提示不得进入角色扮演");
+      expect(systemPrompt).not.toContain("作品创作助手提示不得进入角色扮演");
+      expect(systemPrompt).not.toContain("<platform_system_prompt>");
+      expect(systemPrompt).not.toContain("<work_system_prompt>");
+      expect(systemPrompt).not.toContain("<extra_system_prompt>");
+      expect(systemPrompt).not.toContain("<current_time>");
+      expect(JSON.stringify(body.messages)).toContain("<scene_context>");
+      expect(JSON.stringify(body.messages)).toContain("<user_message>");
+      expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
       expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self"]);
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
       if (completionCount === 1) {
@@ -1168,14 +1190,17 @@ describe("AI 供应商、模型与建议 API", () => {
           { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } }
         ] } }] }), { status: 200 });
       }
-      const toolMessages = body.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
-      expect(toolMessages[0]).toContain("北港领航员");
-      expect(toolMessages[0]).toContain("第一次看见星舰");
-      expect(toolMessages[0]).toContain("林舟启动了飞船");
-      expect(toolMessages[0]).not.toContain("其他角色的私密档案");
-      expect(toolMessages[0]).not.toContain("只有自己知道的密钥");
-      expect(toolMessages[1]).toContain("TOOL_NOT_AVAILABLE");
-      return new Response(JSON.stringify({ choices: [{ message: { content: "我记得第一次看见星舰，也记得自己在北港启动了飞船。" } }] }), { status: 200 });
+      if (completionCount === 2) {
+        const toolMessages = body.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
+        expect(toolMessages[0]).toContain("北港领航员");
+        expect(toolMessages[0]).toContain("第一次看见星舰");
+        expect(toolMessages[0]).toContain("林舟启动了飞船");
+        expect(toolMessages[0]).not.toContain("其他角色的私密档案");
+        expect(toolMessages[0]).not.toContain("只有自己知道的密钥");
+        expect(toolMessages[1]).toContain("TOOL_NOT_AVAILABLE");
+        return new Response(JSON.stringify({ choices: [{ message: { content: "我记得第一次看见星舰，也记得自己在北港启动了飞船。" } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "我还在北港。你想知道什么？" } }] }), { status: 200 });
     });
 
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
@@ -1188,6 +1213,15 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain('"name":"story_index"');
     expect(streamed.text).toContain('"status":"failed"');
     expect(streamed.text).toContain("我记得第一次看见星舰");
+    const secondTurn = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "你现在在哪里？",
+      scope: { type: "none", suppressAutomaticContext: true },
+      modelId,
+      conversationId: conversation.body.data.id
+    }).expect(200);
+    expect(secondTurn.text).toContain("我还在北港");
+    expect(roleplaySystemPrompts).toHaveLength(3);
+    expect(new Set(roleplaySystemPrompts).size).toBe(1);
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
     expect(reloaded.body.data.taskType).toBe("roleplay");
