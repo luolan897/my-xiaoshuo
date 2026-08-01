@@ -2327,6 +2327,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .markdown-table-menu button:hover, .markdown-table-menu button:focus-visible { background: var(--paper-deep); color: var(--accent-dark); }
 .markdown-table-menu button span { font-size: 11px; font-weight: 600; }
 .markdown-table-menu button small { color: var(--muted); font-size: 9px; }
+.manuscript-export-menu { position: fixed; z-index: 90; display: grid; min-width: 240px; gap: 3px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
+.manuscript-export-menu.hidden { display: none; }
+.manuscript-export-menu > strong { padding: 5px 8px 7px; color: var(--muted); font-size: 9px; }
+.manuscript-export-menu button { display: grid; width: 100%; gap: 2px; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; }
+.manuscript-export-menu button:hover, .manuscript-export-menu button:focus-visible { background: var(--paper-deep); color: var(--accent-dark); outline: 0; }
+.manuscript-export-menu button span { font-size: 11px; font-weight: 600; }
+.manuscript-export-menu button small { color: var(--muted); font-size: 9px; line-height: 1.45; }
 .chapter-annotations-dialog { width: min(820px, 94vw); }
 .chapter-annotations-list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; padding: 18px 24px; }
 .chapter-comment-module-list { display: grid; gap: 10px; }

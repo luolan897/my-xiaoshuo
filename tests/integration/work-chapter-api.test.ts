@@ -743,6 +743,58 @@ describe("作品、导入和章节版本 API", () => {
     await expect(archive.file(markdownName)?.async("string")).resolves.toContain("# 第一卷\n\n## 第一章 启航\n\n飞船驶离北港。");
   });
 
+  it("将正文导出为 DOCX，有封面时嵌入首页", async () => {
+    const validPng = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
+      "base64"
+    );
+    const work = await request(runtime.app).post("/api/works").send({ title: "DOCX 导出作品" }).expect(201);
+    const workId = work.body.data.id;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章 启航",
+      content: "飞船驶离北港。"
+    }).expect(201);
+
+    const withoutCover = await request(runtime.app)
+      .get(`/api/works/${workId}/export?format=docx`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/u)
+      .expect("Content-Disposition", `attachment; filename=novel-${workId}.docx`)
+      .expect(200);
+    expect(Buffer.isBuffer(withoutCover.body)).toBe(true);
+    const plainArchive = await JSZip.loadAsync(withoutCover.body as Buffer);
+    const plainDocument = await plainArchive.file("word/document.xml")?.async("string");
+    expect(plainDocument).toContain("DOCX 导出作品");
+    expect(plainDocument).toContain("第一卷");
+    expect(plainDocument).toContain("第一章 启航");
+    expect(plainDocument).toContain("飞船驶离北港。");
+    expect(Object.keys(plainArchive.files).some((name) => name.startsWith("word/media/"))).toBe(false);
+
+    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validPng, "cover.png").expect(200);
+    const withCover = await request(runtime.app)
+      .get(`/api/works/${workId}/export?format=docx`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect(200);
+    const coverArchive = await JSZip.loadAsync(withCover.body as Buffer);
+    expect(Object.keys(coverArchive.files).some((name) => name.startsWith("word/media/"))).toBe(true);
+    const coverDocument = await coverArchive.file("word/document.xml")?.async("string");
+    expect(coverDocument).toMatch(/<a:blip\b/u);
+  });
+
   it("删除章节后可列出版本并恢复", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "章节删除恢复" }).expect(201);
     const workId = work.body.data.id;
