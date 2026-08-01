@@ -30,6 +30,18 @@ export type RunningLocalServer = {
 
 const publicPath = fileURLToPath(new URL("./public/", import.meta.url));
 
+function safeChmodSync(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch (error: any) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      logger.debug?.("file.chmod_skipped", { path, mode, error: sanitizeError(error) });
+    } else {
+      throw error;
+    }
+  }
+}
+
 export function isDevelopmentServer(environment: NodeJS.ProcessEnv): boolean {
   return environment.NODE_ENV === "development" || environment.npm_lifecycle_event === "dev";
 }
@@ -48,18 +60,18 @@ export function createPreMigrationBackup(options: Pick<LocalServerOptions, "data
   const incompleteDirectory = join(backupsDirectory, `${backupName}.incomplete`);
   const backupDirectory = join(backupsDirectory, backupName);
   mkdirSync(incompleteDirectory, { recursive: true, mode: 0o700 });
-  chmodSync(incompleteDirectory, 0o700);
+  safeChmodSync(incompleteDirectory, 0o700);
   for (const source of [options.databasePath, `${options.databasePath}-wal`, `${options.databasePath}-shm`]) {
     if (!existsSync(source)) continue;
     const target = join(incompleteDirectory, basename(source));
     cpSync(source, target, { preserveTimestamps: true });
-    chmodSync(target, 0o600);
+    safeChmodSync(target, 0o600);
   }
   const masterKeyPath = join(options.dataDirectory, "master.key");
   if (existsSync(masterKeyPath)) {
     const target = join(incompleteDirectory, "master.key");
     cpSync(masterKeyPath, target, { preserveTimestamps: true });
-    chmodSync(target, 0o600);
+    safeChmodSync(target, 0o600);
   }
   const attachmentsPath = join(options.dataDirectory, "attachments");
   if (existsSync(attachmentsPath)) {
@@ -86,7 +98,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
   let runtime: Runtime;
   try {
     mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
-    chmodSync(options.dataDirectory, 0o700);
+    safeChmodSync(options.dataDirectory, 0o700);
     security = resolveRuntimeSecurity(options.env);
     createPreMigrationBackup(options);
     const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
