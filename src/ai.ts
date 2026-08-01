@@ -44,7 +44,7 @@ import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
-import { buildWritingCalendar } from "./writing-progress-time.js";
+import { buildWritingCalendar, resolveServerTimeZone } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
@@ -1529,7 +1529,7 @@ export class AiManager {
     const dailyTokenQuota = settings.dailyTokenQuota === null
       ? null
       : Number(settings.dailyTokenQuota);
-    const calendar = buildWritingCalendar(referenceDate, 1);
+    const calendar = buildWritingCalendar(referenceDate, 1, resolveServerTimeZone());
     const usage = this.store.db.get(
       `SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS used_tokens
        FROM ai_calls WHERE work_id = ? AND created_at >= ? AND created_at < ?`,

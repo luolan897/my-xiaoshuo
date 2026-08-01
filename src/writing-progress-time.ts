@@ -42,6 +42,22 @@ export function resolveWritingTimeZone(environment: Environment = process.env): 
   }
 }
 
+export function resolveServerTimeZone(
+  environment: Environment = process.env,
+  systemTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+): string {
+  for (const candidate of [environment.TZ?.trim(), systemTimeZone?.trim(), "UTC"]) {
+    if (!candidate) continue;
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format();
+      return candidate;
+    } catch {
+      // 继续尝试服务器运行时解析出的时区或 UTC
+    }
+  }
+  return "UTC";
+}
+
 export function writingDateKey(date: Date, timeZone: string): string {
   return dateKeyFromParts(formatterParts(date, timeZone, false));
 }
