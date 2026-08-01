@@ -62,6 +62,14 @@ function cliJson(args: string[], input?: string): unknown {
   return JSON.parse(result.stdout);
 }
 
+function cliJsonWithHttpWarning(args: string[], input?: string): unknown {
+  const result = cli(args, input);
+  const payload = JSON.parse(result.stderr) as { warning?: Record<string, unknown> };
+  assert.equal(payload.warning?.code, "CLI_SERVER_HTTP_WARNING");
+  assert.equal(payload.warning?.server, baseUrl);
+  return JSON.parse(result.stdout);
+}
+
 function cliError(args: string[], expectedCode: string): Record<string, unknown> {
   const result = cli(args, undefined, 1);
   const payload = JSON.parse(result.stderr) as { error?: Record<string, unknown> };
@@ -227,7 +235,7 @@ async function run(): Promise<void> {
   assert.match(help.stdout, /Scriverse CLI/u);
   assert.doesNotMatch(help.stdout, /用户管理|供应商管理/u);
   assert.deepEqual(cliJson(["auth", "status"]), { authenticated: false, defaultServer: null, configPath });
-  assert.deepEqual(cliJson(["connect", baseUrl]), { defaultServer: baseUrl, authenticated: false, configPath });
+  assert.deepEqual(cliJsonWithHttpWarning(["connect", baseUrl]), { defaultServer: baseUrl, authenticated: false, configPath });
   assert.deepEqual(cliJson(["auth", "status"]), { authenticated: false, server: baseUrl, defaultServer: baseUrl, configPath });
   const schemaList = cliJson(["schema", "list"]) as { prohibited: string[]; resources: unknown[] };
   assert.ok(schemaList.prohibited.includes("用户管理"));
@@ -250,7 +258,7 @@ async function run(): Promise<void> {
   const keyPath = textFile("admin-api-key", `${adminKey}\n`);
   chmodSync(keyPath, 0o600);
 
-  const login = cliJson(["auth", "login", "--api-key-file", keyPath]) as {
+  const login = cliJsonWithHttpWarning(["auth", "login", "--api-key-file", keyPath]) as {
     authenticated: boolean;
     user: { userId: string };
   };

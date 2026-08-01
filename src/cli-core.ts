@@ -133,6 +133,17 @@ function emitText(stream: OutputStream, value: string): void {
   stream.write(value.endsWith("\n") ? value : `${value}\n`);
 }
 
+function emitHttpServerWarning(stream: OutputStream, server: string, compact: boolean): void {
+  if (new URL(server).protocol !== "http:") return;
+  emitJson(stream, {
+    warning: {
+      code: "CLI_SERVER_HTTP_WARNING",
+      message: "当前服务端使用 HTTP，API Key 和业务数据将以明文传输；请仅在可信局域网中使用，公网访问请配置 HTTPS",
+      server
+    }
+  }, compact);
+}
+
 function configPath(parsed: ParsedArguments, dependencies: Required<Pick<CliDependencies, "env" | "cwd" | "homeDirectory">>): string {
   const configured = option(parsed, "config") ?? dependencies.env.SCRIVERSE_CONFIG;
   if (configured) return isAbsolute(configured) ? configured : resolve(dependencies.cwd, configured);
@@ -591,8 +602,11 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
     const config = readOptionalConfig(path);
     const requested = parsed.positionals[1];
     if (requested) {
-      config.defaultServer = normalizeServer(requested);
+      const server = normalizeServer(requested);
+      const shouldWarn = server !== config.defaultServer;
+      config.defaultServer = server;
       writeConfig(path, config);
+      if (shouldWarn) emitHttpServerWarning(dependencies.stderr, server, compact);
     }
     emitJson(dependencies.stdout, {
       defaultServer: config.defaultServer,
@@ -616,6 +630,7 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
         throw new CliError("CLI_API_KEY_REQUIRED", "请通过 --api-key、--api-key-file 或 SCRIVERSE_API_KEY 三者之一提供 API Key");
       }
       const apiKey = supplied[0]!;
+      emitHttpServerWarning(dependencies.stderr, server, compact);
       const temporary: CliRequestConfig = {
         server,
         apiKey,
