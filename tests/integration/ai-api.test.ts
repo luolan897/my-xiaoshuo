@@ -1250,6 +1250,8 @@ describe("AI 供应商、模型与建议 API", () => {
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
     const completionBodies: Array<{ stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> }> = [];
+    let titleRequestStarted = false;
+    let releaseTitleRequest: (() => void) | null = null;
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       const body = JSON.parse(String(init?.body)) as { stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> };
@@ -1263,21 +1265,34 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(body.tools).toBeUndefined();
       expect(body.messages?.some((message) => message.content?.includes("请规划北港跃迁路线"))).toBe(true);
       expect(body.messages?.some((message) => message.content?.includes("助手回答"))).toBe(true);
-      return new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 });
+      titleRequestStarted = true;
+      return new Promise<Response>((resolve) => {
+        releaseTitleRequest = () => resolve(new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 }));
+      });
     });
 
-    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+    const streamPromise = request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
       instruction: "请规划北港跃迁路线",
       scope: { type: "chapter", chapterId },
       modelId
-    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    }).expect(200).expect("Content-Type", /text\/event-stream/u).then((response) => response);
+    for (let index = 0; index < 50 && !titleRequestStarted; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
+    expect(titleRequestStarted).toBe(true);
+    const streamed = await Promise.race([
+      streamPromise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("流式回答被标题生成阻塞")), 500))
+    ]).finally(() => releaseTitleRequest?.());
 
     expect(streamed.text).toContain("event: context");
     expect(streamed.text).toContain("event: user_message");
-    expect(streamed.text).toContain('"conversationTitle":"北港跃迁路线"');
+    expect(streamed.text).not.toContain('"conversationTitle":"北港跃迁路线"');
     expect(completionBodies).toHaveLength(2);
     const completePayload = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId?: string };
-    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
+    let reloaded = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
+    for (let index = 0; index < 50 && reloaded.body.data.title !== "北港跃迁路线"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      reloaded = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
+    }
     expect(reloaded.body.data.title).toBe("北港跃迁路线");
     expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
     const settingsAfter = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
