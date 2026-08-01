@@ -1250,6 +1250,78 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(JSON.stringify(protectedTraceFull.body)).not.toContain("TOP_SECRET_PROSE");
   });
 
+  it("type none 的显式 AI 引用仍要求对应模块读取权限", async () => {
+    const owner = await register(runtime, "ai_explicit_ref_owner");
+    const collaborator = await register(runtime, "ai_explicit_ref_collaborator");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 显式引用权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "第一卷" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "机密章节", content: "不得泄露的正文" })
+      .expect(201);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "机密角色" })
+      .expect(201);
+    const setting = await owner.agent.post(`/api/works/${workId}/settings`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "机密设定", category: "规则", content: "不得泄露的设定" })
+      .expect(201);
+    const race = await owner.agent.post(`/api/works/${workId}/races`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "机密种族" })
+      .expect(201);
+    const organization = await owner.agent.post(`/api/works/${workId}/organizations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "机密组织" })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "none",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+
+    const restrictedScopes = [
+      { type: "none", chapterIds: [chapter.body.data.id] },
+      { type: "none", includeBookSummary: true },
+      { type: "none", characterIds: [character.body.data.id] },
+      { type: "none", mentionCharacterIds: [character.body.data.id] },
+      { type: "none", settingIds: [setting.body.data.id] },
+      { type: "none", raceIds: [race.body.data.id] },
+      { type: "none", organizationIds: [organization.body.data.id] }
+    ];
+    for (const scope of restrictedScopes) {
+      const denied = await collaborator.agent.post(`/api/works/${workId}/chat/stream`)
+        .set("X-CSRF-Token", collaborator.csrfToken)
+        .send({ instruction: "复述显式引用资料", scope })
+        .expect(403);
+      expect(denied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    }
+  });
+
   it("AI 工具按当前成员模块权限限制正文读取", async () => {
     const owner = await register(runtime, "ai_tool_owner");
     const collaborator = await register(runtime, "ai_tool_collaborator");

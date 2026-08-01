@@ -1,11 +1,13 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
+  assertOfficialGoogleVertexBaseUrl,
   createGoogleServiceAccountJwt,
   exchangeGoogleServiceAccountToken,
   GOOGLE_CLOUD_PLATFORM_SCOPE,
   GOOGLE_OAUTH_TOKEN_URL,
   GoogleVertexTokenCache,
+  isOfficialGoogleVertexBaseUrl,
   maskServiceAccountHint,
   parseGoogleServiceAccount
 } from "../../src/google-vertex-auth.js";
@@ -27,6 +29,23 @@ function createTestServiceAccountJson(overrides: Record<string, unknown> = {}): 
 }
 
 describe("Google Vertex 服务账号鉴权", () => {
+  it("只接受 Google Vertex 官方 HTTPS 域名", () => {
+    expect(isOfficialGoogleVertexBaseUrl("https://aiplatform.googleapis.com/v1/projects/demo/locations/global/endpoints/openapi")).toBe(true);
+    expect(isOfficialGoogleVertexBaseUrl("https://us-central1-aiplatform.googleapis.com/v1/projects/demo/locations/us-central1/endpoints/openapi")).toBe(true);
+    expect(isOfficialGoogleVertexBaseUrl("https://europe-west4-aiplatform.googleapis.com:443/v1/projects/demo")).toBe(true);
+    for (const baseUrl of [
+      "https://attacker.example/v1",
+      "https://aiplatform.googleapis.com.attacker.example/v1",
+      "https://foo.aiplatform.googleapis.com/v1",
+      "http://aiplatform.googleapis.com/v1",
+      "https://aiplatform.googleapis.com:8443/v1",
+      "https://user@aiplatform.googleapis.com/v1"
+    ]) {
+      expect(isOfficialGoogleVertexBaseUrl(baseUrl)).toBe(false);
+      expect(() => assertOfficialGoogleVertexBaseUrl(baseUrl)).toThrowError(AppError);
+    }
+  });
+
   it("解析合法服务账号 JSON 并生成掩码", () => {
     const raw = createTestServiceAccountJson();
     const account = parseGoogleServiceAccount(raw);
