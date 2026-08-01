@@ -14,32 +14,32 @@ describe("AI 工具调用配额提醒", () => {
     expect(agentToolCallSoftWarningThreshold(20)).toBe(5);
   });
 
-  it("默认上限 12 时仅在剩余不超过 3 次时注入提醒", () => {
+  it("默认上限 12 时仅在剩余不超过 3 次时注入提醒字符串", () => {
     expect(buildAgentToolCallQuotaNotice(4, 12)).toBeNull();
     expect(withAgentToolCallQuotaNotice({ ok: true }, 4, 12)).toEqual({ ok: true });
     for (const remaining of [3, 2]) {
       const notice = buildAgentToolCallQuotaNotice(remaining, 12);
-      expect(notice).toMatchObject({ level: "warning", remaining });
-      expect(notice?.message).toContain(`当前剩余 ${remaining} 次`);
+      expect(notice).toContain(`当前剩余 ${remaining} 次`);
+      expect(withAgentToolCallQuotaNotice({ ok: true, data: [] }, remaining, 12)).toEqual({
+        ok: true,
+        data: [],
+        toolCallQuotaNotice: notice
+      });
     }
   });
 
-  it("较大上限时按比例提前注入 warning", () => {
+  it("较大上限时按比例提前注入提醒字符串", () => {
     expect(buildAgentToolCallQuotaNotice(11, 48)).toBeNull();
     const notice = buildAgentToolCallQuotaNotice(10, 48);
-    expect(notice).toMatchObject({ level: "warning", remaining: 10 });
-    expect(notice?.message).toContain("当前剩余 10 次");
+    expect(notice).toContain("当前剩余 10 次");
+    expect(withAgentToolCallQuotaNotice({ ok: true }, 10, 48).toolCallQuotaNotice).toBe(notice);
   });
 
-  it("剩余 1 次时注入 critical 并告知没有可用次数", () => {
+  it("剩余 1 次时注入 critical 文案并告知没有可用次数", () => {
     const notice = buildAgentToolCallQuotaNotice(1, 12);
-    expect(notice).toMatchObject({
-      level: "critical",
-      remaining: 0
-    });
-    expect(notice?.message).toContain("现在没有可用的工具调用次数了");
-    expect(notice?.message).toContain("直接总结作答");
-    expect(withAgentToolCallQuotaNotice({ ok: true }, 1, 12).toolCallQuotaNotice).toEqual(notice);
+    expect(notice).toContain("现在没有可用的工具调用次数了");
+    expect(notice).toContain("直接总结作答");
+    expect(withAgentToolCallQuotaNotice({ ok: true }, 1, 12).toolCallQuotaNotice).toBe(notice);
   });
 
   it("在倒数第一次配额之后再请求工具时拒绝，最后一档保留给硬错误", () => {

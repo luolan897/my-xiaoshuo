@@ -9,11 +9,7 @@ export type AgentToolResultPagination = {
   maxChars: number;
 };
 
-export type AgentToolCallQuotaNotice = {
-  level: "warning" | "critical";
-  remaining: number;
-  message: string;
-};
+export type AgentToolCallQuotaNotice = string;
 
 export function agentToolCallSoftWarningThreshold(limit: number): number {
   if (!Number.isFinite(limit) || limit <= 0) return AGENT_TOOL_CALL_SOFT_WARNING_FLOOR;
@@ -23,18 +19,10 @@ export function agentToolCallSoftWarningThreshold(limit: number): number {
 export function buildAgentToolCallQuotaNotice(remaining: number, limit: number): AgentToolCallQuotaNotice | null {
   if (!Number.isFinite(remaining) || remaining <= 0) return null;
   if (remaining === 1) {
-    return {
-      level: "critical",
-      remaining: 0,
-      message: "重要提示：现在没有可用的工具调用次数了。请立即根据已有工具结果直接总结作答，不得再请求任何工具。若继续发起工具调用，系统将拒绝并报错。"
-    };
+    return "重要提示：现在没有可用的工具调用次数了。请立即根据已有工具结果直接总结作答，不得再请求任何工具。若继续发起工具调用，系统将拒绝并报错。";
   }
   if (remaining <= agentToolCallSoftWarningThreshold(limit)) {
-    return {
-      level: "warning",
-      remaining,
-      message: `提醒：本轮工具调用配额即将用尽，当前剩余 ${remaining} 次。请尽快收敛并准备最终答案，避免继续大规模检索。`
-    };
+    return `提醒：本轮工具调用配额即将用尽，当前剩余 ${remaining} 次。请尽快收敛并准备最终答案，避免继续大规模检索。`;
   }
   return null;
 }
