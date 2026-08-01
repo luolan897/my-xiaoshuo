@@ -13,12 +13,16 @@ import {
 } from "./ai-protocol.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
+  DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
   MIN_AGENT_TOOL_CALL_LIMIT,
+  agentToolCallGlobalLimit,
   agentToolCallQuotaNoticeBudgetChars,
   agentToolCallQuotaUsedAfterCompact,
   agentToolCallSoftWarningThreshold,
+  clampAgentToolCallGlobalMultiplier,
   paginateToolResultRecords,
   shouldRejectAgentToolCalls,
+  shouldRejectGlobalToolCalls,
   structuralToolResultRecords,
   withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
@@ -4058,7 +4062,13 @@ export class AiManager {
         Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
       );
       const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, MAX_CONFIGURED_AGENT_TOOL_CALLS));
+      const agentToolCallGlobalMultiplier = clampAgentToolCallGlobalMultiplier(
+        this.store.getWorkAiSettings(input.workId).agentToolCallGlobalMultiplier ?? DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER
+      );
+      const globalToolCallLimit = agentToolCallGlobalLimit(agentToolCallLimit, agentToolCallGlobalMultiplier);
       let toolCallQuotaUsed = 0;
+      let globalToolCallUsed = 0;
+      let toolContextCompactCount = 0;
       const compactToolContext = async (additionalMessages: CompletionMessage[] = [], round = 1): Promise<void> => {
         const existingToolContext = completionMessages.slice(toolContextStartIndex);
         const sourceMessages = [
@@ -4115,6 +4125,7 @@ export class AiManager {
         );
         toolContextStartIndex = completionMessages.length;
         toolCallQuotaUsed = agentToolCallQuotaUsedAfterCompact(agentToolCallLimit);
+        toolContextCompactCount += 1;
         const sourceChars = JSON.stringify(sourceMessages).length;
         const contextUsage = this.completionContextUsage(effectiveInput, model, completionMessages, tools);
         logger.info("ai.tool_context.compacted", {
@@ -4123,7 +4134,10 @@ export class AiManager {
           sourceChars,
           summaryChars: summary.length,
           toolCallQuotaUsed,
-          agentToolCallLimit
+          agentToolCallLimit,
+          globalToolCallUsed,
+          globalToolCallLimit,
+          toolContextCompactCount
         });
         const step: AiProcessStep = {
           id: id("process"),
@@ -4185,6 +4199,20 @@ export class AiManager {
         const round = toolRound + 1;
         recordChoiceProcess(choice, round, true);
         const toolCalls = choice.message.tool_calls;
+        if (shouldRejectGlobalToolCalls(globalToolCallUsed, toolCalls.length, globalToolCallLimit)) {
+          logger.warn("ai.tool_call.global_limit_reached", {
+            callId,
+            workId: input.workId,
+            agentToolCallLimit,
+            globalLimit: globalToolCallLimit,
+            actualCalls: globalToolCallUsed,
+            requestedCalls: toolCalls.length,
+            compactCount: toolContextCompactCount,
+            turnQuotaUsed: toolCallQuotaUsed,
+            toolsCalled: executedToolCalls.map((item) => item.name)
+          });
+          throw new Error(`AI exceeded the global tool call limit of ${globalToolCallLimit} in one response cycle.`);
+        }
         if (shouldRejectAgentToolCalls(toolCallQuotaUsed, toolCalls.length, agentToolCallLimit)) {
           throw new Error(`AI requested more than ${agentToolCallLimit} tool calls in one response cycle.`);
         }
@@ -4219,6 +4247,7 @@ export class AiManager {
           });
           executedToolCalls.push(execution);
           toolCallQuotaUsed += 1;
+          globalToolCallUsed += 1;
           const remainingToolCalls = Math.max(0, agentToolCallLimit - toolCallQuotaUsed);
           execution.result = withAgentToolCallQuotaNotice(execution.result, remainingToolCalls, agentToolCallLimit);
           toolTraceRound?.toolExecutions.push(execution);

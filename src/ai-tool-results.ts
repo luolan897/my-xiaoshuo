@@ -2,6 +2,9 @@ export const AGENT_TOOL_RESULT_MAX_CHARS = 10_000;
 export const MIN_AGENT_TOOL_CALL_LIMIT = 5;
 export const MAX_AGENT_TOOL_CALL_LIMIT = 48;
 export const AGENT_TOOL_CALL_SOFT_WARNING_FLOOR = 3;
+export const DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 3;
+export const MIN_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 1;
+export const MAX_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 6;
 
 export type AgentToolResultPagination = {
   cursor: number;
@@ -19,6 +22,28 @@ export function agentToolCallSoftWarningThreshold(limit: number): number {
 export function agentToolCallQuotaUsedAfterCompact(limit: number): number {
   if (!Number.isFinite(limit) || limit <= 0) return 0;
   return Math.floor(limit * 0.2);
+}
+
+export function clampAgentToolCallGlobalMultiplier(value: unknown): number {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER;
+  return Math.min(
+    MAX_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
+    Math.max(MIN_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER, numeric)
+  );
+}
+
+/** 单次响应周期内的全局工具调用上限；计数器只增不减，不受 compact 影响。 */
+export function agentToolCallGlobalLimit(limit: number, multiplier: number): number {
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 0));
+  const safeMultiplier = clampAgentToolCallGlobalMultiplier(multiplier);
+  return safeLimit * safeMultiplier;
+}
+
+export function shouldRejectGlobalToolCalls(globalUsed: number, requestedCount: number, globalLimit: number): boolean {
+  if (!Number.isFinite(globalUsed) || !Number.isFinite(requestedCount) || !Number.isFinite(globalLimit)) return true;
+  if (requestedCount <= 0) return false;
+  return globalUsed + requestedCount > globalLimit;
 }
 
 export function buildAgentToolCallQuotaNotice(remaining: number, limit: number): AgentToolCallQuotaNotice | null {

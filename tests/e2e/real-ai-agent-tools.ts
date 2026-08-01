@@ -343,8 +343,24 @@ try {
     body: JSON.stringify({ agentToolCallLimit: 4 })
   });
   assert.equal(rejectedLowToolCalls.status, 400);
+  const rejectedMultiplier = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentToolCallGlobalMultiplier: 0 })
+  });
+  assert.equal(rejectedMultiplier.status, 400);
+  const rejectedHighMultiplier = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentToolCallGlobalMultiplier: 7 })
+  });
+  assert.equal(rejectedHighMultiplier.status, 400);
+  const minimumMultiplier = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { agentToolCallGlobalMultiplier: 1 });
+  assert.equal(minimumMultiplier.agentToolCallGlobalMultiplier, 1);
+  const maximumMultiplier = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { agentToolCallGlobalMultiplier: 6 });
+  assert.equal(maximumMultiplier.agentToolCallGlobalMultiplier, 6);
   await api("PATCH", `/works/${workId}/ai-settings`, { contextCompactThreshold: 50 });
-  await api("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 12 });
+  await api("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 12, agentToolCallGlobalMultiplier: 3 });
   const compactConversation = await api<JsonObject>("POST", `/works/${workId}/ai-conversations`, { title: "压缩 E2E" });
   const conversationId = String(compactConversation.id);
   for (const [role, content] of [
