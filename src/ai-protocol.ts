@@ -1,8 +1,22 @@
 import type { AiMessage } from "./domain.js";
 import { normalizeBaseUrl } from "./utils.js";
 
-export const AI_PROVIDER_PROTOCOLS = ["openai-chat-completions", "anthropic-messages"] as const;
+export const AI_PROVIDER_PROTOCOLS = ["openai-chat-completions", "anthropic-messages", "google-vertex"] as const;
 export type AiProviderProtocol = (typeof AI_PROVIDER_PROTOCOLS)[number];
+
+export function isAiProviderProtocol(value: string): value is AiProviderProtocol {
+  return (AI_PROVIDER_PROTOCOLS as readonly string[]).includes(value);
+}
+
+export function usesOpenAiChatCompletionsShape(protocol: AiProviderProtocol): boolean {
+  return protocol === "openai-chat-completions" || protocol === "google-vertex";
+}
+
+export function providerProtocolLabelText(protocol: AiProviderProtocol): string {
+  if (protocol === "anthropic-messages") return "Anthropic Messages";
+  if (protocol === "google-vertex") return "Google Vertex";
+  return "Chat Completions";
+}
 
 export type CompletionToolCall = {
   id: string;
@@ -58,7 +72,7 @@ export function providerCompletionEndpoint(baseUrl: string, protocol: AiProvider
 
 export function providerModelEndpoints(baseUrl: string, protocol: AiProviderProtocol): string[] {
   const normalized = normalizeProviderBaseUrl(baseUrl);
-  if (protocol === "openai-chat-completions") return [`${normalized}/models`];
+  if (usesOpenAiChatCompletionsShape(protocol)) return [`${normalized}/models`];
   const primary = appendVersionedResource(normalized, "models");
   const root = new URL("/v1/models", normalized).toString();
   return primary === root ? [primary] : [primary, root];
@@ -66,12 +80,12 @@ export function providerModelEndpoints(baseUrl: string, protocol: AiProviderProt
 
 export function providerRequestHeaders(
   protocol: AiProviderProtocol,
-  apiKey: string,
+  accessToken: string,
   accept: "application/json" | "text/event-stream"
 ): Record<string, string> {
   return {
-    Authorization: `Bearer ${apiKey}`,
-    ...(protocol === "anthropic-messages" ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" } : {}),
+    Authorization: `Bearer ${accessToken}`,
+    ...(protocol === "anthropic-messages" ? { "x-api-key": accessToken, "anthropic-version": "2023-06-01" } : {}),
     "Content-Type": "application/json",
     Accept: accept
   };
@@ -180,7 +194,7 @@ export function buildCompletionRequestBody(input: {
   stream?: boolean;
 }): Record<string, unknown> {
   const tools = input.toolChoice === "auto" ? input.tools ?? [] : [];
-  if (input.protocol === "openai-chat-completions") {
+  if (usesOpenAiChatCompletionsShape(input.protocol)) {
     return {
       model: input.model,
       messages: input.messages.map((message) => {
@@ -227,7 +241,7 @@ function anthropicFinishReason(value: unknown): string | null {
 }
 
 export function parseCompletionPayload(protocol: AiProviderProtocol, value: unknown): CompletionPayload {
-  if (protocol === "openai-chat-completions") {
+  if (usesOpenAiChatCompletionsShape(protocol)) {
     return value && typeof value === "object" && !Array.isArray(value) ? value as CompletionPayload : {};
   }
   const response = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};

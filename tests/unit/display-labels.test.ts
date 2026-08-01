@@ -37,6 +37,7 @@ describe("前端枚举中文标签", () => {
     expect(providerStatusLabel("enabled")).toBe("已启用");
     expect(providerConnectionLabel("success")).toBe("连接正常");
     expect(providerProtocolLabel("anthropic-messages")).toBe("Anthropic Messages");
+    expect(providerProtocolLabel("google-vertex")).toBe("Google Vertex");
     expect(chapterVersionSourceLabel("ai-suggestion")).toBe("AI 建议");
     expect(searchResultTypeLabel("timeline-event")).toBe("时间线事件");
     expect(searchResultTypeLabel("chapter-outline")).toBe("章节大纲");

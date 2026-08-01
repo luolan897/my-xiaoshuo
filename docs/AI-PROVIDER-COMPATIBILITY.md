@@ -116,6 +116,29 @@ Gemini 不接受本项目原先通用发送的 `thinking` 字段。本项目现�
 
 官方资料：[Gemini OpenAI 兼容性](https://ai.google.dev/gemini-api/docs/openai)。
 
+### Google Vertex
+
+Google Vertex 是独立协议选项，使用 Vertex 的 OpenAI 兼容端点，但鉴权为 GCP 服务账号 JSON（不是 AI Studio API Key，也不需要在叙界侧配置 OAuth 回调）。
+
+推荐填写：
+
+```text
+显示名称：Google Vertex
+接口协议：Google Vertex
+API 基础地址：https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi
+服务账号 JSON：粘贴完整 JSON（含 type、client_email、private_key）
+模型标识符：google/gemini-2.0-flash-001 等 Vertex 实际模型名
+```
+
+说明：
+
+- 将 `PROJECT_ID` 换成你的 GCP 项目 ID；如使用区域端点，也可写成 `https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}/locations/{LOCATION}/endpoints/openapi`。
+- 服务账号需具备调用 Vertex AI 的权限（例如 Vertex AI User）。
+- 叙界会用服务账号私钥向 `https://oauth2.googleapis.com/token` 换取短期 access token，再以 Bearer 调用 Vertex；请求体仍为 OpenAI Chat Completions 形状，并自动省略通用 `thinking` 字段。
+- 若上游 `/models` 不可用，可先添加本地模型后再点“测试连接”。
+
+官方资料：[Vertex OpenAI 兼容](https://cloud.google.com/vertex-ai/generative-ai/docs/start/openai)、[服务账号](https://cloud.google.com/iam/docs/service-account-overview)。
+
 ## 已知兼容性边界
 
 OpenAI Chat Completions 适配读取以下响应字段：
@@ -127,6 +150,6 @@ OpenAI Chat Completions 适配读取以下响应字段：
 
 Anthropic Messages 适配会把系统消息移到顶层 `system`，转换工具定义，并处理 `text`、`thinking`、`tool_use`、`tool_result` 内容块和 Messages SSE 事件。工具调用后的 thinking 签名会原样回传，以满足多轮工具调用要求。
 
-不同供应商的扩展参数并不通用。当前 Gemini 会跳过 `thinking`；LongCat Messages 使用其官方支持的 `{"type":"enabled"}` 或 `{"type":"disabled"}`。其他 Anthropic Messages 供应商默认不注入 thinking 参数，避免不同 Claude 模型的手动预算与自适应思考模式冲突。新增供应商时，应至少验证普通请求、流式请求、关闭 Thinking 和工具调用四条路径。
+不同供应商的扩展参数并不通用。当前 Gemini（含 Google Vertex 协议与 AI Studio OpenAI 兼容地址）会跳过 `thinking`；LongCat Messages 使用其官方支持的 `{"type":"enabled"}` 或 `{"type":"disabled"}`。其他 Anthropic Messages 供应商默认不注入 thinking 参数，避免不同 Claude 模型的手动预算与自适应思考模式冲突。新增供应商时，应至少验证普通请求、流式请求、关闭 Thinking 和工具调用四条路径。
 
 如果看到 `This operation was aborted`，优先检查基础地址、模型标识符、浏览器是否中断了 SSE，以及请求是否超过项目当前的上游超时；不要先把它判断为 OpenAI 协议不兼容。

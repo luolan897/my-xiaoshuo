@@ -1,10 +1,12 @@
 import type { AiMessage, ContextScope, TaskType } from "./domain.js";
 import {
   buildCompletionRequestBody,
+  isAiProviderProtocol,
   normalizeProviderBaseUrl,
   parseCompletionPayload,
   providerCompletionEndpoint,
   providerModelEndpoints,
+  providerProtocolLabelText,
   providerRequestHeaders,
   type AiProviderProtocol,
   type CompletionMessage,
@@ -29,6 +31,12 @@ import {
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import {
+  fetchGoogleOAuthAccessToken,
+  GoogleVertexTokenCache,
+  maskServiceAccountHint,
+  parseGoogleServiceAccount
+} from "./google-vertex-auth.js";
 import {
   HYBRID_SEARCH_TYPES,
   buildHybridSearchSnippet,
@@ -302,9 +310,13 @@ function relationshipCandidateLimitMessage(message: string): string {
 }
 
 function isGeminiProviderOrModel(provider: Row, model: Row): boolean {
+  if (providerProtocol(provider) === "google-vertex") return true;
   const endpoint = stringValue(provider, "base_url").toLowerCase();
   const modelId = stringValue(model, "model_id").toLowerCase();
-  return endpoint.includes("gemini") || endpoint.includes("generativelanguage.googleapis.com") || modelId.includes("gemini");
+  return endpoint.includes("gemini")
+    || endpoint.includes("generativelanguage.googleapis.com")
+    || endpoint.includes("aiplatform.googleapis.com")
+    || modelId.includes("gemini");
 }
 
 function isKimiModelId(modelId: string): boolean {
@@ -312,7 +324,14 @@ function isKimiModelId(modelId: string): boolean {
 }
 
 function providerProtocol(provider: Row): AiProviderProtocol {
-  return stringValue(provider, "protocol") === "anthropic-messages" ? "anthropic-messages" : "openai-chat-completions";
+  const value = stringValue(provider, "protocol");
+  if (isAiProviderProtocol(value)) return value;
+  throw new AppError(500, "INVALID_PROVIDER_PROTOCOL", `不支持的供应商协议：${value || "(empty)"}`);
+}
+
+function providerCredentialHint(protocol: AiProviderProtocol, secret: string): string {
+  if (protocol === "google-vertex") return maskServiceAccountHint(parseGoogleServiceAccount(secret));
+  return maskSecret(secret);
 }
 
 function isLongCatProvider(provider: Row): boolean {
@@ -505,27 +524,42 @@ function redactProviderSecret(value: string, apiKey: string): string {
   return value.split(apiKey).join(maskedKey);
 }
 
-function redactProviderSecrets(value: unknown, apiKey: string, depth = 0): unknown {
-  if (typeof value === "string") return redactProviderSecret(value, apiKey);
+function redactProviderSecretsText(value: string, ...secrets: string[]): string {
+  let output = value;
+  for (const secret of secrets) {
+    if (secret) output = redactProviderSecret(output, secret);
+  }
+  return output;
+}
+
+function redactProviderSecrets(value: unknown, secrets: string | string[], depth = 0): unknown {
+  const list = Array.isArray(secrets) ? secrets : [secrets];
+  if (typeof value === "string") return redactProviderSecretsText(value, ...list);
   if (value === null || typeof value === "number" || typeof value === "boolean") return value;
   if (depth >= 32) return "[REDACTED_DEPTH_LIMIT]";
-  if (Array.isArray(value)) return value.map((item) => redactProviderSecrets(item, apiKey, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => redactProviderSecrets(item, list, depth + 1));
   if (!value || typeof value !== "object") return null;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactProviderSecrets(item, apiKey, depth + 1)]));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactProviderSecrets(item, list, depth + 1)]));
 }
 
 class ProviderSecretStreamRedactor {
   private pending = "";
+  private readonly secrets: string[];
 
-  constructor(private readonly apiKey: string) {}
+  constructor(apiKey: string | string[]) {
+    this.secrets = (Array.isArray(apiKey) ? apiKey : [apiKey]).filter(Boolean);
+  }
 
   push(value: string): string {
-    if (!this.apiKey) return value;
-    const combined = redactProviderSecret(`${this.pending}${value}`, this.apiKey);
+    if (this.secrets.length === 0) return value;
+    const combined = redactProviderSecretsText(`${this.pending}${value}`, ...this.secrets);
     let retainedLength = 0;
-    const maximumPrefixLength = Math.min(this.apiKey.length - 1, combined.length);
+    const maximumPrefixLength = Math.min(
+      Math.max(...this.secrets.map((secret) => secret.length), 1) - 1,
+      combined.length
+    );
     for (let length = maximumPrefixLength; length > 0; length -= 1) {
-      if (combined.endsWith(this.apiKey.slice(0, length))) {
+      if (this.secrets.some((secret) => combined.endsWith(secret.slice(0, length)))) {
         retainedLength = length;
         break;
       }
@@ -535,7 +569,7 @@ class ProviderSecretStreamRedactor {
   }
 
   flush(): string {
-    const value = redactProviderSecret(this.pending, this.apiKey);
+    const value = redactProviderSecretsText(this.pending, ...this.secrets);
     this.pending = "";
     return value;
   }
@@ -1489,6 +1523,7 @@ export class AiManager {
     }>;
     timer: ReturnType<typeof setTimeout> | null;
   }>();
+  private readonly vertexTokenCache = new GoogleVertexTokenCache();
 
   constructor(
     private readonly store: Store,
@@ -1998,11 +2033,26 @@ export class AiManager {
     return fetchSafeAiEndpoint(this.fetchImpl, url, init, this.validateOutboundUrl);
   }
 
-  private async probeProviderModel(row: ProviderRow, apiKey: string, modelId: string, signal: AbortSignal): Promise<void> {
+  private async resolveProviderAccessToken(row: ProviderRow): Promise<{ accessToken: string; credentialSecret: string }> {
+    const credentialSecret = this.decryptKey(row);
+    const protocol = providerProtocol(row);
+    if (protocol !== "google-vertex") {
+      return { accessToken: credentialSecret, credentialSecret };
+    }
+    const account = parseGoogleServiceAccount(credentialSecret);
+    const accessToken = await this.vertexTokenCache.getAccessToken(
+      stringValue(row, "id"),
+      account,
+      (jwt) => fetchGoogleOAuthAccessToken(jwt, (url, init) => this.outboundFetch(url, init))
+    );
+    return { accessToken, credentialSecret };
+  }
+
+  private async probeProviderModel(row: ProviderRow, accessToken: string, modelId: string, signal: AbortSignal): Promise<void> {
     const protocol = providerProtocol(row);
     const response = await this.outboundFetch(providerCompletionEndpoint(stringValue(row, "base_url"), protocol), {
       method: "POST",
-      headers: providerRequestHeaders(protocol, apiKey, "application/json"),
+      headers: providerRequestHeaders(protocol, accessToken, "application/json"),
       body: JSON.stringify(buildCompletionRequestBody({
         protocol,
         model: modelId,
@@ -2017,11 +2067,11 @@ export class AiManager {
     try {
       payload = parseCompletionPayload(protocol, JSON.parse(body));
     } catch {
-      throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 返回了无效 JSON`);
+      throw new Error(`${providerProtocolLabelText(protocol)} 返回了无效 JSON`);
     }
     const message = payload.choices?.[0]?.message;
     if (!message?.content?.trim() && !message?.reasoning_content?.trim()) {
-      throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用回复`);
+      throw new Error(`${providerProtocolLabelText(protocol)} 响应缺少可用回复`);
     }
   }
 
@@ -2043,7 +2093,7 @@ export class AiManager {
       encrypted.encrypted,
       encrypted.iv,
       encrypted.tag,
-      maskSecret(input.apiKey),
+      providerCredentialHint(protocol, input.apiKey),
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
@@ -2081,11 +2131,16 @@ export class AiManager {
       encryptedKey = encrypted.encrypted;
       keyIv = encrypted.iv;
       keyTag = encrypted.tag;
-      keyHint = maskSecret(input.apiKey);
+      const nextProtocol = input.protocol ?? providerProtocol(row);
+      keyHint = providerCredentialHint(nextProtocol, input.apiKey);
       connectionStatus = "unchecked";
+      this.vertexTokenCache.clear(providerId);
     }
     if (input.baseUrl && normalizeProviderBaseUrl(input.baseUrl) !== stringValue(row, "base_url")) connectionStatus = "unchecked";
-    if (input.protocol && input.protocol !== providerProtocol(row)) connectionStatus = "unchecked";
+    if (input.protocol && input.protocol !== providerProtocol(row)) {
+      connectionStatus = "unchecked";
+      this.vertexTokenCache.clear(providerId);
+    }
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
        status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, note = ?, updated_at = ? WHERE id = ?`,
@@ -2129,17 +2184,20 @@ export class AiManager {
       affectedDefaults: numberValue(defaultCount ?? {}, "value")
     });
     this.store.db.run("DELETE FROM providers WHERE id = ?", providerId);
+    this.vertexTokenCache.clear(providerId);
   }
 
   async testProvider(providerId: string): Promise<Record<string, unknown>> {
     const row = this.getProviderRow(providerId);
-    const apiKey = this.decryptKey(row);
     const protocol = providerProtocol(row);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     const startedAt = process.hrtime.bigint();
+    let credentialSecret = "";
+    let accessToken = "";
     logger.info("ai.provider_test.started", { providerId });
     try {
+      ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(row));
       let payload: { data?: Array<{ id?: string }> } | null = null;
       let lastFailure = "AI 供应商没有返回模型列表";
       const endpoints = providerModelEndpoints(stringValue(row, "base_url"), protocol);
@@ -2147,7 +2205,7 @@ export class AiManager {
         const endpoint = endpoints[index];
         if (!endpoint) continue;
         const response = await this.outboundFetch(endpoint, {
-          headers: providerRequestHeaders(protocol, apiKey, "application/json"),
+          headers: providerRequestHeaders(protocol, accessToken, "application/json"),
           signal: controller.signal
         });
         if (response.ok) {
@@ -2158,15 +2216,27 @@ export class AiManager {
         lastFailure = `HTTP ${response.status}: ${message.slice(0, 300)}`;
         if (response.status !== 404 || index === endpoints.length - 1) break;
       }
-      if (!payload) throw new Error(lastFailure);
-      const availableModels = Array.isArray(payload.data)
+      const availableModels = payload && Array.isArray(payload.data)
         ? payload.data
           .map((item) => typeof item.id === "string" ? item.id.trim() : "")
           .filter((modelId): modelId is string => Boolean(modelId))
         : [];
-      const probeModel = availableModels[0];
-      if (!probeModel) throw new Error("AI 供应商没有返回可用模型");
-      await this.probeProviderModel(row, apiKey, probeModel, controller.signal);
+      let probeModel = availableModels[0] ?? "";
+      if (!probeModel) {
+        const localModels = this.store.db.all(
+          "SELECT model_id FROM models WHERE provider_id = ? AND enabled = 1 ORDER BY created_at",
+          providerId
+        );
+        probeModel = localModels
+          .map((item) => stringValue(item, "model_id").trim())
+          .find((modelId) => Boolean(modelId)) ?? "";
+      }
+      if (!probeModel) {
+        throw new Error(payload
+          ? "AI 供应商没有返回可用模型，请先添加模型后再测试连接"
+          : `${lastFailure}；也可先添加模型后再测试连接`);
+      }
+      await this.probeProviderModel(row, accessToken, probeModel, controller.signal);
       const timestamp = now();
       this.store.db.run(
         "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
@@ -2183,7 +2253,9 @@ export class AiManager {
       });
       return { ok: true, availableModels, provider: this.getProvider(providerId) };
     } catch (error) {
-      const message = error instanceof Error ? redactProviderSecret(error.message, apiKey) : "连接失败";
+      const message = error instanceof Error
+        ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
+        : "连接失败";
       this.store.db.run(
         "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
         message,
@@ -2207,14 +2279,16 @@ export class AiManager {
     const model = this.getModelRow(modelId);
     const providerId = stringValue(model, "provider_id");
     const provider = this.getProviderRow(providerId);
-    const apiKey = this.decryptKey(provider);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     const startedAt = process.hrtime.bigint();
     const protocol = providerProtocol(provider);
+    let credentialSecret = "";
+    let accessToken = "";
     logger.info("ai.model_test.started", { modelId, providerId });
     try {
-      await this.probeProviderModel(provider, apiKey, stringValue(model, "model_id"), controller.signal);
+      ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider));
+      await this.probeProviderModel(provider, accessToken, stringValue(model, "model_id"), controller.signal);
       const timestamp = now();
       this.store.db.run(
         "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
@@ -2231,7 +2305,9 @@ export class AiManager {
       });
       return { ok: true, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } catch (error) {
-      const message = error instanceof Error ? redactProviderSecret(error.message, apiKey) : "连接失败";
+      const message = error instanceof Error
+        ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
+        : "连接失败";
       this.store.db.run(
         "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
         message,
@@ -3979,7 +4055,7 @@ export class AiManager {
       instructionChars: input.instruction.length,
       toolCount: tools.length
     });
-    let activeApiKey = "";
+    let activeSecrets: string[] = [];
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
@@ -3998,8 +4074,8 @@ export class AiManager {
       return "mixed";
     };
     try {
-      const apiKey = this.decryptKey(provider);
-      activeApiKey = apiKey;
+      const { accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider);
+      activeSecrets = [credentialSecret, accessToken];
       const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis"
         ? AI_LONG_RUNNING_TIMEOUT_MS
@@ -4068,7 +4144,7 @@ export class AiManager {
               try {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
-                  headers: providerRequestHeaders(protocol, apiKey, "application/json"),
+                  headers: providerRequestHeaders(protocol, accessToken, "application/json"),
                   body: JSON.stringify(buildCompletionRequestBody({
                   protocol,
                   model: stringValue(model, "model_id"),
@@ -4094,7 +4170,7 @@ export class AiManager {
             });
             if (candidate.ok) {
               try {
-                const parsed = parseCompletionPayload(protocol, redactProviderSecrets(JSON.parse(candidate.body), apiKey));
+                const parsed = parseCompletionPayload(protocol, redactProviderSecrets(JSON.parse(candidate.body), activeSecrets));
                 traceAttempt.completedAt = now();
                 traceAttempt.status = "completed";
                 traceAttempt.httpStatus = candidate.status;
@@ -4115,14 +4191,14 @@ export class AiManager {
                 ));
                 return parsed;
               } catch {
-                throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} returned invalid JSON: ${candidate.body.slice(0, 500)}`);
+                throw new Error(`${providerProtocolLabelText(protocol)} returned invalid JSON: ${candidate.body.slice(0, 500)}`);
               }
             }
             lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
             traceAttempt.completedAt = now();
             traceAttempt.status = "failed";
             traceAttempt.httpStatus = candidate.status;
-            traceAttempt.failure = redactProviderSecret(`HTTP ${candidate.status}: ${candidate.body.slice(0, 2_000)}`, apiKey);
+            traceAttempt.failure = redactProviderSecretsText(`HTTP ${candidate.status}: ${candidate.body.slice(0, 2_000)}`, ...activeSecrets);
             saveTrace();
             if (candidate.status !== 429 && candidate.status < 500) {
               retryable = false;
@@ -4134,7 +4210,7 @@ export class AiManager {
               traceAttempt.completedAt = now();
               traceAttempt.status = "failed";
               traceAttempt.failure = error instanceof Error
-                ? redactProviderSecret(error.message.slice(0, 2_000), apiKey)
+                ? redactProviderSecretsText(error.message.slice(0, 2_000), ...activeSecrets)
                 : "AI request failed";
               saveTrace();
             }
@@ -4378,7 +4454,7 @@ export class AiManager {
         const suffix = choice?.finish_reason === "length" || reasoningLength > 0
           ? `；模型已生成 ${reasoningLength} 个推理字符，请提高 max_tokens 输出预算`
           : "";
-        throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
+        throw new Error(`${providerProtocolLabelText(protocol)} 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
       }
       const outputTokens = resolveOutputTokens(payload.usage, content);
       const cacheHitPercent = cacheUsageComplete && completionRequestCount > 0 && totalInputTokens > 0
@@ -4427,7 +4503,7 @@ export class AiManager {
         contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools)
       };
     } catch (error) {
-      const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 调用失败";
+      const message = error instanceof Error ? redactProviderSecretsText(error.message, ...activeSecrets) : "AI 调用失败";
       const failureTarget = aiFailureTargetDetails(provider, model);
       this.store.db.run(
         `UPDATE ai_calls
@@ -4508,10 +4584,10 @@ export class AiManager {
       contextChars: context.length,
       instructionChars: input.instruction.length
     });
-    let activeApiKey = "";
+    let activeSecrets: string[] = [];
     try {
-      const apiKey = this.decryptKey(provider);
-      activeApiKey = apiKey;
+      const { accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider);
+      activeSecrets = [credentialSecret, accessToken];
       const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       let streamedResult: {
@@ -4539,7 +4615,7 @@ export class AiManager {
             try {
               const response = await this.outboundFetch(endpoint, {
                 method: "POST",
-                headers: providerRequestHeaders(protocol, apiKey, "text/event-stream"),
+                headers: providerRequestHeaders(protocol, accessToken, "text/event-stream"),
                 body: JSON.stringify(buildCompletionRequestBody({
                   protocol,
                   model: stringValue(model, "model_id"),
@@ -4554,7 +4630,7 @@ export class AiManager {
                 response,
                 protocol,
                 estimateAiTokens(JSON.stringify(messages)),
-                apiKey,
+                activeSecrets,
                 (delta) => {
                   emitted = true;
                   onDelta(delta);
@@ -4643,7 +4719,7 @@ export class AiManager {
         contextUsage: this.completionContextUsage(input, model, messages, [])
       };
     } catch (error) {
-      const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 流式调用失败";
+      const message = error instanceof Error ? redactProviderSecretsText(error.message, ...activeSecrets) : "AI 流式调用失败";
       const failureTarget = aiFailureTargetDetails(provider, model);
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
       logger.error("ai.call.failed", {
@@ -4662,7 +4738,7 @@ export class AiManager {
     response: Response,
     protocol: AiProviderProtocol,
     estimatedInputTokens: number,
-    apiKey: string,
+    apiKey: string | string[],
     onDelta: (delta: string) => void,
     onThinkingDelta: (delta: string) => void
   ): Promise<{
@@ -4673,7 +4749,7 @@ export class AiManager {
     anthropicContent?: Record<string, unknown>[];
     tokenUsage: ResolvedAiTokenUsage;
   }> {
-    const protocolLabel = protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions";
+    const protocolLabel = providerProtocolLabelText(protocol);
     if (!response.body) throw new Error(`${protocolLabel} 流式响应缺少正文`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -8422,7 +8498,7 @@ export class AiManager {
         tag: stringValue(row, "key_tag")
       });
     } catch {
-      throw new AppError(500, "CREDENTIAL_DECRYPT_FAILED", "供应商凭据无法解密，请重新填写 API 密钥");
+      throw new AppError(500, "CREDENTIAL_DECRYPT_FAILED", "供应商凭据无法解密，请重新填写密钥或服务账号 JSON");
     }
   }
 
@@ -8441,7 +8517,8 @@ export class AiManager {
   private mapProvider(row: Row): Record<string, unknown> {
     let apiKeyHint = stringValue(row, "key_hint");
     try {
-      apiKeyHint = maskSecret(this.decryptKey(row));
+      const secret = this.decryptKey(row);
+      apiKeyHint = providerCredentialHint(providerProtocol(row), secret);
     } catch {
       // 凭据无法解密时保留数据库中的旧掩码，避免影响供应商列表展示。
     }
