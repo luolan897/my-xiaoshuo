@@ -8,6 +8,7 @@ describe("写作进度时区", () => {
 
     expect(writingDateKey(now, calendar.timeZone)).toBe("2026-07-30");
     expect(calendar.dateKeys).toEqual(["2026-07-29", "2026-07-30"]);
+    expect(calendar.startInclusive).toBe("2026-07-28T16:00:00.000Z");
     expect(calendar.endExclusive).toBe("2026-07-30T16:00:00.000Z");
   });
 
@@ -15,6 +16,7 @@ describe("写作进度时区", () => {
     const calendar = buildWritingCalendar(new Date("2026-03-08T06:30:00.000Z"), 2, "America/New_York");
 
     expect(calendar.dateKeys).toEqual(["2026-03-07", "2026-03-08"]);
+    expect(calendar.startInclusive).toBe("2026-03-07T05:00:00.000Z");
     expect(calendar.endExclusive).toBe("2026-03-09T04:00:00.000Z");
   });
 

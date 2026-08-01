@@ -2,6 +2,7 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { AI_RESPONSE_MAX_BYTES, estimateAiTokens } from "../../src/ai.js";
+import { resolveWritingTimeZone } from "../../src/writing-progress-time.js";
 import { createTestRuntime } from "../helpers.js";
 
 describe("AI 供应商、模型与建议 API", () => {
@@ -128,7 +129,7 @@ describe("AI 供应商、模型与建议 API", () => {
         dailyTokenQuota: 10_000,
         usedTokens: 10_000,
         remainingTokens: 0,
-        timezone: "UTC"
+        timezone: resolveWritingTimeZone()
       }
     });
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", workId)).toEqual({ count: 1 });

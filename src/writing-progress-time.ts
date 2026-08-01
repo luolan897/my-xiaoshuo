@@ -76,6 +76,7 @@ export function buildWritingCalendar(now: Date, days: number, timeZone = resolve
   timeZone: string;
   dateKeys: string[];
   startKey: string;
+  startInclusive: string;
   endExclusive: string;
 } {
   const periodDays = Math.max(1, Math.floor(days));
@@ -86,6 +87,7 @@ export function buildWritingCalendar(now: Date, days: number, timeZone = resolve
     timeZone,
     dateKeys,
     startKey,
+    startInclusive: localDateTimeToUtc(startKey, timeZone).toISOString(),
     endExclusive: localDateTimeToUtc(shiftWritingDateKey(todayKey, 1), timeZone).toISOString()
   };
 }

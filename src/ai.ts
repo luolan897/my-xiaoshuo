@@ -44,6 +44,7 @@ import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+import { buildWritingCalendar } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
@@ -1528,16 +1529,13 @@ export class AiManager {
     const dailyTokenQuota = settings.dailyTokenQuota === null
       ? null
       : Number(settings.dailyTokenQuota);
-    const dayStartedAt = new Date(referenceDate);
-    dayStartedAt.setUTCHours(0, 0, 0, 0);
-    const resetsAt = new Date(dayStartedAt);
-    resetsAt.setUTCDate(resetsAt.getUTCDate() + 1);
+    const calendar = buildWritingCalendar(referenceDate, 1);
     const usage = this.store.db.get(
       `SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS used_tokens
        FROM ai_calls WHERE work_id = ? AND created_at >= ? AND created_at < ?`,
       workId,
-      dayStartedAt.toISOString(),
-      resetsAt.toISOString()
+      calendar.startInclusive,
+      calendar.endExclusive
     );
     const usedTokens = numberValue(usage ?? {}, "used_tokens");
     return {
@@ -1545,9 +1543,9 @@ export class AiManager {
       usedTokens,
       remainingTokens: dailyTokenQuota === null ? null : Math.max(0, dailyTokenQuota - usedTokens),
       reached: dailyTokenQuota !== null && usedTokens >= dailyTokenQuota,
-      dayStartedAt: dayStartedAt.toISOString(),
-      resetsAt: resetsAt.toISOString(),
-      timezone: "UTC"
+      dayStartedAt: calendar.startInclusive,
+      resetsAt: calendar.endExclusive,
+      timezone: calendar.timeZone
     };
   }
 

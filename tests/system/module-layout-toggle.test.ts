@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260801-daily-token-quota');
-    expect(page.text).toContain('/app.js?v=20260801-daily-token-quota');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260801-daily-token-quota"></script>');
+    expect(page.text).toContain('/styles.css?v=20260801-daily-token-quota-server-tz');
+    expect(page.text).toContain('/app.js?v=20260801-daily-token-quota-server-tz');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260801-daily-token-quota-server-tz"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
