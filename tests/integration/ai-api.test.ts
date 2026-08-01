@@ -1299,6 +1299,37 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
 
+  it("首轮标题生成失败时不影响主回答", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    let titleRequestCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean };
+      if (body.stream) {
+        return new Response('data: {"choices":[{"delta":{"content":"主回答"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        });
+      }
+      titleRequestCount += 1;
+      return new Response(JSON.stringify({ error: { message: "标题模型不可用" } }), { status: 400 });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "标题生成失败时仍保留默认",
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    for (let index = 0; index < 50 && titleRequestCount < 1; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"主回答"}');
+    expect(streamed.text).toContain("event: complete");
+    expect(streamed.text).not.toContain("event: error");
+    expect(titleRequestCount).toBe(1);
+  });
+
   it("侧栏问答失败时通过 SSE 返回受控错误信息", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
