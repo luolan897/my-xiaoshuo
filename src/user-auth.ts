@@ -885,8 +885,17 @@ function hasBodyField(request: Request, field: string): boolean {
 
 function aiContextReadModules(request: Request): WorkPermissionModule[] {
   const scope = requestBodyRecord(request).scope;
-  if (!scope || typeof scope !== "object" || Array.isArray(scope) || (scope as Record<string, unknown>).type === "none") return [];
-  return [...contentPermissionModules];
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return [];
+  const scopeValue = scope as Record<string, unknown>;
+  if (scopeValue.type !== "none") return [...contentPermissionModules];
+  const modules = new Set<WorkPermissionModule>();
+  const hasReferences = (field: string): boolean => Array.isArray(scopeValue[field]) && scopeValue[field].length > 0;
+  if (hasReferences("chapterIds") || scopeValue.includeBookSummary === true) modules.add("prose");
+  if (hasReferences("characterIds") || hasReferences("mentionCharacterIds")) modules.add("characters");
+  if (hasReferences("settingIds")) modules.add("settings");
+  if (hasReferences("raceIds")) modules.add("races");
+  if (hasReferences("organizationIds")) modules.add("organizations");
+  return [...modules];
 }
 
 function workModuleRequirements(request: Request, write: boolean): WorkAuthorizationRequirements {
