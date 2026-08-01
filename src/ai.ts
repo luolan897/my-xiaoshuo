@@ -2110,7 +2110,7 @@ export class AiManager {
           signal: controller.signal
         });
         if (response.ok) {
-          payload = (await response.json()) as { data?: Array<{ id?: string }> };
+          payload = JSON.parse(await readResponseTextLimited(response)) as { data?: Array<{ id?: string }> };
           break;
         }
         const message = await readResponseTextLimited(response);
