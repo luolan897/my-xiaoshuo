@@ -30,4 +30,18 @@ describe("publicAiStreamError", () => {
       message: "AI 流式调用失败"
     });
   });
+
+  it("不向客户端透传服务端 AppError 中记录的底层失败详情", () => {
+    expect(publicAiStreamError(new AppError(502, "AI_CALL_FAILED", "AI 调用失败", {
+      failure: "ENOENT: /secret/path.sql failed at https://provider.example/v1",
+      callId: "call_secret",
+      providerId: "provider_1"
+    }))).toEqual({
+      code: "AI_CALL_FAILED",
+      message: "AI 调用失败",
+      status: 502,
+      callId: "call_secret",
+      providerId: "provider_1"
+    });
+  });
 });

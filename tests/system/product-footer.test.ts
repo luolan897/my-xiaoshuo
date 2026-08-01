@@ -18,7 +18,7 @@ describe("产品信息页脚", () => {
 
   afterAll(() => runtime.close());
 
-  it("在登录、书架和设置页展示作者、版本与仓库信息", async () => {
+  it("在登录、书架和设置页展示版本与仓库信息", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
@@ -27,6 +27,8 @@ describe("产品信息页脚", () => {
     expect(page.text.match(/<footer class="[^"]*product-footer[^"]*" data-product-footer/gu)).toHaveLength(3);
     expect(page.text.match(/© <time data-product-footer-year><\/time>/gu)).toHaveLength(3);
     expect(page.text.match(/href="https:\/\/github.com\/musnows\/Scriverse"/gu)).toHaveLength(3);
+    expect(page.text).not.toContain('href="https://github.com/musnows"');
+    expect(page.text).not.toContain(">musnows</a>");
     expect(page.text.match(/class="product-footer-meta"/gu)).toHaveLength(3);
     expect(page.text.match(/aria-hidden="true">·<\/span>/gu)).toHaveLength(6);
     expect(page.text.match(/aria-label="在 GitHub 查看叙界仓库">GitHub<\/a>/gu)).toHaveLength(3);

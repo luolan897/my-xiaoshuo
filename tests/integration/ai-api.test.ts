@@ -1,7 +1,8 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
-import { estimateAiTokens } from "../../src/ai.js";
+import { AI_RESPONSE_MAX_BYTES, estimateAiTokens } from "../../src/ai.js";
+import { resolveServerTimeZone } from "../../src/writing-progress-time.js";
 import { createTestRuntime } from "../helpers.js";
 
 describe("AI 供应商、模型与建议 API", () => {
@@ -96,6 +97,44 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(409);
   });
 
+  it("达到本书每日 Token 额度后拒绝新的 AI 调用", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      dailyTokenQuota: 10_000,
+      agentTools: []
+    }).expect(200);
+    const createdAt = new Date().toISOString();
+    runtime.database.run(
+      `INSERT INTO ai_calls (
+         id, work_id, task_type, provider_id, model_id, context_scope_json, status,
+         input_tokens, output_tokens, token_usage_source, created_at, completed_at
+       ) VALUES ('quota-used', ?, 'chat', ?, ?, '{}', 'completed', 9000, 1000, 'reported', ?, ?)`,
+      workId,
+      providerId,
+      modelId,
+      createdAt,
+      createdAt
+    );
+
+    const rejected = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "继续分析",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(429);
+    expect(rejected.body.error).toMatchObject({
+      code: "DAILY_TOKEN_QUOTA_EXCEEDED",
+      details: {
+        dailyTokenQuota: 10_000,
+        usedTokens: 10_000,
+        remainingTokens: 0,
+        timezone: resolveServerTimeZone()
+      }
+    });
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_calls WHERE work_id = ?", workId)).toEqual({ count: 1 });
+  });
+
   it("聊天模型和历史列表通过独立接口返回", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -177,6 +216,21 @@ describe("AI 供应商、模型与建议 API", () => {
       availableModels: ["mock-novel-model"],
       provider: { connectionStatus: "success" }
     });
+  });
+
+  it("连接测试拒绝成功状态下的超大模型列表响应", async () => {
+    const { providerId } = await configureAi();
+    fetchMock.mockImplementation(async () => new Response("{}", {
+      status: 200,
+      headers: { "Content-Length": String(AI_RESPONSE_MAX_BYTES + 1) }
+    }));
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({
+      ok: false,
+      provider: { connectionStatus: "failed" }
+    });
+    expect(tested.body.data.error).toContain("AI 供应商响应超过");
   });
 
   it("可以单独测试指定模型并使用该模型标识符", async () => {
@@ -1230,7 +1284,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
 
-  it("侧栏问答失败时通过 SSE 返回上游错误详情", async () => {
+  it("侧栏问答失败时通过 SSE 返回受控错误信息", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     fetchMock.mockImplementation(async (input, init) => {
@@ -1257,9 +1311,12 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain(`"providerId":"${providerId}"`);
     expect(streamed.text).toContain('"modelId":"mock-novel-model"');
     expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
-    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-s*****lue\\"}}"');
+    expect(streamed.text).not.toContain('"failure"');
+    expect(streamed.text).not.toContain("上游参数无效");
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
+    const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
+    expect(calls.body.data[0].failure).toContain("上游参数无效：Bearer sk-s*****lue");
   });
 
   it("流式成功响应不会向浏览器或记录回显供应商密钥", async () => {

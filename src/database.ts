@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 60;
+export const DATABASE_SCHEMA_VERSION = 65;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -441,6 +441,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS work_ai_settings (
         work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
         system_prompt TEXT NOT NULL DEFAULT '',
+        daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000),
         auto_run_enabled INTEGER NOT NULL DEFAULT 0,
         auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
@@ -2593,9 +2594,13 @@ export class Database {
     }
     if (!applied.has(65)) {
       this.transaction(() => {
-        const columns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
-        if (!columns.has("agent_tools_json")) {
+        const conversationColumns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!conversationColumns.has("agent_tools_json")) {
           this.run("ALTER TABLE ai_conversations ADD COLUMN agent_tools_json TEXT");
+        }
+        const workSettingsColumns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!workSettingsColumns.has("daily_token_quota")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000)");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (65, ?)", new Date().toISOString());
       });

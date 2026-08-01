@@ -1000,6 +1000,9 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
       return { read: sourceModules, write: ["ai-analysis"] };
     }
   }
+  if (write && /^\/api\/suggestions\/[^/]+\/guard$/u.test(pathname)) {
+    return { read: ["prose"], anyWrite: [...aiInteractionModules] };
+  }
   if (write && /^\/api\/suggestions\/[^/]+\/accept$/u.test(pathname)) {
     return { write: ["prose"], anyWrite: [...aiInteractionModules] };
   }
@@ -1011,6 +1014,11 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   }
   if (/^\/api\/(?:works\/[^/]+\/(?:tasks|ai-calls)|tasks\/[^/]+)(?:\/|$)/u.test(pathname)) {
     return write ? { write: ["ai-analysis"] } : { read: ["ai-analysis"] };
+  }
+  const conversationHistoryWrite = /^\/api\/ai-conversations\/[^/]+\/(?:fork|context\/prepare|compact)$/u.test(pathname)
+    || (/^\/api\/works\/[^/]+\/chat\/stream$/u.test(pathname) && typeof requestBodyRecord(request).conversationId === "string");
+  if (write && conversationHistoryWrite) {
+    return { read: ["prose", ...aiContextReadModules(request)], write: ["ai-chat"] };
   }
   if (/^\/api\/(?:works\/[^/]+\/(?:ai-conversations|chat)|ai-conversations\/[^/]+)(?:\/|$)/u.test(pathname)) {
     const contextRead = aiContextReadModules(request);
