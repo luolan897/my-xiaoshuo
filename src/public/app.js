@@ -167,7 +167,6 @@ let systemBootId = null;
 let systemBootCheckTimer = null;
 let systemBootCheckPromise = null;
 let systemRestartDetected = false;
-let systemRestartReloading = false;
 let chapterAnnotations = [];
 let workAuditRecords = [];
 let workAuditNextPage = null;
@@ -10227,35 +10226,26 @@ $("#onboarding-dialog").addEventListener("cancel", (event) => {
 });
 $("#system-restart-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
-  if (!$("#system-restart-discard-confirmation").classList.contains("hidden")) hideSystemRestartDiscardConfirmation();
 });
 function hasUnsavedEditorChanges() {
   return state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty;
 }
 
-function reloadAfterSystemRestart() {
-  systemRestartReloading = true;
+function redirectToLoginAfterSystemRestart() {
+  state.user = null;
+  state.csrfToken = null;
+  moduleRequestCache.clear();
+  document.documentElement.classList.remove("dev-auth-bypass");
+  document.documentElement.classList.add("login-route");
   window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-  window.location.reload();
+  const toastRegion = $("#toast-region");
+  toastRegion.replaceChildren();
+  if (typeof toastRegion.hidePopover === "function" && toastRegion.matches(":popover-open")) toastRegion.hidePopover();
+  $("#system-restart-dialog").close();
+  showAuth(false);
 }
 
-function hideSystemRestartDiscardConfirmation() {
-  $("#system-restart-discard-confirmation").classList.add("hidden");
-  const button = $("#system-restart-confirm");
-  button.disabled = false;
-  button.setAttribute("aria-expanded", "false");
-  button.focus();
-}
-
-$("#system-restart-confirm").addEventListener("click", () => {
-  if (!hasUnsavedEditorChanges()) return reloadAfterSystemRestart();
-  $("#system-restart-discard-confirmation").classList.remove("hidden");
-  $("#system-restart-confirm").disabled = true;
-  $("#system-restart-confirm").setAttribute("aria-expanded", "true");
-  $("#system-restart-discard-cancel").focus();
-});
-$("#system-restart-discard-cancel").addEventListener("click", hideSystemRestartDiscardConfirmation);
-$("#system-restart-discard-confirm").addEventListener("click", reloadAfterSystemRestart);
+$("#system-restart-confirm").addEventListener("click", redirectToLoginAfterSystemRestart);
 $("#onboarding-dialog").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
@@ -11400,7 +11390,7 @@ document.addEventListener("visibilitychange", () => {
   void refreshSystemHealth();
 });
 window.addEventListener("beforeunload", (event) => {
-  if (!systemRestartReloading && hasUnsavedEditorChanges()) event.preventDefault();
+  if (hasUnsavedEditorChanges()) event.preventDefault();
 });
 window.addEventListener("online", () => {
   updateSystemHealth({ status: "checking" });
