@@ -46,16 +46,20 @@ describe("Scriverse CLI 核心", () => {
     expect(parsed.options.get("compact")).toEqual(["true"]);
   });
 
-  it("拒绝使用公网 HTTP 服务端地址", async () => {
+  it("允许连接局域网 HTTP 服务端", async () => {
     const root = temporaryRoot();
     const path = join(root, "cli.json");
-    const stderr = outputCapture();
+    const stdout = outputCapture();
 
     expect(await runCli([
-      "connect", "http://192.0.2.10:13210", "--config", path
-    ], { stderr: stderr.stream })).toBe(1);
-    expect(JSON.parse(stderr.text())).toMatchObject({
-      error: { code: "CLI_SERVER_INSECURE" }
+      "connect", "http://192.168.1.10:13210", "--config", path
+    ], { stdout: stdout.stream })).toBe(0);
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      defaultServer: "http://192.168.1.10:13210",
+      authenticated: false
+    });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      defaultServer: "http://192.168.1.10:13210"
     });
   });
 
