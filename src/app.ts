@@ -9,6 +9,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
+import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
@@ -16,6 +17,7 @@ import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
+import { parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
@@ -333,15 +335,50 @@ const reviewSchema = z.object({
   resolutionNote: z.string().max(20_000).optional()
 });
 
-const providerSchema = z.object({
+const providerBaseSchema = z.object({
   name: nonEmpty.max(200),
   baseUrl: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "接口地址必须使用 HTTP 或 HTTPS"),
-  apiKey: nonEmpty.max(10_000),
-  protocol: z.enum(["openai-chat-completions", "anthropic-messages"]).optional(),
+  apiKey: z.string().trim().min(1).max(50_000),
+  protocol: z.enum(AI_PROVIDER_PROTOCOLS).optional(),
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),
   concurrencyLimit: z.number().int().min(1).max(100).optional(),
   rpmLimit: z.number().int().min(1).max(10_000).optional()
+});
+
+function refineProviderApiKey(
+  value: { protocol?: (typeof AI_PROVIDER_PROTOCOLS)[number]; apiKey?: string },
+  ctx: z.RefinementCtx
+): void {
+  if (!value.apiKey) return;
+  const protocol = value.protocol ?? "openai-chat-completions";
+  if (protocol === "google-vertex") {
+    try {
+      parseGoogleServiceAccount(value.apiKey);
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["apiKey"],
+        message: error instanceof AppError ? error.message : "服务账号 JSON 无效"
+      });
+    }
+    return;
+  }
+  if (value.apiKey.length > 10_000) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["apiKey"],
+      message: "API 密钥过长"
+    });
+  }
+}
+
+const providerSchema = providerBaseSchema.superRefine((value, ctx) => {
+  refineProviderApiKey(value, ctx);
+});
+
+const providerUpdateSchema = providerBaseSchema.partial().superRefine((value, ctx) => {
+  refineProviderApiKey(value, ctx);
 });
 
 const modelSchema = z.object({
@@ -801,7 +838,7 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
   return { ...result, restricted: true };
 }
 
-/** SSE 错误事件只暴露 AppError 的公开信息，避免透传内部异常 message。 */
+/** SSE 错误事件只暴露 AppError 的公开信息；AI_CALL_FAILED 的 failure 已在 AI 层完成密钥脱敏。 */
 export function publicAiStreamError(error: unknown): {
   code: string;
   message: string;
@@ -821,7 +858,7 @@ export function publicAiStreamError(error: unknown): {
       code: error.code,
       message: error.message,
       status: error.status,
-      ...(error.status < 500 && typeof details?.failure === "string" ? { failure: details.failure } : {}),
+      ...((error.status < 500 || error.code === "AI_CALL_FAILED") && typeof details?.failure === "string" ? { failure: details.failure } : {}),
       ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
       ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
@@ -977,7 +1014,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       bootId,
       version: APP_VERSION,
       protocol: "openai-chat-completions",
-      protocols: ["openai-chat-completions", "anthropic-messages"],
+      protocols: [...AI_PROVIDER_PROTOCOLS],
       development: options.developmentServer === true
     });
   });
@@ -2140,7 +2177,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, ai.createProvider(parse(providerSchema, request.body)), 201);
   });
   app.get("/api/providers/:providerId", (request, response) => data(response, ai.getProvider(request.params.providerId)));
-  app.patch("/api/providers/:providerId", (request, response) => data(response, ai.updateProvider(request.params.providerId, parse(providerSchema.partial(), request.body))));
+  app.patch("/api/providers/:providerId", (request, response) => data(response, ai.updateProvider(request.params.providerId, parse(providerUpdateSchema, request.body))));
   app.delete("/api/providers/:providerId", (request, response) => {
     ai.deleteProvider(request.params.providerId);
     noContent(response);

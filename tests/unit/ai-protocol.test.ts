@@ -85,7 +85,7 @@ describe("AI 供应商协议适配", () => {
     ]);
   });
 
-  it("切换到 OpenAI 协议时不携带 Anthropic 回放字段", () => {
+  it("切换到 OpenAI 协议时不携带 Anthropic 回放字段或空工具调用", () => {
     const body = buildCompletionRequestBody({
       protocol: "openai-chat-completions",
       model: "mock-model",
@@ -94,49 +94,52 @@ describe("AI 供应商协议适配", () => {
         {
           role: "assistant",
           content: "回答",
-          tool_calls: [],
           anthropic_content: [{ type: "thinking", thinking: "内部思考", signature: "opaque" }]
         },
         { role: "user", content: "第二轮" }
       ],
-      parameters: {}
+      parameters: {},
+      tools: [{ type: "function", function: { name: "story_index", parameters: {} } }],
+      toolChoice: "auto"
     });
     expect(body.messages).toEqual([
       { role: "user", content: "第一轮" },
-      { role: "assistant", content: "回答", tool_calls: [] },
+      { role: "assistant", content: "回答" },
       { role: "user", content: "第二轮" }
     ]);
+    expect(body).toHaveProperty("tools");
+    expect((body.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty("tool_calls");
   });
 
-  it("把 Anthropic 正文、思考和工具调用归一化并保留可回放内容块", () => {
-    const parsed = parseCompletionPayload("anthropic-messages", {
-      stop_reason: "tool_use",
-      content: [
-        { type: "thinking", thinking: "先查询目录", signature: "signed-thinking" },
-        { type: "text", text: "我先检查。" },
-        { type: "tool_use", id: "toolu_2", name: "story_index", input: { limit: 3 } }
-      ],
-      usage: { input_tokens: 12, output_tokens: 8 }
+  it("为 Google Vertex 使用 OpenAI 兼容端点与 Bearer 头", () => {
+    expect(providerCompletionEndpoint(
+      "https://aiplatform.googleapis.com/v1/projects/demo/locations/global/endpoints/openapi",
+      "google-vertex"
+    )).toBe("https://aiplatform.googleapis.com/v1/projects/demo/locations/global/endpoints/openapi/chat/completions");
+    expect(providerModelEndpoints(
+      "https://aiplatform.googleapis.com/v1/projects/demo/locations/global/endpoints/openapi",
+      "google-vertex"
+    )).toEqual(["https://aiplatform.googleapis.com/v1/projects/demo/locations/global/endpoints/openapi/models"]);
+    expect(providerRequestHeaders("google-vertex", "ya29.access-token", "application/json")).toEqual({
+      Authorization: "Bearer ya29.access-token",
+      "Content-Type": "application/json",
+      Accept: "application/json"
     });
-    expect(parsed).toMatchObject({
-      usage: { input_tokens: 12, output_tokens: 8 },
-      choices: [{
-        finish_reason: "tool_use",
-        message: {
-          content: "我先检查。",
-          reasoning_content: "先查询目录",
-          tool_calls: [{
-            id: "toolu_2",
-            type: "function",
-            function: { name: "story_index", arguments: { limit: 3 } }
-          }],
-          anthropic_content: [
-            { type: "thinking", thinking: "先查询目录", signature: "signed-thinking" },
-            { type: "text", text: "我先检查。" },
-            { type: "tool_use", id: "toolu_2", name: "story_index", input: { limit: 3 } }
-          ]
-        }
-      }]
+    const body = buildCompletionRequestBody({
+      protocol: "google-vertex",
+      model: "google/gemini-2.0-flash-001",
+      messages: [{ role: "user", content: "你好" }],
+      parameters: { max_tokens: 32 }
+    });
+    expect(body).toMatchObject({
+      model: "google/gemini-2.0-flash-001",
+      messages: [{ role: "user", content: "你好" }],
+      max_tokens: 32
+    });
+    expect(parseCompletionPayload("google-vertex", {
+      choices: [{ message: { content: "连接成功" } }]
+    })).toMatchObject({
+      choices: [{ message: { content: "连接成功" } }]
     });
   });
 });

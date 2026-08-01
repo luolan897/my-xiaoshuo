@@ -55,11 +55,16 @@
   --relationship-detail-muted: #67758c;
   --font-latin: "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono";
   --font-cjk: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Heiti SC";
+  --ui-font-size: 16px;
+  --ui-font-scale: 1;
+  --ai-font-size: 14px;
+  --ai-font-scale: 1;
   --editor-font-size: 17px;
   --editor-line-height: 1.55;
   --left-panel-width: 280px;
   --ai-panel-width: 360px;
   font-family: var(--font-latin), var(--font-cjk), monospace, sans-serif;
+  font-size: var(--ui-font-size);
   line-height: 1.5;
   color: var(--ink);
   background: var(--paper);
@@ -3256,3 +3261,53 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .dialog-submit-progress > span { width: 100%; transform: none; }
 }
+
+/* 显示设置中的界面字号覆盖常用控件和辅助文字；正文与 Agent 对话分别独立调节。 */
+body { font-size: var(--ui-font-size); }
+:is(.module-nav button, .ghost-button, .primary-button, .module-header p, .eyebrow,
+  .panel-heading, .field-label, .dialog-header-meta, .dialog-fields label,
+  .dialog-fields .form-field-note, .appearance-grid label, .config-section-header p,
+  .config-section .config-save-button, .font-preview span, .settings-hub-card small,
+  .settings-hub-card strong, .shelf-header p, .topbar, .book-card small) {
+  font-size: calc(1em * var(--ui-font-scale));
+}
+.appearance-grid select, .dialog-fields input, .dialog-fields textarea, .dialog-fields select { font-size: calc(13px * var(--ui-font-scale)); }
+
+/* Agent 面板原有的细小字号统一以可读的对话字号为基准缩放。 */
+.ai-panel,
+.ai-history-dialog,
+.ai-tool-call-dialog { font-size: var(--ai-font-size); }
+.ai-heading-title strong { font-size: calc(14px * var(--ai-font-scale)); }
+.ai-heading-actions > span, .ai-heading-actions button { font-size: calc(9px * var(--ai-font-scale)); }
+.quick-actions button { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-context-compaction-divider { font-size: calc(9px * var(--ai-font-scale)); }
+.assistant-message, .user-message { font-size: var(--ai-font-size); }
+.assistant-message > .message-heading, .user-message > .message-heading { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-message-status, .message-card-actions button, .message-meta { font-size: calc(9px * var(--ai-font-scale)); }
+.message-body h1 { font-size: calc(17px * var(--ai-font-scale)); }
+.message-body h2 { font-size: calc(15px * var(--ai-font-scale)); }
+.message-body h3, .message-body h4 { font-size: calc(13px * var(--ai-font-scale)); }
+.message-body h5, .message-body h6 { font-size: calc(11px * var(--ai-font-scale)); }
+.message-body pre { font-size: calc(10px * var(--ai-font-scale)); }
+.message-body .markdown-image small { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-process-details > summary, .ai-process-step-body, .ai-tool-call-summary { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-process-details > summary > small, .ai-process-step > small { font-size: calc(9px * var(--ai-font-scale)); }
+.guard-card strong, .guard-card p, .message-actions button { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-context-warning strong { font-size: calc(11px * var(--ai-font-scale)); }
+.ai-context-warning p, .ai-context-warning button { font-size: calc(9px * var(--ai-font-scale)); }
+.prompt-options select, .prompt-model-field select, .ai-mention-option strong, .ai-mention-empty { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-mention-option small { font-size: calc(8px * var(--ai-font-scale)); }
+.ai-prompt { font-size: var(--ai-font-size); }
+.ai-prompt-reference { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-context-meter b { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-context-popover-header strong { font-size: calc(12px * var(--ai-font-scale)); }
+.ai-context-popover-header small, .ai-context-distribution-label { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-context-distribution-label small, .ai-context-distribution-label strong { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-send-button { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-citation-main strong { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-citation-main small, .ai-citation-main span, .message-citations span { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-history-item strong { font-size: calc(14px * var(--ai-font-scale)); }
+.ai-history-item small { font-size: calc(10px * var(--ai-font-scale)); }
+.ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
+.ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }

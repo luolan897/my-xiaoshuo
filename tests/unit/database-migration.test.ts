@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 66 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 67 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -524,6 +524,62 @@ describe("数据库版本化迁移", () => {
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 46")?.count).toBe(1);
     expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE name = 'relationship_index_volume_dependencies_au'")?.sql))
       .toContain("foreshadow_occurrences");
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 66 扩大 providers.protocol CHECK 并保留已有供应商与模型", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-vertex-protocol-"));
+    roots.push(root);
+    const filename = join(root, "provider-vertex-protocol.db");
+    const current = new Database(filename);
+    const timestamp = "2025-01-01T00:00:00.000Z";
+    current.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, created_at, updated_at
+      ) VALUES (
+        'provider-before-vertex', '__scriverse_platform_ai__', '历史供应商', 'https://legacy-provider.test/v1',
+        'openai-chat-completions', 'encrypted', 'iv', 'tag', '***', 'disabled', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO models (
+        id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
+        preset_json, thinking_enabled, enabled, note, created_at, updated_at
+      ) VALUES (
+        'model-before-vertex', 'provider-before-vertex', '历史模型', 'legacy-model', '[]', '', 128000, '',
+        '{}', 1, 1, '', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec("DELETE FROM schema_migrations WHERE version = 66");
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 66")?.count).toBe(1);
+    expect(migrated.get("SELECT id, protocol FROM providers WHERE id = 'provider-before-vertex'")).toEqual({
+      id: "provider-before-vertex",
+      protocol: "openai-chat-completions"
+    });
+    expect(migrated.get("SELECT id FROM models WHERE id = 'model-before-vertex'")?.id).toBe("model-before-vertex");
+    migrated.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, created_at, updated_at
+      ) VALUES (
+        'provider-vertex', '__scriverse_platform_ai__', 'Vertex', 'https://aiplatform.googleapis.com/v1/projects/demo/locations/global/endpoints/openapi',
+        'google-vertex', 'encrypted', 'iv', 'tag', 'sa:bot@demo.iam.gserviceaccount.com', 'disabled', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    expect(migrated.get("SELECT protocol FROM providers WHERE id = 'provider-vertex'")?.protocol).toBe("google-vertex");
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();

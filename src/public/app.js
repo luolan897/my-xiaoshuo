@@ -36,7 +36,7 @@ import {
   taskScopeLabel,
   timelineStatusLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260728-hybrid-search-v1";
+} from "/display-labels.js?v=20260801-google-vertex";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -2128,7 +2128,7 @@ function clearChapterLineSelection() {
 }
 
 const typographyStorageKey = "ai-novel-typography-v1";
-const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, density: "balanced" });
+const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, uiFontSize: 16, aiFontSize: 14, density: "balanced" });
 const cjkFontStacks = {
   system: '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Heiti SC"',
   pingfang: '"PingFang SC", "Heiti SC", "Microsoft YaHei", "Noto Sans CJK SC"',
@@ -2144,15 +2144,21 @@ const latinFontStacks = {
   consolas: 'Consolas, "Liberation Mono", Menlo, Monaco, "SFMono-Regular"'
 };
 const typographyFontSizes = [15, 16, 17, 18, 20];
+const typographyUiFontSizes = [14, 15, 16, 17, 18];
+const typographyAiFontSizes = [12, 13, 14, 15, 16];
 const densityLineHeights = { compact: 1.4, balanced: 1.55, relaxed: 1.75 };
 
 function normalizeTypographySettings(input) {
   const value = input && typeof input === "object" ? input : {};
   const fontSize = Number(value.fontSize);
+  const uiFontSize = Number(value.uiFontSize);
+  const aiFontSize = Number(value.aiFontSize);
   return {
     cjkFont: Object.hasOwn(cjkFontStacks, value.cjkFont) ? value.cjkFont : typographyDefaults.cjkFont,
     latinFont: Object.hasOwn(latinFontStacks, value.latinFont) ? value.latinFont : typographyDefaults.latinFont,
     fontSize: typographyFontSizes.includes(fontSize) ? fontSize : typographyDefaults.fontSize,
+    uiFontSize: typographyUiFontSizes.includes(uiFontSize) ? uiFontSize : typographyDefaults.uiFontSize,
+    aiFontSize: typographyAiFontSizes.includes(aiFontSize) ? aiFontSize : typographyDefaults.aiFontSize,
     density: Object.hasOwn(densityLineHeights, value.density) ? value.density : typographyDefaults.density
   };
 }
@@ -2204,9 +2210,15 @@ function applyTypographySettings(settings) {
   root.style.setProperty("--font-latin", latinFontStacks[normalized.latinFont]);
   root.style.setProperty("--editor-font-size", `${normalized.fontSize}px`);
   root.style.setProperty("--editor-line-height", String(densityLineHeights[normalized.density]));
+  root.style.setProperty("--ui-font-size", `${normalized.uiFontSize}px`);
+  root.style.setProperty("--ui-font-scale", String(normalized.uiFontSize / typographyDefaults.uiFontSize));
+  root.style.setProperty("--ai-font-size", `${normalized.aiFontSize}px`);
+  root.style.setProperty("--ai-font-scale", String(normalized.aiFontSize / typographyDefaults.aiFontSize));
   root.dataset.cjkFont = normalized.cjkFont;
   root.dataset.latinFont = normalized.latinFont;
   root.dataset.fontSize = String(normalized.fontSize);
+  root.dataset.uiFontSize = String(normalized.uiFontSize);
+  root.dataset.aiFontSize = String(normalized.aiFontSize);
   root.dataset.density = normalized.density;
   scheduleChapterLineNumbers();
 }
@@ -2227,6 +2239,8 @@ function fillAppearanceForm(settings) {
   $("#appearance-cjk-font").value = normalized.cjkFont;
   $("#appearance-latin-font").value = normalized.latinFont;
   $("#appearance-font-size").value = String(normalized.fontSize);
+  $("#appearance-ui-font-size").value = String(normalized.uiFontSize);
+  $("#appearance-ai-font-size").value = String(normalized.aiFontSize);
   $("#appearance-density").value = normalized.density;
 }
 
@@ -2236,6 +2250,8 @@ function readAppearanceForm() {
     cjkFont: form.get("cjkFont"),
     latinFont: form.get("latinFont"),
     fontSize: form.get("fontSize"),
+    uiFontSize: form.get("uiFontSize"),
+    aiFontSize: form.get("aiFontSize"),
     density: form.get("density")
   });
 }
@@ -2246,6 +2262,7 @@ function renderTypographyPreview() {
   preview.style.fontFamily = `${latinFontStacks[settings.latinFont]}, ${cjkFontStacks[settings.cjkFont]}, monospace, sans-serif`;
   preview.style.fontSize = `${settings.fontSize}px`;
   preview.style.lineHeight = String(densityLineHeights[settings.density]);
+  $("#font-size-preview").textContent = `界面 ${settings.uiFontSize} px · Agent 对话 ${settings.aiFontSize} px`;
 }
 
 function openAppearanceDialog() {
@@ -6549,7 +6566,7 @@ function renderProviderCards(providers, models) {
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
-    : emptyModule("尚未配置 AI 供应商", "添加 OpenAI 或 Anthropic 兼容接口地址和密钥，测试成功后再添加模型。");
+    : emptyModule("尚未配置 AI 供应商", "添加 OpenAI、Anthropic 或 Google Vertex 接口地址和凭据，测试成功后再添加模型。");
 }
 
 function bindPlatformProviderActions(host, providers, models) {
@@ -9726,23 +9743,66 @@ async function openTaskDialog() {
 
 function openProviderDialog(item) {
   const protocol = item?.protocol ?? "openai-chat-completions";
-  const defaultBaseUrl = protocol === "anthropic-messages" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
-  openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("protocol", "接口协议", "select", protocol, [["openai-chat-completions", "OpenAI Chat Completions"], ["anthropic-messages", "Anthropic Messages"]]) + field("baseUrl", "API 基础地址", "url", item?.baseUrl ?? defaultBaseUrl) + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
-    const body = { name: form.get("name"), protocol: form.get("protocol"), baseUrl: form.get("baseUrl"), concurrencyLimit: Number(form.get("concurrencyLimit")), rpmLimit: Number(form.get("rpmLimit")), note: form.get("note"), status: form.get("enabled") === "on" ? "enabled" : "disabled" };
-    if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
-    await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
-    await renderPlatformAiConfig();
-    await loadModels();
-  }, item ? "协议、限流与凭据" : "OpenAI / Anthropic 兼容协议");
-  if (!item) {
-    const protocolSelect = $("#dialog-fields select[name='protocol']");
-    const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
-    protocolSelect.addEventListener("change", () => {
-      baseUrlInput.value = protocolSelect.value === "anthropic-messages"
-        ? "https://api.anthropic.com"
-        : "https://api.openai.com/v1";
-    });
-  }
+  const providerProtocolOptions = [
+    ["openai-chat-completions", "OpenAI Chat Completions"],
+    ["anthropic-messages", "Anthropic Messages"],
+    ["google-vertex", "Google Vertex"]
+  ];
+  const defaultBaseUrlForProtocol = (value) => {
+    if (value === "anthropic-messages") return "https://api.anthropic.com";
+    if (value === "google-vertex") {
+      return "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi";
+    }
+    return "https://api.openai.com/v1";
+  };
+  const credentialFieldForProtocol = (value) => {
+    if (value === "google-vertex") {
+      return field(
+        "apiKey",
+        item ? "替换服务账号 JSON（留空则不变）" : "服务账号 JSON",
+        "textarea",
+        ""
+      );
+    }
+    return field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password");
+  };
+  const defaultBaseUrl = item?.baseUrl ?? defaultBaseUrlForProtocol(protocol);
+  openDialog(
+    item ? "编辑 AI 供应商" : "新建 AI 供应商",
+    field("name", "显示名称", "text", item?.name)
+      + field("protocol", "接口协议", "select", protocol, providerProtocolOptions)
+      + field("baseUrl", "API 基础地址", "url", defaultBaseUrl)
+      + `<div data-provider-credential-field>${credentialFieldForProtocol(protocol)}</div>`
+      + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
+      + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
+      + field("note", "用途备注", "textarea", item?.note)
+      + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true),
+    async (form) => {
+      const body = {
+        name: form.get("name"),
+        protocol: form.get("protocol"),
+        baseUrl: form.get("baseUrl"),
+        concurrencyLimit: Number(form.get("concurrencyLimit")),
+        rpmLimit: Number(form.get("rpmLimit")),
+        note: form.get("note"),
+        status: form.get("enabled") === "on" ? "enabled" : "disabled"
+      };
+      if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
+      await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
+      await renderPlatformAiConfig();
+      await loadModels();
+    },
+    item ? "协议、限流与凭据" : "OpenAI / Anthropic / Google Vertex"
+  );
+  const protocolSelect = $("#dialog-fields select[name='protocol']");
+  const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
+  const credentialHost = $("#dialog-fields [data-provider-credential-field]");
+  const syncProviderCredentialField = () => {
+    const nextProtocol = protocolSelect.value;
+    credentialHost.innerHTML = credentialFieldForProtocol(nextProtocol);
+    if (!item) baseUrlInput.value = defaultBaseUrlForProtocol(nextProtocol);
+  };
+  protocolSelect.addEventListener("change", syncProviderCredentialField);
 }
 
 function openModelDialog(providerId, item = null) {
