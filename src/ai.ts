@@ -3943,9 +3943,14 @@ export class AiManager {
   ): ContextBuildPlan {
     const budget = existingBudget ?? this.contextBudget(input, model);
     const roleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
+    const settings = this.store.getWorkAiSettings(input.workId);
+    const configuredScope: ContextScope = {
+      ...input.scope,
+      includeSettingInfo: settings.alwaysIncludeSettingInfo === true ? true : input.scope.includeSettingInfo
+    };
     const baseScope: ContextScope = roleplayCharacterId
       ? {
-          ...input.scope,
+          ...configuredScope,
           type: "none",
           suppressAutomaticContext: true,
           includeBookSummary: false,
@@ -3953,9 +3958,8 @@ export class AiManager {
           volumeId: undefined,
           selection: undefined
         }
-      : input.scope;
+      : configuredScope;
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const settings = this.store.getWorkAiSettings(input.workId);
     const percentage = Math.min(90, Math.max(1, Number(settings.bookSummaryContextPercent) || 50));
     const workContextBudgetTokens = Number(budget.workContextBudgetTokens) || 256;
     const bookSummaryMaximumTokens = baseScope.includeBookSummary || baseScope.type === "book" || baseScope.type === "volume"

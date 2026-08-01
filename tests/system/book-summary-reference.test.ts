@@ -28,7 +28,7 @@ describe("全书概要上下文引用", () => {
     expect(page.text).not.toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260801-ai-context-mention-v1');
+    expect(page.text).toContain('/app.js?v=20260801-global-setting-context-v1');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');
@@ -36,6 +36,11 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button>');
     expect(application.text).toContain('id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button>');
     expect(application.text).toContain('id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button>');
+    expect(application.text).toContain('<h2>设定上下文注入</h2>');
+    expect(application.text).toContain('id="always-include-setting-info" type="checkbox"');
+    expect(application.text).toContain('id="save-always-include-setting-info"');
+    expect(application.text).toContain('body: { alwaysIncludeSettingInfo }');
+    expect(application.text).toContain('即使本轮同时使用“@注入上下文设定”，也只会注入一次');
     expect(application.text).toContain('id="agent-tool-call-global-multiplier"');
     expect(application.text).toContain('aria-label="Agent 工具调用全局倍数"');
     expect(application.text).toContain('class="settings-layout-toggle agent-tool-call-global-multiplier-toggle"');
