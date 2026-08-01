@@ -548,7 +548,7 @@ async function run(): Promise<void> {
   assert.deepEqual(cliJson(["auth", "logout"]), { authenticated: false, server: baseUrl, defaultServer: baseUrl, configPath });
   cliError(["work", "list"], "CLI_LOGIN_REQUIRED");
   const writerKeyPath = textFile("writer-api-key", writerKey);
-  cliJson(["auth", "login", "--api-key-file", writerKeyPath]);
+  cliJsonWithHttpWarning(["auth", "login", "--api-key-file", writerKeyPath]);
   const writerWorks = cliJson(["work", "list"]) as Array<Record<string, unknown>>;
   assert.deepEqual(writerWorks.map((item) => item.id), [writerWork.id]);
   cliError(["work", "get", workId], "WORK_ACCESS_DENIED");
