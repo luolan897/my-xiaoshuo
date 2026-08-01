@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildWritingCalendar, resolveServerTimeZone, resolveWritingTimeZone, writingDateKey } from "../../src/writing-progress-time.js";
+import {
+  buildWritingCalendar,
+  formatServerLocalClock,
+  resolveServerTimeZone,
+  resolveWritingTimeZone,
+  writingDateKey
+} from "../../src/writing-progress-time.js";
 
 describe("写作进度时区", () => {
   it("按配置时区计算跨午夜的日历日期和 UTC 边界", () => {
@@ -29,5 +35,14 @@ describe("写作进度时区", () => {
     expect(resolveServerTimeZone({ TZ: "America/New_York" }, "Europe/Berlin")).toBe("America/New_York");
     expect(resolveServerTimeZone({}, "Europe/Berlin")).toBe("Europe/Berlin");
     expect(resolveServerTimeZone({ TZ: "Invalid/Zone" }, "Invalid/System")).toBe("Asia/Shanghai");
+  });
+
+  it("按服务端时区格式化本地日期、时刻与星期", () => {
+    expect(formatServerLocalClock(new Date("2026-08-01T03:05:00.000Z"), "Asia/Shanghai")).toBe(
+      "当前时间：2026-08-01 11:05 星期六（Asia/Shanghai）"
+    );
+    expect(formatServerLocalClock(new Date("2026-08-02T04:00:00.000Z"), "America/New_York")).toBe(
+      "当前时间：2026-08-02 00:00 星期日（America/New_York）"
+    );
   });
 });

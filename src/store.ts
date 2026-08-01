@@ -1,4 +1,4 @@
-import { DRAFT_SETTING_MODULES, type DraftSettingModule, type ParsedNovel } from "./domain.js";
+import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
@@ -411,6 +411,9 @@ type AiConversationMessageInput = {
   };
 };
 
+export const aiConversationTaskTypes = ["chat", "roleplay", "continue", "polish"] as const;
+export type AiConversationTaskType = typeof aiConversationTaskTypes[number];
+
 export function defaultAiConversationTitle(prompt: string): string {
   const normalized = prompt.replace(/\s+/gu, " ").trim();
   return Array.from(normalized).slice(0, 15).join("") || "新对话";
@@ -418,10 +421,12 @@ export function defaultAiConversationTitle(prompt: string): string {
 
 export type AiConversationContext = {
   workId: string;
+  roleplayCharacterId: string | null;
   summary: string;
   compactedMessageCount: number;
   totalMessageCount: number;
   warningPending: boolean;
+  injectedEntities: AiInjectedEntities;
   messages: Array<{
     id: string;
     role: "user" | "assistant";
@@ -530,6 +535,32 @@ function booleanValue(row: Row, key: string): boolean {
 
 export function normalizeCharacterName(value: string): string {
   return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("zh-CN");
+}
+
+const EMPTY_AI_INJECTED_ENTITIES: AiInjectedEntities = {
+  characters: [],
+  races: [],
+  organizations: []
+};
+
+function parseAiInjectedEntities(value: unknown): AiInjectedEntities {
+  const parsed = typeof value === "string" ? json<Record<string, unknown>>(value, {}) : isRecord(value) ? value : {};
+  const uniqueIds = (items: unknown): string[] => [...new Set((Array.isArray(items) ? items : [])
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim()))];
+  return {
+    characters: uniqueIds(parsed.characters),
+    races: uniqueIds(parsed.races),
+    organizations: uniqueIds(parsed.organizations)
+  };
+}
+
+function mergeAiInjectedEntities(base: AiInjectedEntities, extra: Partial<AiInjectedEntities>): AiInjectedEntities {
+  return {
+    characters: [...new Set([...base.characters, ...(extra.characters ?? [])])],
+    races: [...new Set([...base.races, ...(extra.races ?? [])])],
+    organizations: [...new Set([...base.organizations, ...(extra.organizations ?? [])])]
+  };
 }
 
 export class Store {
@@ -6258,15 +6289,16 @@ export class Store {
     return row ? this.mapContinuationGuard(row) : null;
   }
 
-  createAiConversation(workId: string, title = "新对话"): Record<string, unknown> {
+  createAiConversation(workId: string, title = "新对话", taskType: AiConversationTaskType | null = null): Record<string, unknown> {
     this.getWork(workId);
     const conversationId = id("conversation");
     const timestamp = now();
     const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
     this.db.run(
-      "INSERT INTO ai_conversations (id, work_id, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO ai_conversations (id, work_id, task_type, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       conversationId,
       workId,
+      taskType,
       title.trim() || "新对话",
       JSON.stringify(agentTools),
       timestamp,
@@ -6360,10 +6392,12 @@ export class Store {
     const compactedMessageCount = Math.min(rows.length, Math.max(0, numberValue(conversation, "compacted_message_count")));
     return {
       workId,
+      roleplayCharacterId: optionalString(conversation, "roleplay_character_id"),
       summary: requiredString(conversation, "compacted_summary"),
       compactedMessageCount,
       totalMessageCount: rows.length,
       warningPending: Boolean(optionalString(conversation, "context_warning_at")),
+      injectedEntities: parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
       messages: rows.slice(compactedMessageCount)
         .filter((message) => requiredString(message, "id") !== excludeMessageId)
         .map((message) => ({
@@ -6373,6 +6407,65 @@ export class Store {
           metadata: json<Record<string, unknown>>(requiredString(message, "metadata_json"), {})
         }))
     };
+  }
+
+  getAiConversationInjectedEntities(conversationId: string, workId: string): AiInjectedEntities {
+    const conversation = this.db.get("SELECT work_id, injected_entities_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    return parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES);
+  }
+
+  mergeAiConversationInjectedEntities(conversationId: string, workId: string, extra: Partial<AiInjectedEntities>): AiInjectedEntities {
+    const conversation = this.db.get("SELECT work_id, injected_entities_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const merged = mergeAiInjectedEntities(
+      parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
+      extra
+    );
+    this.db.run(
+      "UPDATE ai_conversations SET injected_entities_json = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify(merged),
+      now(),
+      conversationId
+    );
+    return merged;
+  }
+
+  /** 对话首轮写入 system 时钟文案；已有值则原样返回，禁止后续覆盖。 */
+  ensureAiConversationSystemClock(conversationId: string, workId: string, candidate: string): string {
+    const conversation = this.db.get("SELECT work_id, system_clock_text FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const existing = (optionalString(conversation, "system_clock_text") ?? "").trim();
+    if (existing) return existing;
+    const clock = candidate.trim();
+    if (!clock) return "";
+    this.db.run(
+      "UPDATE ai_conversations SET system_clock_text = ? WHERE id = ? AND TRIM(system_clock_text) = ''",
+      clock,
+      conversationId
+    );
+    const refreshed = this.db.get("SELECT system_clock_text FROM ai_conversations WHERE id = ?", conversationId);
+    return (optionalString(refreshed ?? {}, "system_clock_text") ?? clock).trim() || clock;
+  }
+
+  listCharacterNameEntries(workId: string): Array<{ characterId: string; normalizedName: string; displayName: string; kind: "primary" | "alias" }> {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT character_id, normalized_name, display_name, kind FROM character_names
+       WHERE work_id = ?
+         AND character_id NOT IN (SELECT id FROM characters WHERE work_id = ? AND merged_into_character_id IS NOT NULL)
+       ORDER BY LENGTH(normalized_name) DESC, sort_order ASC`,
+      workId,
+      workId
+    ).map((row) => ({
+      characterId: requiredString(row, "character_id"),
+      normalizedName: requiredString(row, "normalized_name"),
+      displayName: requiredString(row, "display_name"),
+      kind: requiredString(row, "kind") === "alias" ? "alias" as const : "primary" as const
+    }));
   }
 
   getAiConversationTitleContext(conversationId: string, workId: string): AiConversationTitleContext {
@@ -6414,6 +6507,115 @@ export class Store {
     const normalizedTitle = title.replace(/\s+/gu, " ").trim().slice(0, 200) || "新对话";
     this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
     return this.getAiConversation(conversationId);
+  }
+
+  setAiConversationRoleplayCharacter(conversationId: string, characterId: string | null): Record<string, unknown> {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const workId = requiredString(conversation, "work_id");
+    const previousCharacterId = optionalString(conversation, "roleplay_character_id");
+    if (previousCharacterId === characterId) return this.getAiConversationSummary(conversationId);
+    const messageCount = Number(this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
+      conversationId
+    )?.count ?? 0);
+    if (messageCount > 0) {
+      throw new AppError(
+        409,
+        previousCharacterId ? "ROLEPLAY_CHARACTER_LOCKED" : "ROLEPLAY_CONVERSATION_STARTED",
+        previousCharacterId ? "角色扮演对话开始后不能退出模式或更换角色卡" : "当前对话已经开始，不能中途切换为角色扮演"
+      );
+    }
+    if (characterId) {
+      const character = this.getCharacter(characterId);
+      if (String(character.workId) !== workId) {
+        throw new AppError(400, "ROLEPLAY_CHARACTER_WORK_MISMATCH", "角色卡不属于当前作品");
+      }
+      if (character.mergedIntoCharacterId) {
+        throw new AppError(409, "ROLEPLAY_CHARACTER_MERGED", "已合并角色不能用于角色扮演");
+      }
+    }
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversations SET roleplay_character_id = ?, task_type = CASE WHEN ? IS NOT NULL THEN 'roleplay' ELSE task_type END, updated_at = ? WHERE id = ?",
+        characterId,
+        characterId,
+        now(),
+        conversationId
+      );
+      this.audit(workId, "ai-conversation.roleplay-updated", "ai-conversation", conversationId, {
+        previousCharacterId,
+        characterId
+      });
+    });
+    return this.getAiConversationSummary(conversationId);
+  }
+
+  setAiConversationTaskType(conversationId: string, taskType: AiConversationTaskType): Record<string, unknown> {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const workId = requiredString(conversation, "work_id");
+    const previousCharacterId = optionalString(conversation, "roleplay_character_id");
+    const previousTaskType = optionalString(conversation, "task_type") ?? (previousCharacterId ? "roleplay" : "chat");
+    if (previousTaskType === taskType) return this.getAiConversationSummary(conversationId);
+    const messageCount = Number(this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
+      conversationId
+    )?.count ?? 0);
+    if (messageCount > 0) {
+      throw new AppError(409, "AI_CONVERSATION_TASK_LOCKED", "对话开始后不能切换任务类型");
+    }
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversations SET task_type = ?, roleplay_character_id = CASE WHEN ? = 'roleplay' THEN roleplay_character_id ELSE NULL END, updated_at = ? WHERE id = ?",
+        taskType,
+        taskType,
+        now(),
+        conversationId
+      );
+      this.audit(workId, "ai-conversation.task-type-updated", "ai-conversation", conversationId, {
+        previousTaskType,
+        taskType
+      });
+    });
+    return this.getAiConversationSummary(conversationId);
+  }
+
+  setAiConversationContextScope(conversationId: string, scope: ContextScope): Record<string, unknown> {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const workId = requiredString(conversation, "work_id");
+    const assertWork = (record: Record<string, unknown>, code: string, label: string): void => {
+      if (String(record.workId) !== workId) throw new AppError(400, code, `${label}不属于当前作品`);
+    };
+    if (scope.chapterId) assertWork(this.getChapter(scope.chapterId), "CHAPTER_WORK_MISMATCH", "章节");
+    if (scope.volumeId) assertWork(this.getVolume(scope.volumeId), "VOLUME_WORK_MISMATCH", "卷");
+    for (const chapterId of scope.chapterIds ?? []) assertWork(this.getChapter(chapterId), "CHAPTER_WORK_MISMATCH", "章节");
+    for (const characterId of scope.characterIds ?? []) assertWork(this.getCharacter(characterId), "CHARACTER_WORK_MISMATCH", "角色");
+    for (const settingId of scope.settingIds ?? []) assertWork(this.getSetting(settingId), "SETTING_WORK_MISMATCH", "设定");
+    const previousScope = json<ContextScope>(optionalString(conversation, "context_scope_json") ?? "", { type: "none" });
+    const serializedScope = JSON.stringify(scope);
+    if (JSON.stringify(previousScope) === serializedScope) return this.getAiConversationSummary(conversationId);
+    const messageCount = Number(this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
+      conversationId
+    )?.count ?? 0);
+    if (messageCount > 0) {
+      throw new AppError(409, "AI_CONVERSATION_CONTEXT_LOCKED", "对话开始后不能切换上下文引用");
+    }
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversations SET context_scope_json = ?, updated_at = ? WHERE id = ?",
+        serializedScope,
+        now(),
+        conversationId
+      );
+      this.audit(workId, "ai-conversation.context-scope-updated", "ai-conversation", conversationId, {
+        previousScope,
+        scope
+      });
+    });
+    return this.getAiConversationSummary(conversationId);
   }
 
   addAiConversationMessage(conversationId: string, input: AiConversationMessageInput): Record<string, unknown> {
@@ -6472,17 +6674,25 @@ export class Store {
     const sourceCompactedCount = Math.max(0, numberValue(conversation, "compacted_message_count"));
     const forkCompactedCount = targetIndex + 1 >= sourceCompactedCount ? Math.min(sourceCompactedCount, targetIndex + 1) : 0;
     const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
+    const injectedEntitiesJson = optionalString(conversation, "injected_entities_json")
+      ?? JSON.stringify(EMPTY_AI_INJECTED_ENTITIES);
+    const systemClockText = optionalString(conversation, "system_clock_text") ?? "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
+        optionalString(conversation, "roleplay_character_id"),
+        optionalString(conversation, "task_type"),
+        optionalString(conversation, "context_scope_json"),
         title.slice(0, 200),
         forkSummary,
         forkCompactedCount,
         conversation.agent_tools_json == null
           ? JSON.stringify(normalizeWorkAgentTools(this.getWorkAiSettings(requiredString(conversation, "work_id")).agentTools))
           : String(conversation.agent_tools_json),
+        injectedEntitiesJson,
+        systemClockText,
         timestamp,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -6506,6 +6716,10 @@ export class Store {
   }
 
   private mapAiConversation(row: Row): Record<string, unknown> {
+    const roleplayCharacterId = optionalString(row, "roleplay_character_id");
+    const roleplayCharacter = roleplayCharacterId
+      ? this.db.get("SELECT id, name, code FROM characters WHERE id = ? AND work_id = ?", roleplayCharacterId, requiredString(row, "work_id"))
+      : undefined;
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
@@ -6515,6 +6729,13 @@ export class Store {
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
+      taskType: optionalString(row, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat"),
+      contextScope: json<ContextScope>(optionalString(row, "context_scope_json") ?? "", { type: "none" }),
+      roleplayCharacter: roleplayCharacter ? {
+        id: requiredString(roleplayCharacter, "id"),
+        name: requiredString(roleplayCharacter, "name"),
+        code: requiredString(roleplayCharacter, "code")
+      } : null,
       agentTools: row.agent_tools_json == null || row.agent_tools_json === undefined
         ? null
         : normalizeWorkAgentTools(row.agent_tools_json),
@@ -7916,6 +8137,9 @@ export class Store {
     }
     if (scope.type === "settings") {
       return [{ type: "settings", title: "仅设定集" }];
+    }
+    if (scope.type === "settings-catalog") {
+      return [{ type: "settings-catalog", title: "设定库" }];
     }
     if (scope.type === "selection" && typeof scope.selection === "string") {
       return [{ type: "selection", selection: scope.selection }];

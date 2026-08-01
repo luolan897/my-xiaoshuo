@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 65;
+export const DATABASE_SCHEMA_VERSION = 70;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -382,7 +382,7 @@ export class Database {
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         base_url TEXT NOT NULL,
-        protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages')),
+        protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages', 'google-vertex')),
         encrypted_key TEXT NOT NULL,
         key_iv TEXT NOT NULL,
         key_tag TEXT NOT NULL,
@@ -502,11 +502,16 @@ export class Database {
       CREATE TABLE IF NOT EXISTS ai_conversations (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
+        task_type TEXT CHECK(task_type IN ('chat', 'roleplay', 'continue', 'polish')),
+        context_scope_json TEXT,
         title TEXT NOT NULL DEFAULT '新对话',
         compacted_summary TEXT NOT NULL DEFAULT '',
         compacted_message_count INTEGER NOT NULL DEFAULT 0,
         context_warning_at TEXT,
         agent_tools_json TEXT,
+        injected_entities_json TEXT NOT NULL DEFAULT '{"characters":[],"races":[],"organizations":[]}',
+        system_clock_text TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -2603,6 +2608,122 @@ export class Database {
           this.run("ALTER TABLE work_ai_settings ADD COLUMN daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000)");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (65, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(66)) {
+      this.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.transaction(() => {
+          this.run(`CREATE TABLE providers_v66 (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            base_url TEXT NOT NULL,
+            protocol TEXT NOT NULL DEFAULT 'openai-chat-completions' CHECK(protocol IN ('openai-chat-completions', 'anthropic-messages', 'google-vertex')),
+            encrypted_key TEXT NOT NULL,
+            key_iv TEXT NOT NULL,
+            key_tag TEXT NOT NULL,
+            key_hint TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'disabled',
+            connection_status TEXT NOT NULL DEFAULT 'unchecked',
+            concurrency_limit INTEGER NOT NULL DEFAULT 10 CHECK(concurrency_limit BETWEEN 1 AND 100),
+            rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
+            max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
+            default_model_id TEXT,
+            note TEXT NOT NULL DEFAULT '',
+            last_error TEXT,
+            last_success_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )`);
+          this.run(`INSERT INTO providers_v66 (
+            id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
+            connection_status, concurrency_limit, rpm_limit, max_tokens, default_model_id, note,
+            last_error, last_success_at, created_at, updated_at
+          )
+          SELECT
+            id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
+            connection_status, concurrency_limit, rpm_limit, max_tokens, default_model_id, note,
+            last_error, last_success_at, created_at, updated_at
+          FROM providers`);
+          this.run("DROP TABLE providers");
+          this.run("ALTER TABLE providers_v66 RENAME TO providers");
+          this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (66, ?)", new Date().toISOString());
+        });
+      } finally {
+        this.raw.exec("PRAGMA foreign_keys = ON");
+      }
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(67)) {
+      this.transaction(() => {
+        const conversationColumns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!conversationColumns.has("injected_entities_json")) {
+          this.run(`ALTER TABLE ai_conversations ADD COLUMN injected_entities_json TEXT NOT NULL DEFAULT '{"characters":[],"races":[],"organizations":[]}'`);
+        }
+        if (!conversationColumns.has("system_clock_text")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN system_clock_text TEXT NOT NULL DEFAULT ''");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (67, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(68)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!columns.has("roleplay_character_id")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_conversations_roleplay_character ON ai_conversations(roleplay_character_id)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (68, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(69)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!columns.has("task_type")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN task_type TEXT CHECK(task_type IN ('chat', 'roleplay', 'continue', 'polish'))");
+        }
+        this.run("UPDATE ai_conversations SET task_type = CASE WHEN roleplay_character_id IS NOT NULL THEN 'roleplay' ELSE 'chat' END WHERE task_type IS NULL");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (69, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(70)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!columns.has("context_scope_json")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN context_scope_json TEXT");
+        }
+        this.run("UPDATE ai_conversations SET context_scope_json = '{\"type\":\"none\"}' WHERE context_scope_json IS NULL");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (70, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

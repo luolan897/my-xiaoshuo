@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
-import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
+import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-lock-v2";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
@@ -36,7 +36,7 @@ import {
   taskScopeLabel,
   timelineStatusLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260728-hybrid-search-v1";
+} from "/display-labels.js?v=20260801-google-vertex";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -110,8 +110,11 @@ const state = {
   aiCitations: [],
   aiReferences: [],
   aiPromptSent: false,
+  aiTaskType: "chat",
+  aiContextScope: { type: "none" },
   aiConversationId: null,
   aiConversations: [],
+  aiRoleplayCharacter: null,
   aiLastMessageAt: null,
   settings: [],
   dirty: false,
@@ -336,6 +339,7 @@ function applyWorkAccessMode() {
   $("#ai-prompt").readOnly = aiReadOnly;
   $("#ai-prompt").setAttribute("aria-readonly", String(aiReadOnly));
   $("#ai-send").classList.toggle("permission-hidden", aiReadOnly);
+  renderAiRoleplayCharacterSelect();
   updateBackgroundTaskCenterVisibility();
   if (proseReadOnly) {
     chapterEditorReadOnly = true;
@@ -1322,7 +1326,7 @@ function renderAiReferences() {
 
 function renderAiQuickActions() {
   const quickActions = $(".quick-actions");
-  const visible = shouldShowAiQuickActions(state.aiPromptSent);
+  const visible = !state.aiRoleplayCharacter && shouldShowAiQuickActions(state.aiPromptSent);
   quickActions.classList.toggle("hidden", !visible);
   quickActions.setAttribute("aria-hidden", String(!visible));
 }
@@ -1357,7 +1361,15 @@ function updateMessageCreatedAt(message, createdAt) {
 
 function resetAiFeed() {
   state.aiLastMessageAt = null;
-  $("#ai-feed").innerHTML = '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
+  const roleplayName = state.aiRoleplayCharacter?.name;
+  $("#ai-feed").innerHTML = roleplayName
+    ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。我只能通过角色卡和与自己有关的记忆回答。</p></div></div>`
+    : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
+}
+
+function aiAssistantLabel(suffix = "") {
+  const name = state.aiRoleplayCharacter?.name || "助手";
+  return suffix ? `${name} · ${suffix}` : name;
 }
 
 function createAiContextCompactionDivider({ kind = "conversation", ariaLabel = "已压缩上下文", title = "" } = {}) {
@@ -1462,7 +1474,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   grep: "查询正文关键字",
   search_story_entities: "搜索作品实体",
   read_character_sections: "读取人物 Markdown 章节",
-  search_drafts: "搜索想法"
+  search_drafts: "搜索想法",
+  recall_self: "回忆自身"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -1471,7 +1484,8 @@ const AI_TOOL_DESCRIPTIONS = {
   grep: "查询正文关键字所在的完整段落及章节信息。",
   search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。",
-  search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。"
+  search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
+  recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。"
 };
 
 let aiFeedScrollFrame = null;
@@ -1690,7 +1704,7 @@ function renderAiConversationHistory() {
     const title = document.createElement("strong");
     title.textContent = conversation.title;
     const meta = document.createElement("small");
-    meta.textContent = `${conversation.messageCount} 条 · ${formatDateTime(conversation.updatedAt)}`;
+    meta.textContent = `${conversation.messageCount} 条${conversation.roleplayCharacter?.name ? ` · 扮演 ${conversation.roleplayCharacter.name}` : ""} · ${formatDateTime(conversation.updatedAt)}`;
     button.append(title, meta);
     button.addEventListener("click", () => openAiConversation(conversation.id));
     host.append(button);
@@ -1786,6 +1800,9 @@ async function openAiConversation(conversationId, hideHistory = true) {
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
+  applyAiConversationTaskType(conversation.taskType);
+  applyAiConversationContextScope(conversation.contextScope);
+  applyAiRoleplayCharacter(conversation.roleplayCharacter);
   resetAiContextMeter();
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
@@ -1805,12 +1822,15 @@ async function openAiConversation(conversationId, hideHistory = true) {
   if (hideHistory) setAiHistoryVisible(false);
 }
 
-async function createNewAiConversation() {
+async function createNewAiConversation(taskType = "chat") {
   if (!state.work) return;
-  const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: {} });
+  const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: { taskType } });
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = false;
+  applyAiConversationTaskType(conversation.taskType);
+  applyAiConversationContextScope(conversation.contextScope);
+  applyAiRoleplayCharacter(conversation.roleplayCharacter);
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
   hideAiContextWarning();
@@ -1819,10 +1839,133 @@ async function createNewAiConversation() {
   setAiHistoryVisible(false);
 }
 
+function renderAiRoleplayCharacterSelect() {
+  const select = $("#ai-roleplay-character");
+  const selectedId = String(state.aiRoleplayCharacter?.id ?? "");
+  const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
+  const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
+    id: String(character.id),
+    name: String(character.name)
+  }))];
+  if (selectedId && !options.some((option) => option.id === selectedId)) {
+    options.push({ id: selectedId, name: String(state.aiRoleplayCharacter.name) });
+  }
+  select.replaceChildren(...options.map((option) => {
+    const element = document.createElement("option");
+    element.value = option.id;
+    element.textContent = option.name;
+    return element;
+  }));
+  select.value = selectedId;
+  const canSelectCharacter = Boolean(state.work)
+    && canReadModule("characters")
+    && canWritePermissionModule(state.work, "ai-chat");
+  select.disabled = !canSelectCharacter || state.aiPromptSent;
+  select.title = canSelectCharacter
+    ? "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
+    : "当前账户没有角色模块读取权限";
+}
+
+function syncAiTaskOptions() {
+  const roleplaySelected = $("#ai-task").value === "roleplay";
+  $("#ai-scope").classList.toggle("hidden", roleplaySelected);
+  $("#ai-scope").setAttribute("aria-hidden", String(roleplaySelected));
+  $("#ai-roleplay-character").classList.toggle("hidden", !roleplaySelected);
+  $("#ai-roleplay-character").setAttribute("aria-hidden", String(!roleplaySelected));
+  $(".ai-include-setting-info").classList.toggle("hidden", roleplaySelected);
+  $(".ai-include-setting-info").setAttribute("aria-hidden", String(roleplaySelected));
+  $("#ai-task").disabled = state.aiPromptSent;
+  $("#ai-task").title = state.aiPromptSent ? "对话开始后不能切换任务类型" : "";
+  $("#ai-scope").disabled = roleplaySelected || state.aiPromptSent;
+  $("#ai-scope").title = state.aiPromptSent
+    ? "对话开始后不能切换上下文引用"
+    : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
+  syncAiIncludeSettingInfoControl();
+}
+
+function applyAiConversationTaskType(taskType) {
+  const normalizedTaskType = ["chat", "roleplay", "continue", "polish"].includes(taskType) ? taskType : "chat";
+  state.aiTaskType = normalizedTaskType;
+  $("#ai-task").value = normalizedTaskType;
+  $("#ai-task").dataset.previousValue = normalizedTaskType;
+  syncAiTaskOptions();
+}
+
+function applyAiConversationContextScope(scope) {
+  const normalizedScope = scope && typeof scope === "object" ? JSON.parse(JSON.stringify(scope)) : { type: "none" };
+  state.aiContextScope = normalizedScope;
+  $("#ai-scope").value = normalizedScope.type === "book" ? "book"
+    : normalizedScope.type === "volume" ? "volume"
+    : normalizedScope.type === "chapter" && normalizedScope.includeBookSummary ? "chapter-summary"
+    : normalizedScope.type === "chapter" ? "chapter"
+    : "none";
+  $("#ai-include-setting-info").checked = normalizedScope.includeSettingInfo !== false;
+  syncAiTaskOptions();
+}
+
+function applyAiRoleplayCharacter(character) {
+  state.aiRoleplayCharacter = character?.id ? character : null;
+  const active = Boolean(state.aiRoleplayCharacter);
+  if (active) $("#ai-scope").value = "none";
+  $(".ai-panel").classList.toggle("is-roleplaying", active);
+  $("#ai-prompt").dataset.placeholder = active
+    ? `以 ${String(state.aiRoleplayCharacter.name)} 的身份开始对话……`
+    : "告诉 AI 你想讨论或修改什么……";
+  renderAiRoleplayCharacterSelect();
+  syncAiTaskOptions();
+  renderAiQuickActions();
+  resetAiContextMeter();
+}
+
+function refreshAiMessageRoleLabels() {
+  $("#ai-feed").querySelectorAll(".assistant-message .message-heading > span").forEach((label) => {
+    label.textContent = aiAssistantLabel();
+  });
+}
+
+async function updateAiRoleplayCharacter(characterId) {
+  const conversationId = await ensureAiConversation();
+  const conversation = await api(`/api/ai-conversations/${conversationId}/roleplay`, {
+    method: "PATCH",
+    body: { characterId: characterId || null }
+  });
+  upsertAiConversationSummary(conversation);
+  applyAiConversationTaskType(conversation.taskType);
+  applyAiRoleplayCharacter(conversation.roleplayCharacter);
+  if ($("#ai-feed").querySelector("[data-message-id]")) refreshAiMessageRoleLabels();
+  else resetAiFeed();
+  toast(conversation.roleplayCharacter
+    ? `已进入 ${conversation.roleplayCharacter.name} 的角色扮演模式`
+    : "已退出角色扮演模式");
+}
+
 async function ensureAiConversation() {
   if (state.aiConversationId) return state.aiConversationId;
-  await createNewAiConversation();
+  await createNewAiConversation($("#ai-task").value);
   return state.aiConversationId;
+}
+
+async function persistAiConversationTaskType(taskType) {
+  const conversationId = await ensureAiConversation();
+  const conversation = await api(`/api/ai-conversations/${conversationId}/task-type`, {
+    method: "PATCH",
+    body: { taskType }
+  });
+  upsertAiConversationSummary(conversation);
+  applyAiConversationTaskType(conversation.taskType);
+  applyAiRoleplayCharacter(conversation.roleplayCharacter);
+  return conversation;
+}
+
+async function persistAiConversationContextScope(scope) {
+  const conversationId = await ensureAiConversation();
+  const conversation = await api(`/api/ai-conversations/${conversationId}/context-scope`, {
+    method: "PATCH",
+    body: { scope }
+  });
+  upsertAiConversationSummary(conversation);
+  applyAiConversationContextScope(conversation.contextScope);
+  return conversation;
 }
 
 async function persistAiConversationMessage(role, content, citations = [], metadata = {}) {
@@ -2128,7 +2271,7 @@ function clearChapterLineSelection() {
 }
 
 const typographyStorageKey = "ai-novel-typography-v1";
-const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, density: "balanced" });
+const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, uiFontSize: 16, aiFontSize: 14, density: "balanced" });
 const cjkFontStacks = {
   system: '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Heiti SC"',
   pingfang: '"PingFang SC", "Heiti SC", "Microsoft YaHei", "Noto Sans CJK SC"',
@@ -2144,15 +2287,21 @@ const latinFontStacks = {
   consolas: 'Consolas, "Liberation Mono", Menlo, Monaco, "SFMono-Regular"'
 };
 const typographyFontSizes = [15, 16, 17, 18, 20];
+const typographyUiFontSizes = [14, 15, 16, 17, 18];
+const typographyAiFontSizes = [12, 13, 14, 15, 16];
 const densityLineHeights = { compact: 1.4, balanced: 1.55, relaxed: 1.75 };
 
 function normalizeTypographySettings(input) {
   const value = input && typeof input === "object" ? input : {};
   const fontSize = Number(value.fontSize);
+  const uiFontSize = Number(value.uiFontSize);
+  const aiFontSize = Number(value.aiFontSize);
   return {
     cjkFont: Object.hasOwn(cjkFontStacks, value.cjkFont) ? value.cjkFont : typographyDefaults.cjkFont,
     latinFont: Object.hasOwn(latinFontStacks, value.latinFont) ? value.latinFont : typographyDefaults.latinFont,
     fontSize: typographyFontSizes.includes(fontSize) ? fontSize : typographyDefaults.fontSize,
+    uiFontSize: typographyUiFontSizes.includes(uiFontSize) ? uiFontSize : typographyDefaults.uiFontSize,
+    aiFontSize: typographyAiFontSizes.includes(aiFontSize) ? aiFontSize : typographyDefaults.aiFontSize,
     density: Object.hasOwn(densityLineHeights, value.density) ? value.density : typographyDefaults.density
   };
 }
@@ -2204,9 +2353,15 @@ function applyTypographySettings(settings) {
   root.style.setProperty("--font-latin", latinFontStacks[normalized.latinFont]);
   root.style.setProperty("--editor-font-size", `${normalized.fontSize}px`);
   root.style.setProperty("--editor-line-height", String(densityLineHeights[normalized.density]));
+  root.style.setProperty("--ui-font-size", `${normalized.uiFontSize}px`);
+  root.style.setProperty("--ui-font-scale", String(normalized.uiFontSize / typographyDefaults.uiFontSize));
+  root.style.setProperty("--ai-font-size", `${normalized.aiFontSize}px`);
+  root.style.setProperty("--ai-font-scale", String(normalized.aiFontSize / typographyDefaults.aiFontSize));
   root.dataset.cjkFont = normalized.cjkFont;
   root.dataset.latinFont = normalized.latinFont;
   root.dataset.fontSize = String(normalized.fontSize);
+  root.dataset.uiFontSize = String(normalized.uiFontSize);
+  root.dataset.aiFontSize = String(normalized.aiFontSize);
   root.dataset.density = normalized.density;
   scheduleChapterLineNumbers();
 }
@@ -2227,6 +2382,8 @@ function fillAppearanceForm(settings) {
   $("#appearance-cjk-font").value = normalized.cjkFont;
   $("#appearance-latin-font").value = normalized.latinFont;
   $("#appearance-font-size").value = String(normalized.fontSize);
+  $("#appearance-ui-font-size").value = String(normalized.uiFontSize);
+  $("#appearance-ai-font-size").value = String(normalized.aiFontSize);
   $("#appearance-density").value = normalized.density;
 }
 
@@ -2236,6 +2393,8 @@ function readAppearanceForm() {
     cjkFont: form.get("cjkFont"),
     latinFont: form.get("latinFont"),
     fontSize: form.get("fontSize"),
+    uiFontSize: form.get("uiFontSize"),
+    aiFontSize: form.get("aiFontSize"),
     density: form.get("density")
   });
 }
@@ -2246,6 +2405,7 @@ function renderTypographyPreview() {
   preview.style.fontFamily = `${latinFontStacks[settings.latinFont]}, ${cjkFontStacks[settings.cjkFont]}, monospace, sans-serif`;
   preview.style.fontSize = `${settings.fontSize}px`;
   preview.style.lineHeight = String(densityLineHeights[settings.density]);
+  $("#font-size-preview").textContent = `界面 ${settings.uiFontSize} px · Agent 对话 ${settings.aiFontSize} px`;
 }
 
 function openAppearanceDialog() {
@@ -3976,10 +4136,14 @@ function resetWorkScopedUiCaches() {
   state.aiPromptSent = false;
   state.aiConversationId = null;
   state.aiConversations = [];
+  state.aiRoleplayCharacter = null;
   renderAiCitations();
   renderAiReferences();
   renderAiQuickActions();
   resetAiFeed();
+  applyAiConversationTaskType("chat");
+  applyAiConversationContextScope({ type: "none" });
+  applyAiRoleplayCharacter(null);
   $("#ai-conversation-title").textContent = "新对话";
   $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
   resetAiContextMeter();
@@ -6467,6 +6631,7 @@ function openTaskDetailDialog(task, trace) {
       </li>`;
     }
     if (item.type === "book") return "<li>全书</li>";
+    if (item.type === "settings-catalog") return "<li>设定库</li>";
     if (item.type === "selection") return item.restricted
       ? "<li>选定内容（正文读取权限受限）</li>"
       : `<li>选定内容：${esc(item.selection || "未提供")}</li>`;
@@ -6548,7 +6713,7 @@ function renderProviderCards(providers, models) {
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
-    : emptyModule("尚未配置 AI 供应商", "添加 OpenAI 或 Anthropic 兼容接口地址和密钥，测试成功后再添加模型。");
+    : emptyModule("尚未配置 AI 供应商", "添加 OpenAI、Anthropic 或 Google Vertex 接口地址和凭据，测试成功后再添加模型。");
 }
 
 function bindPlatformProviderActions(host, providers, models) {
@@ -7307,23 +7472,51 @@ async function ensureAiModelsLoaded() {
   }
 }
 
+function syncAiIncludeSettingInfoControl() {
+  const scopeType = $("#ai-scope").value;
+  const checkbox = $("#ai-include-setting-info");
+  const proseScopes = new Set(["chapter", "chapter-summary", "volume", "book"]);
+  const enabled = proseScopes.has(scopeType);
+  const roleplaySelected = $("#ai-task").value === "roleplay";
+  checkbox.disabled = roleplaySelected || state.aiPromptSent || !enabled;
+  checkbox.title = state.aiPromptSent
+    ? "对话开始后不能切换上下文选项"
+    : enabled
+    ? "在正文上下文中注入锁定设定、组织/种族简表等"
+    : scopeType === "settings-catalog"
+      ? "设定库范围会直接注入设定目录，无需此选项"
+      : "仅在选择正文类上下文范围时可用";
+}
+
 function currentAiRequestScope() {
   if (!state.work) return null;
-  const taskType = $("#ai-task").value;
-  const scopeType = $("#ai-scope").value;
-  const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";
+  const selectedTaskType = $("#ai-task").value;
+  const roleplaySelected = selectedTaskType === "roleplay";
+  const taskType = roleplaySelected ? "chat" : selectedTaskType;
+  if (state.aiPromptSent) {
+    const conversationScope = JSON.parse(JSON.stringify(state.aiContextScope ?? { type: "none" }));
+    const scope = mergeAiReferenceScope(conversationScope, state.aiReferences);
+    return { taskType, scope, conversationScope, selection: typeof conversationScope.selection === "string" ? conversationScope.selection : "" };
+  }
+  const scopeType = roleplaySelected ? "none" : $("#ai-scope").value;
+  const requiresChapter = taskType === "polish" || taskType === "continue" || (scopeType !== "none" && scopeType !== "settings-catalog");
   if (requiresChapter && !state.chapter) return null;
   const selection = state.chapter ? $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd) : "";
   const volume = state.chapter ? state.work.volumes.find((item) => item.id === state.chapter.volumeId) : null;
   const includeBookSummary = scopeType === "chapter-summary";
-  const scope = taskType === "polish" ? { type: "chapter", chapterId: state.chapter?.id, selection }
+  const conversationScope = taskType === "polish" ? { type: "chapter", chapterId: state.chapter?.id, selection }
     : scopeType === "none" ? { type: "none", ...(taskType === "continue" && state.chapter ? { chapterId: state.chapter.id } : {}) }
     : scopeType === "book" ? { type: "book" }
     : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
+    : scopeType === "settings-catalog" ? { type: "settings-catalog" }
     : { type: "chapter", chapterId: state.chapter?.id };
-  Object.assign(scope, buildAiReferenceScope(state.aiReferences));
-  if (includeBookSummary) scope.includeBookSummary = true;
-  return { taskType, scope, selection };
+  if (includeBookSummary) conversationScope.includeBookSummary = true;
+  const proseScopes = new Set(["chapter", "chapter-summary", "volume", "book"]);
+  if (proseScopes.has(scopeType) || taskType === "polish") {
+    conversationScope.includeSettingInfo = $("#ai-include-setting-info").checked;
+  }
+  const scope = mergeAiReferenceScope(conversationScope, state.aiReferences);
+  return { taskType, scope, conversationScope, selection };
 }
 
 function renderAiContextDistribution(usage) {
@@ -7429,6 +7622,7 @@ async function loadAiReferences() {
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.characters = characters;
   state.settings = settings;
+  renderAiRoleplayCharacterSelect();
   loadedAiReferencesWorkId = workId;
 }
 
@@ -9707,23 +9901,66 @@ async function openTaskDialog() {
 
 function openProviderDialog(item) {
   const protocol = item?.protocol ?? "openai-chat-completions";
-  const defaultBaseUrl = protocol === "anthropic-messages" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
-  openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("protocol", "接口协议", "select", protocol, [["openai-chat-completions", "OpenAI Chat Completions"], ["anthropic-messages", "Anthropic Messages"]]) + field("baseUrl", "API 基础地址", "url", item?.baseUrl ?? defaultBaseUrl) + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
-    const body = { name: form.get("name"), protocol: form.get("protocol"), baseUrl: form.get("baseUrl"), concurrencyLimit: Number(form.get("concurrencyLimit")), rpmLimit: Number(form.get("rpmLimit")), note: form.get("note"), status: form.get("enabled") === "on" ? "enabled" : "disabled" };
-    if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
-    await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
-    await renderPlatformAiConfig();
-    await loadModels();
-  }, item ? "协议、限流与凭据" : "OpenAI / Anthropic 兼容协议");
-  if (!item) {
-    const protocolSelect = $("#dialog-fields select[name='protocol']");
-    const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
-    protocolSelect.addEventListener("change", () => {
-      baseUrlInput.value = protocolSelect.value === "anthropic-messages"
-        ? "https://api.anthropic.com"
-        : "https://api.openai.com/v1";
-    });
-  }
+  const providerProtocolOptions = [
+    ["openai-chat-completions", "OpenAI Chat Completions"],
+    ["anthropic-messages", "Anthropic Messages"],
+    ["google-vertex", "Google Vertex"]
+  ];
+  const defaultBaseUrlForProtocol = (value) => {
+    if (value === "anthropic-messages") return "https://api.anthropic.com";
+    if (value === "google-vertex") {
+      return "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi";
+    }
+    return "https://api.openai.com/v1";
+  };
+  const credentialFieldForProtocol = (value) => {
+    if (value === "google-vertex") {
+      return field(
+        "apiKey",
+        item ? "替换服务账号 JSON（留空则不变）" : "服务账号 JSON",
+        "textarea",
+        ""
+      );
+    }
+    return field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password");
+  };
+  const defaultBaseUrl = item?.baseUrl ?? defaultBaseUrlForProtocol(protocol);
+  openDialog(
+    item ? "编辑 AI 供应商" : "新建 AI 供应商",
+    field("name", "显示名称", "text", item?.name)
+      + field("protocol", "接口协议", "select", protocol, providerProtocolOptions)
+      + field("baseUrl", "API 基础地址", "url", defaultBaseUrl)
+      + `<div data-provider-credential-field>${credentialFieldForProtocol(protocol)}</div>`
+      + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
+      + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
+      + field("note", "用途备注", "textarea", item?.note)
+      + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true),
+    async (form) => {
+      const body = {
+        name: form.get("name"),
+        protocol: form.get("protocol"),
+        baseUrl: form.get("baseUrl"),
+        concurrencyLimit: Number(form.get("concurrencyLimit")),
+        rpmLimit: Number(form.get("rpmLimit")),
+        note: form.get("note"),
+        status: form.get("enabled") === "on" ? "enabled" : "disabled"
+      };
+      if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
+      await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
+      await renderPlatformAiConfig();
+      await loadModels();
+    },
+    item ? "协议、限流与凭据" : "OpenAI / Anthropic / Google Vertex"
+  );
+  const protocolSelect = $("#dialog-fields select[name='protocol']");
+  const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
+  const credentialHost = $("#dialog-fields [data-provider-credential-field]");
+  const syncProviderCredentialField = () => {
+    const nextProtocol = protocolSelect.value;
+    credentialHost.innerHTML = credentialFieldForProtocol(nextProtocol);
+    if (!item) baseUrlInput.value = defaultBaseUrlForProtocol(nextProtocol);
+  };
+  protocolSelect.addEventListener("change", syncProviderCredentialField);
 }
 
 function openModelDialog(providerId, item = null) {
@@ -9793,10 +10030,17 @@ async function sendAi() {
   if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
   const instruction = aiPromptText().trim();
   if (!instruction) return toast("请输入指令", "error");
+  if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
+  try {
+    await persistAiConversationTaskType($("#ai-task").value);
+    await persistAiConversationContextScope(requestScope.conversationScope);
+  } catch (error) {
+    return toast(`对话配置锁定失败：${error.message}`, "error");
+  }
   setAiAssistantStatus("ready");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   let persistedUserMessage = null;
@@ -9808,12 +10052,15 @@ async function sendAi() {
       return toast(`对话记录创建失败：${error.message}`, "error");
     }
     state.aiPromptSent = true;
+    syncAiTaskOptions();
+    renderAiRoleplayCharacterSelect();
     renderAiQuickActions();
     appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
     clearAiPromptComposer();
   }
   $("#ai-send").disabled = true;
   $("#ai-send").textContent = "发送中";
+  $("#ai-roleplay-character").disabled = true;
   try {
     let assistantContent = "";
     let assistantMessage;
@@ -9869,6 +10116,7 @@ async function sendAi() {
   } finally {
     $("#ai-send").disabled = false;
     $("#ai-send").textContent = "发送";
+    renderAiRoleplayCharacterSelect();
   }
 }
 
@@ -9882,7 +10130,7 @@ async function streamChat(body) {
   let messageMounted = false;
   const mountAssistantMessage = () => {
     if (messageMounted) return;
-    attachMessageHeading(message, "助手 · 正在生成");
+    attachMessageHeading(message, aiAssistantLabel("正在生成"));
     $("#ai-feed").append(message);
     messageMounted = true;
     scrollAiFeedToBottom();
@@ -9955,6 +10203,8 @@ async function streamChat(body) {
           state.aiConversationId = persistedUserMessage.conversationId;
           updateAiConversationSummaryFromMessage(persistedUserMessage);
           state.aiPromptSent = true;
+          syncAiTaskOptions();
+          renderAiRoleplayCharacterSelect();
           renderAiQuickActions();
           appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
           clearAiPromptComposer();
@@ -10038,7 +10288,7 @@ async function streamChat(body) {
     typewriter.reveal();
     message.classList.remove("is-streaming");
     content.setAttribute("aria-busy", "false");
-    message.querySelector(".message-heading > span").textContent = "助手 · 生成中断";
+    message.querySelector(".message-heading > span").textContent = aiAssistantLabel("生成中断");
     renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
     meta.textContent = "生成中断";
     scrollAiFeedToBottom();
@@ -10054,7 +10304,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     ? `<p class="ai-error-text">${esc(text)}</p>`
     : renderMarkdown(text);
   message.innerHTML = `<div class="message-body">${messageBody}</div>`;
-  const heading = attachMessageHeading(message, role === "user" ? "作者" : "助手", createdAt ?? undefined);
+  const heading = attachMessageHeading(message, role === "user" ? "作者" : aiAssistantLabel(), createdAt ?? undefined);
   if (isFailure) {
     message.dataset.status = "failed";
     const failureBadge = document.createElement("strong");
@@ -11318,8 +11568,61 @@ $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
 $("#ai-model").addEventListener("change", () => setAiContextMeter(null));
-$("#ai-task").addEventListener("change", () => setAiContextMeter(null));
-$("#ai-scope").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-roleplay-character").addEventListener("focus", async () => {
+  try {
+    await ensureAiReferencesLoaded();
+    renderAiRoleplayCharacterSelect();
+  } catch (error) {
+    toast(`角色卡加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-roleplay-character").addEventListener("change", async (event) => {
+  const select = event.currentTarget;
+  const characterId = select.value;
+  select.disabled = true;
+  try {
+    await updateAiRoleplayCharacter(characterId);
+  } catch (error) {
+    renderAiRoleplayCharacterSelect();
+    toast(`角色扮演模式切换失败：${error.message}`, "error");
+  } finally {
+    renderAiRoleplayCharacterSelect();
+  }
+});
+$("#ai-task").addEventListener("change", async (event) => {
+  const select = event.currentTarget;
+  const previousTaskType = select.dataset.previousValue || state.aiTaskType || "chat";
+  const nextTaskType = select.value;
+  if (state.aiPromptSent) {
+    applyAiConversationTaskType(previousTaskType);
+    return toast("当前对话已经开始，请新建对话后再切换任务类型", "error");
+  }
+  applyAiConversationTaskType(nextTaskType);
+  if (state.aiConversationId) {
+    select.disabled = true;
+    try {
+      await persistAiConversationTaskType(nextTaskType);
+    } catch (error) {
+      applyAiConversationTaskType(previousTaskType);
+      toast(`任务类型切换失败：${error.message}`, "error");
+    } finally {
+      syncAiTaskOptions();
+      renderAiRoleplayCharacterSelect();
+    }
+  }
+  setAiContextMeter(null);
+});
+$("#ai-scope").addEventListener("change", (event) => {
+  if (state.aiPromptSent) {
+    applyAiConversationContextScope(state.aiContextScope);
+    return toast("当前对话已经开始，请新建对话后再切换上下文引用", "error");
+  }
+  event.currentTarget.title = "";
+  syncAiIncludeSettingInfoControl();
+  setAiContextMeter(null);
+});
+$("#ai-include-setting-info").addEventListener("change", () => setAiContextMeter(null));
+syncAiIncludeSettingInfoControl();
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
@@ -11602,7 +11905,7 @@ $("#ai-prompt").addEventListener("keydown", (event) => {
 $(".quick-actions").addEventListener("click", (event) => {
   const button = event.target.closest("[data-task]");
   if (!button) return;
-  $("#ai-task").value = button.dataset.task;
+  applyAiConversationTaskType(button.dataset.task);
   setAiPromptText(button.dataset.prompt);
   $("#ai-prompt").focus();
 });

@@ -24,7 +24,7 @@ describe("作者完整创作流程", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
         receivedBodies.push(body);
         const messages = body.messages as Array<{ content: string }>;
-        const prompt = messages[1]?.content ?? "";
+        const prompt = messages.map((message) => message.content ?? "").join("\n");
         let content = "舱门关闭，林舟望向逐渐远去的北港。";
         if (prompt.includes("检查下面的续写候选")) {
           content = "[]";
@@ -32,7 +32,7 @@ describe("作者完整创作流程", () => {
           content = JSON.stringify([{ name: "北港启航", description: "林舟驾驶飞船离开北港。", eventType: "离别", timeLabel: "启航日", timeSort: 1, location: "北港", impactScope: "personal", chapterIds: [], participantIds: [], evidence: [{ quote: "飞船驶离北港" }] }]);
         } else if (prompt.includes("小说人物关系抽取器")) {
           const chapters = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)">/gu)];
-          content = JSON.stringify([{ fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "旧友", directed: false, currentStatus: "active", timeRange: { start: "第一卷" }, confidence: 0.82, evidence: chapters.map((match, index) => ({ chapterId: match[1], chapterTitle: match[2], quote: index === 0 ? "林舟想起沈星的警告" : "沈星仍保存着林舟的旧信", contextType: "current", supports: "两人保持长期联系" })) }]);
+          content = JSON.stringify([{ fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "朋友", directed: false, currentStatus: "active", timeRange: { start: "第一卷" }, confidence: 0.82, evidence: chapters.map((match, index) => ({ chapterId: match[1], chapterTitle: match[2], quote: index === 0 ? "林舟想起沈星的警告" : "沈星仍保存着林舟的旧信", contextType: "current", supports: "两人保持长期联系" })) }]);
         }
         if (body.stream === true) {
           outgoing.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260801-merge-pr-291-v1');
-    expect(page.text).toContain('/styles.css?v=20260801-merge-pr-291-v1');
+    expect(page.text).toContain('/app.js?v=20260801-ai-roleplay-chat-merge-v1');
+    expect(page.text).toContain('/styles.css?v=20260801-ai-roleplay-chat-merge-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');

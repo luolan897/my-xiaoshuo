@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260801-merge-pr-291-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260801-ai-roleplay-chat-merge-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -306,6 +306,7 @@
           <div class="prompt-options">
             <select id="ai-task" aria-label="任务类型">
               <option value="chat">问答</option>
+              <option value="roleplay">角色扮演</option>
               <option value="continue">续写</option>
               <option value="polish">润色选中文本</option>
             </select>
@@ -315,7 +316,15 @@
               <option value="chapter-summary">当前章节 + 全书概要</option>
               <option value="volume">当前卷</option>
               <option value="book">全书</option>
+              <option value="settings-catalog">设定库</option>
             </select>
+            <select id="ai-roleplay-character" class="ai-roleplay-character hidden" aria-label="角色扮演角色卡">
+              <option value="">选择角色卡</option>
+            </select>
+            <label class="ai-include-setting-info" for="ai-include-setting-info">
+              <input id="ai-include-setting-info" type="checkbox" checked>
+              <span>注入设定信息</span>
+            </label>
           </div>
           <div class="field-label prompt-model-field">
             <select id="ai-model" aria-label="实际使用模型"></select>
@@ -657,6 +666,24 @@
               <option value="consolas">Consolas</option>
             </select>
           </label>
+          <label>界面字号
+            <select id="appearance-ui-font-size" name="uiFontSize">
+              <option value="14">14 px（小）</option>
+              <option value="15">15 px</option>
+              <option value="16">16 px（标准）</option>
+              <option value="17">17 px</option>
+              <option value="18">18 px（大）</option>
+            </select>
+          </label>
+          <label>Agent 对话字号
+            <select id="appearance-ai-font-size" name="aiFontSize">
+              <option value="12">12 px（小）</option>
+              <option value="13">13 px</option>
+              <option value="14">14 px（标准）</option>
+              <option value="15">15 px</option>
+              <option value="16">16 px（大）</option>
+            </select>
+          </label>
           <label>正文字号
             <select id="appearance-font-size" name="fontSize">
               <option value="15">15 px</option>
@@ -681,6 +708,7 @@
             <strong>字体预览 Typography 0123</strong>
             <span>中文默认使用黑体，English letters always use monospace.</span>
             <span>第二段用于预览正文的行距与段落密度。</span>
+            <span id="font-size-preview">界面 16 px · Agent 对话 14 px</span>
           </div>
         </div>
         <div class="dialog-actions">
@@ -927,6 +955,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-merge-pr-291-v1"></script>
+    <script type="module" src="/app.js?v=20260801-ai-roleplay-chat-merge-v1"></script>
   </body>
 </html>

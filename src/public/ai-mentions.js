@@ -53,3 +53,13 @@ export function buildAiReferenceScope(references) {
     ...(settingIds.length ? { settingIds } : {})
   };
 }
+
+export function mergeAiReferenceScope(scope, references) {
+  const merged = { ...scope };
+  const referenceScope = buildAiReferenceScope(references);
+  for (const key of ["chapterIds", "characterIds", "settingIds"]) {
+    const values = [...new Set([...(Array.isArray(scope?.[key]) ? scope[key] : []), ...(referenceScope[key] ?? [])])];
+    if (values.length) merged[key] = values;
+  }
+  return merged;
+}

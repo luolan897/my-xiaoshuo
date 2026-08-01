@@ -66,7 +66,7 @@ describe("作品工作台按需加载", () => {
       application.indexOf("function promptTextFromNode(")
     );
     const createConversationSource = application.slice(
-      application.indexOf("async function createNewAiConversation()"),
+      application.indexOf("async function createNewAiConversation("),
       application.indexOf("async function ensureAiConversation()")
     );
     const sendAiSource = application.slice(
