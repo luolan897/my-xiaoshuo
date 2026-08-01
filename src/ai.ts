@@ -2860,16 +2860,17 @@ export class AiManager {
         }
       })
       : null;
-    let conversationTitle: string | undefined;
     if (shouldGenerateTitle && conversationMessage && input.conversationId) {
-      conversationTitle = await this.generateConversationTitle(
+      void this.generateConversationTitle(
         input.workId,
         input.conversationId,
         titleModelId,
         firstUserContent,
         generated.content,
         defaultTitle
-      ) ?? undefined;
+      ).catch((error) => {
+        logger.warn("ai.conversation_title.failed", { workId: input.workId, conversationId: input.conversationId, error: aiErrorForLog(error) });
+      });
     }
     return {
       ...this.getSuggestion(suggestionId),
@@ -2878,7 +2879,6 @@ export class AiManager {
       toolCalls: generated.toolCalls,
       processSteps: generated.processSteps,
       contextUsage: generated.contextUsage,
-      ...(conversationTitle ? { conversationTitle } : {}),
       ...(conversationMessage ? { conversationMessage } : {})
     };
   }
@@ -4758,6 +4758,7 @@ export class AiManager {
     let reasoning = "";
     let finishReason = "unknown";
     let usage: unknown = null;
+    let upstreamDone = false;
     const contentRedactor = new ProviderSecretStreamRedactor(apiKey);
     const reasoningRedactor = new ProviderSecretStreamRedactor(apiKey);
     const appendContent = (value: string): void => {
@@ -4805,7 +4806,11 @@ export class AiManager {
         .map((line) => line.slice(5).trimStart())
         .join("\n")
         .trim();
-      if (!data || data === "[DONE]") return;
+      if (!data) return;
+      if (data === "[DONE]") {
+        upstreamDone = true;
+        return;
+      }
       const payload = JSON.parse(data) as Record<string, unknown>;
       const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
         ? payload.error as Record<string, unknown>
@@ -4900,7 +4905,15 @@ export class AiManager {
       buffer += decoder.decode(chunk.value, { stream: !chunk.done });
       const events = buffer.split(/\r?\n\r?\n/u);
       buffer = events.pop() ?? "";
-      for (const eventText of events) consumeEvent(eventText);
+      for (const eventText of events) {
+        consumeEvent(eventText);
+        if (upstreamDone) break;
+      }
+      if (upstreamDone) {
+        await reader.cancel().catch(() => undefined);
+        buffer = "";
+        break;
+      }
       if (chunk.done) break;
     }
     if (buffer.trim()) consumeEvent(buffer);
