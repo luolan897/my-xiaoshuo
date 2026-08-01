@@ -31,7 +31,7 @@ describe("publicAiStreamError", () => {
     });
   });
 
-  it("不向客户端透传服务端 AppError 中记录的底层失败详情", () => {
+  it("向客户端透传已脱敏的 AI 上游失败详情", () => {
     expect(publicAiStreamError(new AppError(502, "AI_CALL_FAILED", "AI 调用失败", {
       failure: "ENOENT: /secret/path.sql failed at https://provider.example/v1",
       callId: "call_secret",
@@ -40,8 +40,19 @@ describe("publicAiStreamError", () => {
       code: "AI_CALL_FAILED",
       message: "AI 调用失败",
       status: 502,
+      failure: "ENOENT: /secret/path.sql failed at https://provider.example/v1",
       callId: "call_secret",
       providerId: "provider_1"
+    });
+  });
+
+  it("仍然隐藏非 AI 调用的内部 5xx 详情", () => {
+    expect(publicAiStreamError(new AppError(500, "INTERNAL_ERROR", "服务器内部错误", {
+      failure: "内部数据库路径和堆栈"
+    }))).toEqual({
+      code: "INTERNAL_ERROR",
+      message: "服务器内部错误",
+      status: 500
     });
   });
 });

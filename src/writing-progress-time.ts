@@ -42,6 +42,31 @@ export function resolveWritingTimeZone(environment: Environment = process.env): 
   }
 }
 
+export function resolveServerTimeZone(
+  environment: Environment = process.env,
+  systemTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+): string {
+  for (const candidate of [environment.TZ?.trim(), systemTimeZone?.trim(), DEFAULT_WRITING_TIME_ZONE]) {
+    if (!candidate) continue;
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format();
+      return candidate;
+    } catch {
+      // 继续尝试服务器运行时解析出的时区或项目默认时区
+    }
+  }
+  return DEFAULT_WRITING_TIME_ZONE;
+}
+
+/** 按服务端 TZ 格式化当前本地日期、时刻与星期，供 AI system prompt 使用。 */
+export function formatServerLocalClock(date: Date = new Date(), timeZone = resolveServerTimeZone()): string {
+  const parts = formatterParts(date, timeZone, true);
+  const weekday = new Intl.DateTimeFormat("zh-CN", { timeZone, weekday: "long" }).format(date);
+  const hour = String(parts.hour ?? 0).padStart(2, "0");
+  const minute = String(parts.minute ?? 0).padStart(2, "0");
+  return `当前时间：${dateKeyFromParts(parts)} ${hour}:${minute} ${weekday}（${timeZone}）`;
+}
+
 export function writingDateKey(date: Date, timeZone: string): string {
   return dateKeyFromParts(formatterParts(date, timeZone, false));
 }
@@ -76,6 +101,7 @@ export function buildWritingCalendar(now: Date, days: number, timeZone = resolve
   timeZone: string;
   dateKeys: string[];
   startKey: string;
+  startInclusive: string;
   endExclusive: string;
 } {
   const periodDays = Math.max(1, Math.floor(days));
@@ -86,6 +112,7 @@ export function buildWritingCalendar(now: Date, days: number, timeZone = resolve
     timeZone,
     dateKeys,
     startKey,
+    startInclusive: localDateTimeToUtc(startKey, timeZone).toISOString(),
     endExclusive: localDateTimeToUtc(shiftWritingDateKey(todayKey, 1), timeZone).toISOString()
   };
 }

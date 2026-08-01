@@ -24,9 +24,11 @@ describe("全书概要上下文引用", () => {
 
     expect(page.text).toContain('<select id="ai-scope" aria-label="上下文范围">\n              <option value="none">无上下文</option>');
     expect(page.text).toContain('<option value="chapter-summary">当前章节 + 全书概要</option>');
+    expect(page.text).toContain('<option value="settings-catalog">设定库</option>');
+    expect(page.text).toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260801-ai-roleplay-v6');
+    expect(page.text).toContain('/app.js?v=20260801-ai-roleplay-chat-merge-v1');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');
@@ -50,15 +52,19 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('<dt>已索引设定来源</dt>');
     expect(application.text).toContain('class="ai-agent-tools"');
     expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
-    expect(application.text).toContain('const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";');
+    expect(application.text).toContain('const requiresChapter = taskType === "polish" || taskType === "continue" || (scopeType !== "none" && scopeType !== "settings-catalog");');
+    expect(application.text).toContain('syncAiIncludeSettingInfoControl');
+    expect(application.text).toContain('conversationScope.includeSettingInfo = $("#ai-include-setting-info").checked');
     expect(application.text).toContain('if (!state.work) return toast("请先选择作品", "error");');
     expect(application.text).toContain('scopeType === "none" ? { type: "none"');
     expect(application.text).toContain("if (includeBookSummary) conversationScope.includeBookSummary = true;");
+    expect(application.text).toContain('scopeType === "settings-catalog" ? { type: "settings-catalog" }');
     expect(application.text).toContain('body.append("expectedVersionNo", String(state.work.versionNo));');
     expect(styles.text).not.toContain(".ai-book-summary-reference");
-    expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px;");
+    expect(styles.text).toContain(".prompt-options .ai-include-setting-info");
+    expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input, .daily-token-quota-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px;");
     expect(styles.text).toContain(".config-inline-save { display: flex; align-items: flex-end; gap: 10px;");
-    expect(styles.text).toContain(".config-inline-save .agent-tool-call-limit-field { display: grid; gap: 6px; width: 64px;");
+    expect(styles.text).toContain(".config-inline-save .agent-tool-call-limit-field,\n.config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px;");
     expect(styles.text).toContain(".config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto;");
     expect(styles.text).toContain(".agent-tool-call-global-multiplier-toggle button { min-width: 32px;");
     expect(styles.text).toContain(".relationship-index-summary { display: grid;");

@@ -3,10 +3,10 @@ import { systemStatusPresentation } from "../../src/public/system-status.js";
 
 describe("顶部系统状态", () => {
   it("仅在健康检查成功时显示就绪", () => {
-    expect(systemStatusPresentation({ status: "ready", version: "0.6.2" })).toEqual({
+    expect(systemStatusPresentation({ status: "ready", version: "0.6.3" })).toEqual({
       label: "就绪",
       tone: "ok",
-      title: "服务连接正常 · v0.6.2"
+      title: "服务连接正常 · v0.6.3"
     });
     expect(systemStatusPresentation({ status: "checking" }).label).toBe("检测中");
   });

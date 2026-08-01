@@ -63,14 +63,20 @@ export type AiMessage = {
 };
 
 export type ContextScope = {
-  type: "none" | "selection" | "chapter" | "volume" | "book" | "settings" | "entities";
+  type: "none" | "selection" | "chapter" | "volume" | "book" | "settings" | "settings-catalog" | "entities";
   chapterId?: string;
   volumeId?: string;
   selection?: string;
   chapterIds?: string[];
   characterIds?: string[];
+  /** 指令关键词命中的角色（轻量卡，不含档案 Markdown 全文）。 */
+  mentionCharacterIds?: string[];
   settingIds?: string[];
+  raceIds?: string[];
+  organizationIds?: string[];
   includeBookSummary?: boolean;
+  /** 正文范围内是否注入锁定设定、组织/种族简表等；缺省为 true。设定库范围忽略此字段。 */
+  includeSettingInfo?: boolean;
   includeAllSettings?: boolean;
   additionalPrompt?: string;
   preFilterRelationshipSources?: boolean;
@@ -79,4 +85,10 @@ export type ContextScope = {
   replaceExistingRelationships?: boolean;
   excludeRelationshipConstraints?: boolean;
   suppressAutomaticContext?: boolean;
+};
+
+export type AiInjectedEntities = {
+  characters: string[];
+  races: string[];
+  organizations: string[];
 };

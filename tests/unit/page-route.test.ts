@@ -37,6 +37,18 @@ describe("页面刷新路由", () => {
       workId: "work-1",
       returnView: "shelf"
     });
+    const auditHash = serializePageRoute({
+      view: "work-audit",
+      workId: "work-1",
+      returnView: "module",
+      returnModule: "timeline"
+    });
+    expect(parsePageRoute(auditHash)).toEqual({
+      view: "work-audit",
+      workId: "work-1",
+      returnView: "module",
+      returnModule: "timeline"
+    });
   });
 
   it("往返保存登录页路由", () => {
@@ -62,5 +74,7 @@ describe("页面刷新路由", () => {
     expect(parsePageRoute("#view=editor&chapter=chapter-1")).toEqual({ view: "shelf" });
     expect(serializePageRoute({ view: "module", workId: "work-1", module: "unknown" })).toBe("#view=shelf");
     expect(parsePageRoute("#view=entity-editor&work=work-1&entity=unknown")).toEqual({ view: "shelf" });
+    expect(parsePageRoute("#view=work-audit")).toEqual({ view: "shelf" });
+    expect(serializePageRoute({ view: "work-audit" })).toBe("#view=shelf");
   });
 });

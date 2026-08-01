@@ -1,6 +1,7 @@
-import { DRAFT_SETTING_MODULES, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
+import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
@@ -38,6 +39,31 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
 
 export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+export const WORK_AGENT_TOOL_IDS = [
+  "story_index",
+  "read_chapters",
+  "grep",
+  "search_story_entities",
+  "read_character_sections",
+  "search_drafts"
+] as const;
+export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
+const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+
+export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? json<unknown[]>(value, DEFAULT_WORK_AGENT_TOOLS)
+      : DEFAULT_WORK_AGENT_TOOLS;
+  const enabled = new Set<WorkAgentToolId>();
+  for (const item of source) {
+    if (typeof item !== "string") continue;
+    const toolId = item === "query_story_knowledge" ? "search_story_entities" : item;
+    if (WORK_AGENT_TOOL_IDS.includes(toolId as WorkAgentToolId)) enabled.add(toolId as WorkAgentToolId);
+  }
+  return WORK_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
+}
 export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
 
 type PlatformPageSizes = {
@@ -400,6 +426,7 @@ export type AiConversationContext = {
   compactedMessageCount: number;
   totalMessageCount: number;
   warningPending: boolean;
+  injectedEntities: AiInjectedEntities;
   messages: Array<{
     id: string;
     role: "user" | "assistant";
@@ -508,6 +535,32 @@ function booleanValue(row: Row, key: string): boolean {
 
 export function normalizeCharacterName(value: string): string {
   return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("zh-CN");
+}
+
+const EMPTY_AI_INJECTED_ENTITIES: AiInjectedEntities = {
+  characters: [],
+  races: [],
+  organizations: []
+};
+
+function parseAiInjectedEntities(value: unknown): AiInjectedEntities {
+  const parsed = typeof value === "string" ? json<Record<string, unknown>>(value, {}) : isRecord(value) ? value : {};
+  const uniqueIds = (items: unknown): string[] => [...new Set((Array.isArray(items) ? items : [])
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim()))];
+  return {
+    characters: uniqueIds(parsed.characters),
+    races: uniqueIds(parsed.races),
+    organizations: uniqueIds(parsed.organizations)
+  };
+}
+
+function mergeAiInjectedEntities(base: AiInjectedEntities, extra: Partial<AiInjectedEntities>): AiInjectedEntities {
+  return {
+    characters: [...new Set([...base.characters, ...(extra.characters ?? [])])],
+    races: [...new Set([...base.races, ...(extra.races ?? [])])],
+    organizations: [...new Set([...base.organizations, ...(extra.organizations ?? [])])]
+  };
 }
 
 export class Store {
@@ -1108,6 +1161,9 @@ export class Store {
     return {
       workId,
       systemPrompt: String(row?.system_prompt ?? ""),
+      dailyTokenQuota: row?.daily_token_quota === null || row?.daily_token_quota === undefined
+        ? null
+        : Math.max(10_000, Number(row.daily_token_quota)),
       autoRunEnabled: Number(row?.auto_run_enabled ?? 0) === 1,
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
@@ -1121,9 +1177,7 @@ export class Store {
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
-        .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
-        .filter((tool, index, tools) => tools.indexOf(tool) === index),
+      agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
       titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
         ? null
         : String(row.title_generation_model_id),
@@ -1133,6 +1187,7 @@ export class Store {
 
   updateWorkAiSettings(workId: string, input: {
     systemPrompt?: string;
+    dailyTokenQuota?: number | null;
     autoRunEnabled?: boolean;
     autoRunConcurrency?: number;
     autoRunBatchLimit?: number;
@@ -1149,6 +1204,9 @@ export class Store {
     const current = this.getWorkAiSettings(workId);
     const timestamp = now();
     const nextPrompt = input.systemPrompt ?? String(current.systemPrompt);
+    const nextDailyTokenQuota = input.dailyTokenQuota === undefined
+      ? (current.dailyTokenQuota === null ? null : Number(current.dailyTokenQuota))
+      : input.dailyTokenQuota;
     const nextEnabled = input.autoRunEnabled ?? Boolean(current.autoRunEnabled);
     const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
@@ -1158,20 +1216,21 @@ export class Store {
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
     const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
-    const nextAgentTools = input.agentTools ?? current.agentTools as string[];
+    const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
     const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
       ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
       : input.titleGenerationModelId?.trim() || null;
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+         work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
          agent_tools_json, title_generation_model_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
+         daily_token_quota = excluded.daily_token_quota,
          auto_run_enabled = excluded.auto_run_enabled,
          auto_run_concurrency = excluded.auto_run_concurrency,
          auto_run_batch_limit = excluded.auto_run_batch_limit,
@@ -1190,6 +1249,7 @@ export class Store {
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
+      nextDailyTokenQuota,
       nextEnabled ? 1 : 0,
       Math.min(8, Math.max(1, nextConcurrency)),
       Math.min(200, Math.max(1, nextBatchLimit)),
@@ -1209,6 +1269,7 @@ export class Store {
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
       systemPromptChanged: input.systemPrompt !== undefined,
+      dailyTokenQuota: nextDailyTokenQuota,
       autoRunEnabled: nextEnabled,
       autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
@@ -1370,11 +1431,21 @@ export class Store {
   }
 
   getWorkCover(workId: string): { mimeType: string; content: Buffer; byteLength: number; sha256: string; updatedAt: string } {
+    const cover = this.findWorkCover(workId);
+    if (!cover) throw notFound("作品封面");
+    return cover;
+  }
+
+  findWorkCover(workId: string): { mimeType: "image/jpeg" | "image/png" | "image/webp"; content: Buffer; byteLength: number; sha256: string; updatedAt: string } | null {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_covers WHERE work_id = ?", workId);
-    if (!row) throw notFound("作品封面");
+    if (!row) return null;
+    const mimeType = requiredString(row, "mime_type");
+    if (mimeType !== "image/jpeg" && mimeType !== "image/png" && mimeType !== "image/webp") {
+      throw new AppError(500, "INVALID_COVER_MIME", "作品封面类型无效");
+    }
     return {
-      mimeType: requiredString(row, "mime_type"),
+      mimeType,
       content: Buffer.from(row.content as Uint8Array),
       byteLength: numberValue(row, "byte_length"),
       sha256: requiredString(row, "sha256"),
@@ -6222,12 +6293,14 @@ export class Store {
     this.getWork(workId);
     const conversationId = id("conversation");
     const timestamp = now();
+    const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
     this.db.run(
-      "INSERT INTO ai_conversations (id, work_id, task_type, title, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO ai_conversations (id, work_id, task_type, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       conversationId,
       workId,
       taskType,
       title.trim() || "新对话",
+      JSON.stringify(agentTools),
       timestamp,
       timestamp,
       currentRequestActor()?.userId ?? null
@@ -6324,6 +6397,7 @@ export class Store {
       compactedMessageCount,
       totalMessageCount: rows.length,
       warningPending: Boolean(optionalString(conversation, "context_warning_at")),
+      injectedEntities: parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
       messages: rows.slice(compactedMessageCount)
         .filter((message) => requiredString(message, "id") !== excludeMessageId)
         .map((message) => ({
@@ -6333,6 +6407,65 @@ export class Store {
           metadata: json<Record<string, unknown>>(requiredString(message, "metadata_json"), {})
         }))
     };
+  }
+
+  getAiConversationInjectedEntities(conversationId: string, workId: string): AiInjectedEntities {
+    const conversation = this.db.get("SELECT work_id, injected_entities_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    return parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES);
+  }
+
+  mergeAiConversationInjectedEntities(conversationId: string, workId: string, extra: Partial<AiInjectedEntities>): AiInjectedEntities {
+    const conversation = this.db.get("SELECT work_id, injected_entities_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const merged = mergeAiInjectedEntities(
+      parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
+      extra
+    );
+    this.db.run(
+      "UPDATE ai_conversations SET injected_entities_json = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify(merged),
+      now(),
+      conversationId
+    );
+    return merged;
+  }
+
+  /** 对话首轮写入 system 时钟文案；已有值则原样返回，禁止后续覆盖。 */
+  ensureAiConversationSystemClock(conversationId: string, workId: string, candidate: string): string {
+    const conversation = this.db.get("SELECT work_id, system_clock_text FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const existing = (optionalString(conversation, "system_clock_text") ?? "").trim();
+    if (existing) return existing;
+    const clock = candidate.trim();
+    if (!clock) return "";
+    this.db.run(
+      "UPDATE ai_conversations SET system_clock_text = ? WHERE id = ? AND TRIM(system_clock_text) = ''",
+      clock,
+      conversationId
+    );
+    const refreshed = this.db.get("SELECT system_clock_text FROM ai_conversations WHERE id = ?", conversationId);
+    return (optionalString(refreshed ?? {}, "system_clock_text") ?? clock).trim() || clock;
+  }
+
+  listCharacterNameEntries(workId: string): Array<{ characterId: string; normalizedName: string; displayName: string; kind: "primary" | "alias" }> {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT character_id, normalized_name, display_name, kind FROM character_names
+       WHERE work_id = ?
+         AND character_id NOT IN (SELECT id FROM characters WHERE work_id = ? AND merged_into_character_id IS NOT NULL)
+       ORDER BY LENGTH(normalized_name) DESC, sort_order ASC`,
+      workId,
+      workId
+    ).map((row) => ({
+      characterId: requiredString(row, "character_id"),
+      normalizedName: requiredString(row, "normalized_name"),
+      displayName: requiredString(row, "display_name"),
+      kind: requiredString(row, "kind") === "alias" ? "alias" as const : "primary" as const
+    }));
   }
 
   getAiConversationTitleContext(conversationId: string, workId: string): AiConversationTitleContext {
@@ -6541,9 +6674,12 @@ export class Store {
     const sourceCompactedCount = Math.max(0, numberValue(conversation, "compacted_message_count"));
     const forkCompactedCount = targetIndex + 1 >= sourceCompactedCount ? Math.min(sourceCompactedCount, targetIndex + 1) : 0;
     const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
+    const injectedEntitiesJson = optionalString(conversation, "injected_entities_json")
+      ?? JSON.stringify(EMPTY_AI_INJECTED_ENTITIES);
+    const systemClockText = optionalString(conversation, "system_clock_text") ?? "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
         optionalString(conversation, "roleplay_character_id"),
@@ -6552,6 +6688,11 @@ export class Store {
         title.slice(0, 200),
         forkSummary,
         forkCompactedCount,
+        conversation.agent_tools_json == null
+          ? JSON.stringify(normalizeWorkAgentTools(this.getWorkAiSettings(requiredString(conversation, "work_id")).agentTools))
+          : String(conversation.agent_tools_json),
+        injectedEntitiesJson,
+        systemClockText,
         timestamp,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -6595,9 +6736,33 @@ export class Store {
         name: requiredString(roleplayCharacter, "name"),
         code: requiredString(roleplayCharacter, "code")
       } : null,
+      agentTools: row.agent_tools_json == null || row.agent_tools_json === undefined
+        ? null
+        : normalizeWorkAgentTools(row.agent_tools_json),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
+  }
+
+  /** 锁定本对话可用工具集；已锁定则保持不变，避免中途改作品设置破坏 prompt cache。 */
+  ensureAiConversationAgentTools(conversationId: string, workId: string): WorkAgentToolId[] {
+    const conversation = this.db.get("SELECT id, work_id, agent_tools_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) {
+      throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    }
+    if (conversation.agent_tools_json != null && conversation.agent_tools_json !== undefined) {
+      return normalizeWorkAgentTools(conversation.agent_tools_json);
+    }
+    const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
+    this.db.run(
+      "UPDATE ai_conversations SET agent_tools_json = ?, updated_at = ? WHERE id = ? AND agent_tools_json IS NULL",
+      JSON.stringify(agentTools),
+      now(),
+      conversationId
+    );
+    const locked = this.db.get("SELECT agent_tools_json FROM ai_conversations WHERE id = ?", conversationId);
+    return normalizeWorkAgentTools(locked?.agent_tools_json ?? agentTools);
   }
 
   private mapAiConversationMessage(row: Row): Record<string, unknown> {
@@ -7973,6 +8138,9 @@ export class Store {
     if (scope.type === "settings") {
       return [{ type: "settings", title: "仅设定集" }];
     }
+    if (scope.type === "settings-catalog") {
+      return [{ type: "settings-catalog", title: "设定库" }];
+    }
     if (scope.type === "selection" && typeof scope.selection === "string") {
       return [{ type: "selection", selection: scope.selection }];
     }
@@ -8110,6 +8278,23 @@ export class Store {
       }
     }
     return lines.join("\n").trimEnd() + "\n";
+  }
+
+  async exportDocx(workId: string): Promise<Buffer> {
+    const tree = this.getWorkTree(workId);
+    const cover = this.findWorkCover(workId);
+    const volumes = (tree.volumes as Record<string, unknown>[]).map((volume) => ({
+      title: String(volume.title),
+      chapters: (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
+        title: String(chapter.title),
+        content: String(chapter.content ?? "")
+      }))
+    }));
+    return exportWorkDocx({
+      title: String(tree.title),
+      volumes,
+      cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
+    });
   }
 
   listAuditLogs(workId: string): Record<string, unknown>[] {

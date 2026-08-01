@@ -24,7 +24,7 @@ describe("作者完整创作流程", () => {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
         receivedBodies.push(body);
         const messages = body.messages as Array<{ content: string }>;
-        const prompt = messages[1]?.content ?? "";
+        const prompt = messages.map((message) => message.content ?? "").join("\n");
         let content = "舱门关闭，林舟望向逐渐远去的北港。";
         if (prompt.includes("检查下面的续写候选")) {
           content = "[]";
@@ -32,7 +32,7 @@ describe("作者完整创作流程", () => {
           content = JSON.stringify([{ name: "北港启航", description: "林舟驾驶飞船离开北港。", eventType: "离别", timeLabel: "启航日", timeSort: 1, location: "北港", impactScope: "personal", chapterIds: [], participantIds: [], evidence: [{ quote: "飞船驶离北港" }] }]);
         } else if (prompt.includes("小说人物关系抽取器")) {
           const chapters = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)">/gu)];
-          content = JSON.stringify([{ fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "旧友", directed: false, currentStatus: "active", timeRange: { start: "第一卷" }, confidence: 0.82, evidence: chapters.map((match, index) => ({ chapterId: match[1], chapterTitle: match[2], quote: index === 0 ? "林舟想起沈星的警告" : "沈星仍保存着林舟的旧信", contextType: "current", supports: "两人保持长期联系" })) }]);
+          content = JSON.stringify([{ fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "朋友", directed: false, currentStatus: "active", timeRange: { start: "第一卷" }, confidence: 0.82, evidence: chapters.map((match, index) => ({ chapterId: match[1], chapterTitle: match[2], quote: index === 0 ? "林舟想起沈星的警告" : "沈星仍保存着林舟的旧信", contextType: "current", supports: "两人保持长期联系" })) }]);
         }
         if (body.stream === true) {
           outgoing.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -320,11 +320,14 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260801-ai-roleplay-v6');
-    expect(page.text).toContain('/styles.css?v=20260801-ai-roleplay-v6');
+    expect(page.text).toContain('/app.js?v=20260801-ai-roleplay-chat-merge-v1');
+    expect(page.text).toContain('/styles.css?v=20260801-ai-roleplay-chat-merge-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
+    expect(application.text).toContain('id="daily-token-quota" type="number" min="10000"');
+    expect(application.text).toContain('后端部署时区（${esc(quotaTimezone)}）');
+    expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');
     expect(application.text).toContain('/page-route.js?v=20260731-work-comments-v2');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
@@ -484,15 +487,24 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("const dailyWords = Math.max(0, Number(item.delta));");
     expect(application.text).toContain('bar.addEventListener("mouseenter", () => showTooltip(bar))');
     expect(page.text).toContain('id="work-audit-button" class="settings-hub-card"');
-    expect(page.text).toContain('<span class="settings-card-mark">ZIP</span><strong>导出正文</strong><small>以 ZIP 下载 Markdown 正文，不包含角色和设定资料</small>');
-    expect(application.text).toContain('id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>');
-    expect(application.text).toContain("导出的 ZIP 内含 Markdown 正文");
-    expect(application.text).toContain('function downloadWorkManuscript(work)');
+    expect(page.text).toContain('<span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择导出 Markdown ZIP 或 DOCX；不包含角色和设定资料</small>');
+    expect(page.text).toContain('id="manuscript-export-menu" class="manuscript-export-menu hidden" role="menu" aria-label="导出正文格式"');
+    expect(page.text).toContain('data-export-format="markdown"');
+    expect(page.text).toContain('data-export-format="docx"');
+    expect(application.text).toContain('id="work-export-button" class="ghost-button" type="button" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false">导出正文</button>');
+    expect(application.text).toContain('function showManuscriptExportMenu(anchor, work)');
+    expect(application.text).toContain('function downloadWorkManuscript(work, format = "markdown")');
     expect(application.text).toContain('不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料');
-    expect(page.text).toContain('id="work-audit-dialog"');
-    expect(application.text).toContain("async function openWorkAuditDialog(");
+    expect(styles.text).toContain('.manuscript-export-menu');
+    expect(page.text).toContain('id="work-audit-view" class="shelf-view work-audit-view hidden"');
+    expect(page.text).toContain('id="work-audit-return" class="ghost-button settings-parent-button"');
+    expect(page.text).not.toContain('id="work-audit-dialog"');
+    expect(application.text).toContain("async function showWorkAudit(");
+    expect(application.text).toContain('replacePageRoute({ view: "work-audit"');
     expect(application.text).toContain("workAuditActionLabels");
-    expect(styles.text).toContain(".work-audit-row");
+    expect(styles.text).toContain(".work-audit-row { display: grid; grid-template-columns: minmax(160px, 190px) minmax(0, 1fr);");
+    expect(styles.text).toContain(".work-audit-time strong { color: var(--ink); font-size: 18px;");
+    expect(styles.text).toContain(".work-audit-event-heading strong { color: var(--ink); font-size: 17px;");
     expect(page.text).toContain('id="search-dialog"');
     expect(application.text).toContain('isGlobalSearchShortcut(event)');
     expect(application.text).toContain('const target = resolveGlobalSearchTarget(result);');

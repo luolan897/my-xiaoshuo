@@ -14,9 +14,9 @@
     // 会话恢复期间按目标路由预显示对应视图的骨架屏
     const pendingView = ["editor", "module", "welcome"].includes(routeView) && routeParams.get("work")
       ? routeView
-      : ["settings", "platform-ai", "platform-usage"].includes(routeView) ? routeView : "shelf";
+      : ["settings", "platform-ai", "platform-usage", "work-audit"].includes(routeView) ? routeView : "shelf";
     document.documentElement.dataset.pendingView = pendingView;
-    if (["shelf", "settings", "platform-ai", "platform-usage"].includes(pendingView)) {
+    if (["shelf", "settings", "platform-ai", "platform-usage", "work-audit"].includes(pendingView)) {
       document.documentElement.classList.add("pending-shelf-mode");
     }
   }
