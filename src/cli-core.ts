@@ -133,6 +133,17 @@ function emitText(stream: OutputStream, value: string): void {
   stream.write(value.endsWith("\n") ? value : `${value}\n`);
 }
 
+function emitHttpServerWarning(stream: OutputStream, server: string, compact: boolean): void {
+  if (new URL(server).protocol !== "http:") return;
+  emitJson(stream, {
+    warning: {
+      code: "CLI_SERVER_HTTP_WARNING",
+      message: "当前服务端使用 HTTP，API Key 和业务数据将以明文传输；请仅在可信局域网中使用，公网访问请配置 HTTPS",
+      server
+    }
+  }, compact);
+}
+
 function configPath(parsed: ParsedArguments, dependencies: Required<Pick<CliDependencies, "env" | "cwd" | "homeDirectory">>): string {
   const configured = option(parsed, "config") ?? dependencies.env.SCRIVERSE_CONFIG;
   if (configured) return isAbsolute(configured) ? configured : resolve(dependencies.cwd, configured);
@@ -149,14 +160,6 @@ function normalizeServer(value: string): string {
   }
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new CliError("CLI_SERVER_INVALID", "服务端地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
-  }
-  const loopbackHttp = url.protocol === "http:" && (
-    url.hostname === "localhost"
-    || url.hostname === "127.0.0.1"
-    || url.hostname === "[::1]"
-  );
-  if (url.protocol === "http:" && !loopbackHttp) {
-    throw new CliError("CLI_SERVER_INSECURE", "远程服务端地址必须使用 HTTPS；HTTP 仅允许连接本机回环地址");
   }
   if (url.pathname !== "/" && url.pathname !== "") {
     throw new CliError("CLI_SERVER_INVALID", "服务端地址不能包含路径，请只填写协议、主机和端口");
@@ -599,8 +602,11 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
     const config = readOptionalConfig(path);
     const requested = parsed.positionals[1];
     if (requested) {
-      config.defaultServer = normalizeServer(requested);
+      const server = normalizeServer(requested);
+      const shouldWarn = server !== config.defaultServer;
+      config.defaultServer = server;
       writeConfig(path, config);
+      if (shouldWarn) emitHttpServerWarning(dependencies.stderr, server, compact);
     }
     emitJson(dependencies.stdout, {
       defaultServer: config.defaultServer,
@@ -624,6 +630,7 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
         throw new CliError("CLI_API_KEY_REQUIRED", "请通过 --api-key、--api-key-file 或 SCRIVERSE_API_KEY 三者之一提供 API Key");
       }
       const apiKey = supplied[0]!;
+      emitHttpServerWarning(dependencies.stderr, server, compact);
       const temporary: CliRequestConfig = {
         server,
         apiKey,

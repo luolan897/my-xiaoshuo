@@ -46,17 +46,34 @@ describe("Scriverse CLI 核心", () => {
     expect(parsed.options.get("compact")).toEqual(["true"]);
   });
 
-  it("拒绝使用公网 HTTP 服务端地址", async () => {
+  it("允许连接局域网 HTTP 服务端", async () => {
     const root = temporaryRoot();
     const path = join(root, "cli.json");
+    const stdout = outputCapture();
     const stderr = outputCapture();
 
     expect(await runCli([
-      "connect", "http://192.0.2.10:13210", "--config", path
-    ], { stderr: stderr.stream })).toBe(1);
-    expect(JSON.parse(stderr.text())).toMatchObject({
-      error: { code: "CLI_SERVER_INSECURE" }
+      "connect", "http://192.168.1.10:13210", "--config", path
+    ], { stdout: stdout.stream, stderr: stderr.stream })).toBe(0);
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      defaultServer: "http://192.168.1.10:13210",
+      authenticated: false
     });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      defaultServer: "http://192.168.1.10:13210"
+    });
+    const warning = stderr.text();
+    expect(JSON.parse(warning)).toMatchObject({
+      warning: {
+        code: "CLI_SERVER_HTTP_WARNING",
+        server: "http://192.168.1.10:13210"
+      }
+    });
+
+    expect(await runCli([
+      "connect", "http://192.168.1.10:13210", "--config", path
+    ], { stdout: outputCapture().stream, stderr: stderr.stream })).toBe(0);
+    expect(stderr.text()).toBe(warning);
   });
 
   it("资源契约只开放受控读写动作且不包含删除", () => {
@@ -95,7 +112,13 @@ describe("Scriverse CLI 核心", () => {
     expect(await runCli([
       "auth", "login", "--server", "http://127.0.0.1:13210", "--api-key", "scrv_test_key", "--config", path
     ], { fetchImpl, stdout: stdout.stream, stderr: stderr.stream })).toBe(0);
-    expect(stderr.text()).toBe("");
+    const warning = stderr.text();
+    expect(JSON.parse(warning)).toMatchObject({
+      warning: {
+        code: "CLI_SERVER_HTTP_WARNING",
+        server: "http://127.0.0.1:13210"
+      }
+    });
     expect(JSON.parse(stdout.text())).toMatchObject({ authenticated: true, apiKeyPrefix: "scrv_test" });
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
@@ -120,6 +143,7 @@ describe("Scriverse CLI 核心", () => {
       stderr: stderr.stream
     })).toBe(0);
     expect(JSON.parse(logoutOutput.text())).toMatchObject({ authenticated: false });
+    expect(stderr.text()).toBe(warning);
   });
 
   it("保存默认服务器，并允许子命令临时覆盖到已登录的其他服务器", async () => {
