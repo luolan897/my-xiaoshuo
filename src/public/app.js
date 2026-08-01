@@ -10198,20 +10198,35 @@ $("#onboarding-dialog").addEventListener("cancel", (event) => {
 });
 $("#system-restart-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
+  if (!$("#system-restart-discard-confirmation").classList.contains("hidden")) hideSystemRestartDiscardConfirmation();
 });
 function hasUnsavedEditorChanges() {
-  return state.dirty || entityEditorDirty || characterSectionEditorDirty;
+  return state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty;
 }
 
-$("#system-restart-confirm").addEventListener("click", async () => {
-  if (hasUnsavedEditorChanges() && !(await confirmToast(
-    "检测到尚未保存的编辑内容。确定放弃这些内容并重新登录吗？",
-    { title: "放弃未保存修改", confirmLabel: "放弃并重新登录", cancelLabel: "继续编辑" }
-  ))) return;
+function reloadAfterSystemRestart() {
   systemRestartReloading = true;
   window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
   window.location.reload();
+}
+
+function hideSystemRestartDiscardConfirmation() {
+  $("#system-restart-discard-confirmation").classList.add("hidden");
+  const button = $("#system-restart-confirm");
+  button.disabled = false;
+  button.setAttribute("aria-expanded", "false");
+  button.focus();
+}
+
+$("#system-restart-confirm").addEventListener("click", () => {
+  if (!hasUnsavedEditorChanges()) return reloadAfterSystemRestart();
+  $("#system-restart-discard-confirmation").classList.remove("hidden");
+  $("#system-restart-confirm").disabled = true;
+  $("#system-restart-confirm").setAttribute("aria-expanded", "true");
+  $("#system-restart-discard-cancel").focus();
 });
+$("#system-restart-discard-cancel").addEventListener("click", hideSystemRestartDiscardConfirmation);
+$("#system-restart-discard-confirm").addEventListener("click", reloadAfterSystemRestart);
 $("#onboarding-dialog").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
