@@ -959,6 +959,87 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(7);
   });
 
+  it("角色扮演对话只提供自身回忆工具并持久化角色卡", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const role = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "林舟",
+      profile: { summary: "北港领航员" },
+      currentState: { location: "北港" }
+    }).expect(201);
+    await request(runtime.app).post(`/api/characters/${role.body.data.id}/sections`).send({
+      sectionType: "background",
+      title: "旧日记忆",
+      contentMarkdown: "林舟记得十二岁那年第一次看见星舰。",
+      summary: "第一次看见星舰"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "顾潮",
+      profile: { secret: "这段其他角色的私密档案不得被读取" }
+    }).expect(201);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
+      content: "林舟启动了飞船。\n\n顾潮独自藏起了只有自己知道的密钥。"
+    }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const roleplay = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: role.body.data.id
+    }).expect(200);
+    expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role?: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }>;
+      };
+      expect(body.messages[0]?.content).toContain("你现在扮演角色“林舟”");
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self"]);
+      expect(JSON.stringify(body.tools)).not.toContain("characterId");
+      if (completionCount === 1) {
+        expect(JSON.stringify(body.messages)).not.toContain("顾潮独自藏起");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
+          { id: "self-memory", type: "function", function: { name: "recall_self", arguments: JSON.stringify({ categories: ["profile", "sections", "chapters"] }) } },
+          { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } }
+        ] } }] }), { status: 200 });
+      }
+      const toolMessages = body.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
+      expect(toolMessages[0]).toContain("北港领航员");
+      expect(toolMessages[0]).toContain("第一次看见星舰");
+      expect(toolMessages[0]).toContain("林舟启动了飞船");
+      expect(toolMessages[0]).not.toContain("其他角色的私密档案");
+      expect(toolMessages[0]).not.toContain("只有自己知道的密钥");
+      expect(toolMessages[1]).toContain("TOOL_NOT_AVAILABLE");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "我记得第一次看见星舰，也记得自己在北港启动了飞船。" } }] }), { status: 200 });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "你记得什么？",
+      scope: { type: "book" },
+      modelId,
+      conversationId: conversation.body.data.id
+    }).expect(200);
+    expect(streamed.text).toContain('"name":"recall_self"');
+    expect(streamed.text).toContain('"name":"story_index"');
+    expect(streamed.text).toContain('"status":"failed"');
+    expect(streamed.text).toContain("我记得第一次看见星舰");
+
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    expect(reloaded.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
+      messageId: reloaded.body.data.messages.at(-1).id
+    }).expect(201);
+    expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+
+    const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
+    const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
+    const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: foreignCharacter.body.data.id
+    }).expect(400);
+    expect(mismatch.body.error.code).toBe("ROLEPLAY_CHARACTER_WORK_MISMATCH");
+  });
+
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

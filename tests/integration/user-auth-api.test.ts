@@ -1289,6 +1289,19 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"] })
       .expect(200);
+    const protectedCharacter = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "受限角色" })
+      .expect(201);
+    const restrictedConversation = await collaborator.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(201);
+    const roleplayDenied = await collaborator.agent.patch(`/api/ai-conversations/${restrictedConversation.body.data.id}/roleplay`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ characterId: protectedCharacter.body.data.id })
+      .expect(403);
+    expect(roleplayDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
 
     const internalAi = runtime.ai as unknown as {
       enabledAgentToolIds: (candidateWorkId: string, taskType: "chat") => string[];

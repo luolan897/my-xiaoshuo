@@ -763,9 +763,10 @@ function redactAiConversationMessage(item: unknown, permissions: WorkModulePermi
 
 /** 无正文读取权限时隐藏对话预览与消息正文，避免历史对话泄露章节原文。 */
 function redactAiConversation(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
-  if (permissions.prose !== "none") return record;
+  const readableRecord = permissions.characters === "none" ? { ...record, roleplayCharacter: null } : record;
+  if (permissions.prose !== "none") return readableRecord;
   const result: Record<string, unknown> = {
-    ...record,
+    ...readableRecord,
     title: proseRestrictedPlaceholder
   };
   if (typeof result.preview === "string" && result.preview.length > 0) {
@@ -2055,6 +2056,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const forked = store.forkAiConversation(request.params.conversationId, input.messageId, input.title);
     const permissions = requestPermissions(request, String(forked.workId));
     data(response, redactAiConversation(forked, permissions), 201);
+  });
+  app.patch("/api/ai-conversations/:conversationId/roleplay", (request, response) => {
+    const input = parse(z.object({ characterId: identifier.nullable() }).strict(), request.body);
+    const updated = store.setAiConversationRoleplayCharacter(request.params.conversationId, input.characterId);
+    const permissions = requestPermissions(request, String(updated.workId));
+    data(response, redactAiConversation(updated, permissions));
   });
   app.post("/api/ai-conversations/:conversationId/messages", (request, response) => {
     const input = parse(z.object({

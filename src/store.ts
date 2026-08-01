@@ -392,6 +392,7 @@ export function defaultAiConversationTitle(prompt: string): string {
 
 export type AiConversationContext = {
   workId: string;
+  roleplayCharacterId: string | null;
   summary: string;
   compactedMessageCount: number;
   totalMessageCount: number;
@@ -6314,6 +6315,7 @@ export class Store {
     const compactedMessageCount = Math.min(rows.length, Math.max(0, numberValue(conversation, "compacted_message_count")));
     return {
       workId,
+      roleplayCharacterId: optionalString(conversation, "roleplay_character_id"),
       summary: requiredString(conversation, "compacted_summary"),
       compactedMessageCount,
       totalMessageCount: rows.length,
@@ -6368,6 +6370,35 @@ export class Store {
     const normalizedTitle = title.replace(/\s+/gu, " ").trim().slice(0, 200) || "新对话";
     this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
     return this.getAiConversation(conversationId);
+  }
+
+  setAiConversationRoleplayCharacter(conversationId: string, characterId: string | null): Record<string, unknown> {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const workId = requiredString(conversation, "work_id");
+    const previousCharacterId = optionalString(conversation, "roleplay_character_id");
+    if (characterId) {
+      const character = this.getCharacter(characterId);
+      if (String(character.workId) !== workId) {
+        throw new AppError(400, "ROLEPLAY_CHARACTER_WORK_MISMATCH", "角色卡不属于当前作品");
+      }
+      if (character.mergedIntoCharacterId) {
+        throw new AppError(409, "ROLEPLAY_CHARACTER_MERGED", "已合并角色不能用于角色扮演");
+      }
+    }
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversations SET roleplay_character_id = ?, updated_at = ? WHERE id = ?",
+        characterId,
+        now(),
+        conversationId
+      );
+      this.audit(workId, "ai-conversation.roleplay-updated", "ai-conversation", conversationId, {
+        previousCharacterId,
+        characterId
+      });
+    });
+    return this.getAiConversationSummary(conversationId);
   }
 
   addAiConversationMessage(conversationId: string, input: AiConversationMessageInput): Record<string, unknown> {
@@ -6428,9 +6459,10 @@ export class Store {
     const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
+        optionalString(conversation, "roleplay_character_id"),
         title.slice(0, 200),
         forkSummary,
         forkCompactedCount,
@@ -6457,6 +6489,10 @@ export class Store {
   }
 
   private mapAiConversation(row: Row): Record<string, unknown> {
+    const roleplayCharacterId = optionalString(row, "roleplay_character_id");
+    const roleplayCharacter = roleplayCharacterId
+      ? this.db.get("SELECT id, name, code FROM characters WHERE id = ? AND work_id = ?", roleplayCharacterId, requiredString(row, "work_id"))
+      : undefined;
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
@@ -6466,6 +6502,11 @@ export class Store {
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
+      roleplayCharacter: roleplayCharacter ? {
+        id: requiredString(roleplayCharacter, "id"),
+        name: requiredString(roleplayCharacter, "name"),
+        code: requiredString(roleplayCharacter, "code")
+      } : null,
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };

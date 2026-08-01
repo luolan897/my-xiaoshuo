@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 64;
+export const DATABASE_SCHEMA_VERSION = 65;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -501,6 +501,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS ai_conversations (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
         title TEXT NOT NULL DEFAULT '新对话',
         compacted_summary TEXT NOT NULL DEFAULT '',
         compacted_message_count INTEGER NOT NULL DEFAULT 0,
@@ -2582,6 +2583,22 @@ export class Database {
         this.run("DROP TABLE work_ai_settings");
         this.run("ALTER TABLE work_ai_settings_v64 RENAME TO work_ai_settings");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (64, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(65)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!columns.has("roleplay_character_id")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_conversations_roleplay_character ON ai_conversations(roleplay_character_id)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (65, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
