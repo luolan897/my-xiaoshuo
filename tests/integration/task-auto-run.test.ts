@@ -116,6 +116,7 @@ describe("分析任务自动运行", () => {
       contextCompactThreshold: 85,
       agentToolCallLimit: 12,
       agentToolCallGlobalMultiplier: 3,
+      alwaysIncludeSettingInfo: false,
       agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]
     });
 
@@ -155,18 +156,23 @@ describe("分析任务自动运行", () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       agentToolCallGlobalMultiplier: 7
     }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      alwaysIncludeSettingInfo: "true"
+    }).expect(400);
     const updated = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       dailyTokenQuota: 10_000,
       bookSummaryContextPercent: 35,
       contextCompactThreshold: 90,
       agentToolCallLimit: 48,
-      agentToolCallGlobalMultiplier: 4
+      agentToolCallGlobalMultiplier: 4,
+      alwaysIncludeSettingInfo: true
     }).expect(200);
     expect(updated.body.data.dailyTokenQuota).toBe(10_000);
     expect(updated.body.data.bookSummaryContextPercent).toBe(35);
     expect(updated.body.data.contextCompactThreshold).toBe(90);
     expect(updated.body.data.agentToolCallLimit).toBe(48);
     expect(updated.body.data.agentToolCallGlobalMultiplier).toBe(4);
+    expect(updated.body.data.alwaysIncludeSettingInfo).toBe(true);
 
     const unlimited = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       dailyTokenQuota: null

@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 70;
+export const DATABASE_SCHEMA_VERSION = 71;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -457,6 +457,7 @@ export class Database {
         agent_tool_call_global_multiplier INTEGER NOT NULL DEFAULT 3 CHECK(agent_tool_call_global_multiplier BETWEEN 1 AND 6),
         agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]',
         title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+        always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1)),
         updated_at TEXT NOT NULL
       );
 
@@ -2724,6 +2725,21 @@ export class Database {
         }
         this.run("UPDATE ai_conversations SET context_scope_json = '{\"type\":\"none\"}' WHERE context_scope_json IS NULL");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (70, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(71)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!columns.has("always_include_setting_info")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1))");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (71, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
