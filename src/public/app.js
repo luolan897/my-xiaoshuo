@@ -167,7 +167,6 @@ let systemBootId = null;
 let systemBootCheckTimer = null;
 let systemBootCheckPromise = null;
 let systemRestartDetected = false;
-let systemRestartReloading = false;
 let chapterAnnotations = [];
 let workAuditRecords = [];
 let workAuditNextPage = null;
@@ -3203,7 +3202,7 @@ function renderSettingsHub() {
   const hasWork = Boolean(state.work);
   const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
   const canReadAggregate = hasWork && canReadAggregateContent();
-  const canReadFullExport = canReadAggregate && canReadModule("drafts");
+  const canExportManuscript = hasWork && canReadModule("editor");
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
@@ -3213,10 +3212,11 @@ function renderSettingsHub() {
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !canReadAggregate;
-  $("#export-button").disabled = !canReadFullExport;
+  $("#export-button").disabled = !canExportManuscript;
+  $("#export-button").setAttribute("aria-expanded", "false");
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
-    ? `当前作品：《${state.work.title}》。导出的 ZIP 内含 Markdown 正文，仅包含分卷、章节标题与正文。`
+    ? `当前作品：《${state.work.title}》。导出正文时可选择 Markdown ZIP 或 DOCX；DOCX 在有封面时会嵌入为首页。`
     : "当前未选择作品；打开作品后可使用导出。";
 }
 
@@ -7038,10 +7038,19 @@ async function renderBookAiSettings() {
   const host = $("#module-content");
   const workId = String(state.work.id);
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
+  const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
+  const quotaUsedTokens = Number(usage?.quota?.usedTokens) || 0;
+  const quotaRemainingTokens = usage?.quota?.remainingTokens === null
+    ? null
+    : Math.max(0, Number(usage?.quota?.remainingTokens) || 0);
+  const quotaTimezone = String(usage?.quota?.timezone || "后端部署时区");
+  const quotaStatusText = dailyTokenQuota === null
+    ? `今日已使用 ${quotaUsedTokens.toLocaleString("zh-CN")} Token，当前未启用额度限制。`
+    : `今日已使用 ${quotaUsedTokens.toLocaleString("zh-CN")} / ${dailyTokenQuota.toLocaleString("zh-CN")} Token，剩余 ${Number(quotaRemainingTokens).toLocaleString("zh-CN")} Token。`;
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
   bindUsageCalendarInteractions(host);
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
@@ -7088,6 +7097,31 @@ async function renderBookAiSettings() {
     return status;
   };
   updateRelationshipIndexStatus(relationshipIndex);
+  $("#daily-token-quota-enabled").addEventListener("change", (event) => {
+    $("#daily-token-quota").disabled = !event.currentTarget.checked;
+  });
+  $("#save-daily-token-quota").addEventListener("click", async () => {
+    const button = $("#save-daily-token-quota");
+    const enabled = $("#daily-token-quota-enabled").checked;
+    const quota = Number($("#daily-token-quota").value);
+    if (enabled && (!Number.isInteger(quota) || quota < 10_000 || quota > 2_000_000_000)) {
+      toast("每日 Token 额度必须是 10,000 到 2,000,000,000 之间的整数", "error");
+      $("#daily-token-quota").focus();
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, {
+        method: "PATCH",
+        body: { dailyTokenQuota: enabled ? quota : null }
+      });
+      toast(enabled ? "本书每日 Token 额度已保存" : "本书每日 Token 额度限制已关闭");
+      await renderBookAiSettings();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  });
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
@@ -7723,9 +7757,39 @@ function bindWorkCoverControls(work) {
   });
 }
 
-function downloadWorkManuscript(work) {
+function downloadWorkManuscript(work, format = "markdown") {
   if (!work?.id) return;
-  window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=markdown`;
+  const exportFormat = format === "docx" ? "docx" : "markdown";
+  window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=${exportFormat}`;
+}
+
+let manuscriptExportWork = null;
+
+function closeManuscriptExportMenu() {
+  const menu = $("#manuscript-export-menu");
+  if (!menu) return;
+  menu.classList.add("hidden");
+  manuscriptExportWork = null;
+  $("#export-button")?.setAttribute("aria-expanded", "false");
+  $("#work-export-button")?.setAttribute("aria-expanded", "false");
+}
+
+function showManuscriptExportMenu(anchor, work) {
+  if (!work?.id || !anchor) return;
+  const menu = $("#manuscript-export-menu");
+  if (!menu) return;
+  manuscriptExportWork = work;
+  menu.classList.remove("hidden");
+  const anchorRect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - menuRect.width - 8));
+  const top = Math.max(8, Math.min(anchorRect.bottom + 6, window.innerHeight - menuRect.height - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  if (anchor.id === "export-button" || anchor.id === "work-export-button") {
+    anchor.setAttribute("aria-expanded", "true");
+  }
+  menu.querySelector("button[data-export-format]")?.focus();
 }
 
 function openWorkSettingsDialog(work) {
@@ -7745,8 +7809,8 @@ function openWorkSettingsDialog(work) {
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
   const exportField = `<section class="work-access-field" aria-labelledby="work-export-settings-title">
-    <div><strong id="work-export-settings-title">导出正文</strong><small>服务器将分卷、章节标题与正文压缩为 ZIP，压缩包内含 Markdown 文件；不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
-    <button id="work-export-button" class="ghost-button" type="button">下载 ZIP</button>
+    <div><strong id="work-export-settings-title">导出正文</strong><small>点击后选择导出 Markdown ZIP 或 DOCX（书名、分卷、章节为一级至三级标题；若已设置封面则嵌入为首页）。不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
+    <button id="work-export-button" class="ghost-button" type="button" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false">导出正文</button>
   </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
     <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>恢复已软删除的章节，或彻底删除正文、版本和关联资料。</small></div>
@@ -7780,7 +7844,11 @@ function openWorkSettingsDialog(work) {
     $("#form-dialog").close();
     void openImportHistory();
   });
-  $("#work-export-button")?.addEventListener("click", () => downloadWorkManuscript(work));
+  $("#work-export-button")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showManuscriptExportMenu(event.currentTarget, work);
+  });
   $("#chapter-recycle-bin-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openChapterRecycleBin();
@@ -10396,35 +10464,26 @@ $("#onboarding-dialog").addEventListener("cancel", (event) => {
 });
 $("#system-restart-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
-  if (!$("#system-restart-discard-confirmation").classList.contains("hidden")) hideSystemRestartDiscardConfirmation();
 });
 function hasUnsavedEditorChanges() {
   return state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty;
 }
 
-function reloadAfterSystemRestart() {
-  systemRestartReloading = true;
+function redirectToLoginAfterSystemRestart() {
+  state.user = null;
+  state.csrfToken = null;
+  moduleRequestCache.clear();
+  document.documentElement.classList.remove("dev-auth-bypass");
+  document.documentElement.classList.add("login-route");
   window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-  window.location.reload();
+  const toastRegion = $("#toast-region");
+  toastRegion.replaceChildren();
+  if (typeof toastRegion.hidePopover === "function" && toastRegion.matches(":popover-open")) toastRegion.hidePopover();
+  $("#system-restart-dialog").close();
+  showAuth(false);
 }
 
-function hideSystemRestartDiscardConfirmation() {
-  $("#system-restart-discard-confirmation").classList.add("hidden");
-  const button = $("#system-restart-confirm");
-  button.disabled = false;
-  button.setAttribute("aria-expanded", "false");
-  button.focus();
-}
-
-$("#system-restart-confirm").addEventListener("click", () => {
-  if (!hasUnsavedEditorChanges()) return reloadAfterSystemRestart();
-  $("#system-restart-discard-confirmation").classList.remove("hidden");
-  $("#system-restart-confirm").disabled = true;
-  $("#system-restart-confirm").setAttribute("aria-expanded", "true");
-  $("#system-restart-discard-cancel").focus();
-});
-$("#system-restart-discard-cancel").addEventListener("click", hideSystemRestartDiscardConfirmation);
-$("#system-restart-discard-confirm").addEventListener("click", reloadAfterSystemRestart);
+$("#system-restart-confirm").addEventListener("click", redirectToLoginAfterSystemRestart);
 $("#onboarding-dialog").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
@@ -11039,6 +11098,7 @@ $("#form-dialog").addEventListener("close", () => {
   formDialogVditors.forEach(destroyVditorEditor);
   formDialogVditors = [];
   void discardPendingMarkdownAttachments();
+  closeManuscriptExportMenu();
   if (relationshipPresenceId && !$("#form-dialog").open) setRelationshipPresence(null);
 });
 $("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));
@@ -11398,6 +11458,9 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#chapter-type-menu")) closeChapterTypeMenu();
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
   if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
+  if (!event.target.closest("#manuscript-export-menu") && !event.target.closest("#export-button") && !event.target.closest("#work-export-button")) {
+    closeManuscriptExportMenu();
+  }
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
@@ -11420,6 +11483,7 @@ document.addEventListener("keydown", (event) => {
     closeChapterTypeMenu();
     closeLineCitationMenu();
     closeMarkdownTableMenu(true);
+    closeManuscriptExportMenu();
     hideAiMentionMenu();
     setAiContextDistributionVisible(false);
   }
@@ -11572,14 +11636,33 @@ $("#search-form").addEventListener("submit", async (event) => {
     $("#search-results").innerHTML = `<p class="search-results-status">${esc(error.message)}</p>`;
   });
 });
-$("#export-button").addEventListener("click", () => downloadWorkManuscript(state.work));
+$("#export-button").addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (!state.work) return;
+  const menu = $("#manuscript-export-menu");
+  const expanded = menu && !menu.classList.contains("hidden") && manuscriptExportWork?.id === state.work.id;
+  if (expanded) {
+    closeManuscriptExportMenu();
+    return;
+  }
+  showManuscriptExportMenu(event.currentTarget, state.work);
+});
+$("#manuscript-export-menu").addEventListener("click", (event) => {
+  const option = event.target.closest("[data-export-format]");
+  if (!option || !manuscriptExportWork) return;
+  const format = option.getAttribute("data-export-format") === "docx" ? "docx" : "markdown";
+  const work = manuscriptExportWork;
+  closeManuscriptExportMenu();
+  downloadWorkManuscript(work, format);
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (state.user && !systemRestartDetected) scheduleSystemBootCheck(0);
   void refreshSystemHealth();
 });
 window.addEventListener("beforeunload", (event) => {
-  if (!systemRestartReloading && hasUnsavedEditorChanges()) event.preventDefault();
+  if (hasUnsavedEditorChanges()) event.preventDefault();
 });
 window.addEventListener("online", () => {
   updateSystemHealth({ status: "checking" });

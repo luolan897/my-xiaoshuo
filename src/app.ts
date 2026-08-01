@@ -431,6 +431,7 @@ const aiProcessStepSchema = z.discriminatedUnion("type", [
 
 const workAiSettingsSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
+  dailyTokenQuota: z.number().int().min(10_000).max(2_000_000_000).nullable().optional(),
   autoRunEnabled: z.boolean().optional(),
   autoRunConcurrency: z.number().int().min(1).max(8).optional(),
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
@@ -2338,7 +2339,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, await ai.searchWork(request.params.workId, query.q, { type: query.type, limit: query.limit }));
   });
   app.get("/api/works/:workId/export", async (request, response) => {
-    const format = parse(z.enum(["json", "txt", "markdown"]), request.query.format ?? "json");
+    const format = parse(z.enum(["json", "txt", "markdown", "docx"]), request.query.format ?? "json");
     if (format === "json") {
       response.setHeader("Content-Disposition", `attachment; filename=novel-${request.params.workId}.json`);
       data(response, store.exportWork(request.params.workId));
@@ -2356,6 +2357,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         compression: "DEFLATE",
         compressionOptions: { level: 6 }
       }), response);
+      return;
+    }
+    if (format === "docx") {
+      response.type("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+      response.setHeader("Content-Disposition", `attachment; filename=novel-${request.params.workId}.docx`);
+      response.send(await store.exportDocx(request.params.workId));
       return;
     }
     response.type("text/plain");

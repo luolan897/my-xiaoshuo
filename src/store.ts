@@ -1,6 +1,7 @@
 import { DRAFT_SETTING_MODULES, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
@@ -1104,6 +1105,9 @@ export class Store {
     return {
       workId,
       systemPrompt: String(row?.system_prompt ?? ""),
+      dailyTokenQuota: row?.daily_token_quota === null || row?.daily_token_quota === undefined
+        ? null
+        : Math.max(10_000, Number(row.daily_token_quota)),
       autoRunEnabled: Number(row?.auto_run_enabled ?? 0) === 1,
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
@@ -1129,6 +1133,7 @@ export class Store {
 
   updateWorkAiSettings(workId: string, input: {
     systemPrompt?: string;
+    dailyTokenQuota?: number | null;
     autoRunEnabled?: boolean;
     autoRunConcurrency?: number;
     autoRunBatchLimit?: number;
@@ -1145,6 +1150,9 @@ export class Store {
     const current = this.getWorkAiSettings(workId);
     const timestamp = now();
     const nextPrompt = input.systemPrompt ?? String(current.systemPrompt);
+    const nextDailyTokenQuota = input.dailyTokenQuota === undefined
+      ? (current.dailyTokenQuota === null ? null : Number(current.dailyTokenQuota))
+      : input.dailyTokenQuota;
     const nextEnabled = input.autoRunEnabled ?? Boolean(current.autoRunEnabled);
     const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
@@ -1160,14 +1168,15 @@ export class Store {
       : input.titleGenerationModelId?.trim() || null;
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+         work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
          agent_tools_json, title_generation_model_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
+         daily_token_quota = excluded.daily_token_quota,
          auto_run_enabled = excluded.auto_run_enabled,
          auto_run_concurrency = excluded.auto_run_concurrency,
          auto_run_batch_limit = excluded.auto_run_batch_limit,
@@ -1186,6 +1195,7 @@ export class Store {
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
+      nextDailyTokenQuota,
       nextEnabled ? 1 : 0,
       Math.min(8, Math.max(1, nextConcurrency)),
       Math.min(200, Math.max(1, nextBatchLimit)),
@@ -1205,6 +1215,7 @@ export class Store {
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
       systemPromptChanged: input.systemPrompt !== undefined,
+      dailyTokenQuota: nextDailyTokenQuota,
       autoRunEnabled: nextEnabled,
       autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
@@ -1366,11 +1377,21 @@ export class Store {
   }
 
   getWorkCover(workId: string): { mimeType: string; content: Buffer; byteLength: number; sha256: string; updatedAt: string } {
+    const cover = this.findWorkCover(workId);
+    if (!cover) throw notFound("作品封面");
+    return cover;
+  }
+
+  findWorkCover(workId: string): { mimeType: "image/jpeg" | "image/png" | "image/webp"; content: Buffer; byteLength: number; sha256: string; updatedAt: string } | null {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_covers WHERE work_id = ?", workId);
-    if (!row) throw notFound("作品封面");
+    if (!row) return null;
+    const mimeType = requiredString(row, "mime_type");
+    if (mimeType !== "image/jpeg" && mimeType !== "image/png" && mimeType !== "image/webp") {
+      throw new AppError(500, "INVALID_COVER_MIME", "作品封面类型无效");
+    }
     return {
-      mimeType: requiredString(row, "mime_type"),
+      mimeType,
       content: Buffer.from(row.content as Uint8Array),
       byteLength: numberValue(row, "byte_length"),
       sha256: requiredString(row, "sha256"),
@@ -7981,6 +8002,23 @@ export class Store {
       }
     }
     return lines.join("\n").trimEnd() + "\n";
+  }
+
+  async exportDocx(workId: string): Promise<Buffer> {
+    const tree = this.getWorkTree(workId);
+    const cover = this.findWorkCover(workId);
+    const volumes = (tree.volumes as Record<string, unknown>[]).map((volume) => ({
+      title: String(volume.title),
+      chapters: (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
+        title: String(chapter.title),
+        content: String(chapter.content ?? "")
+      }))
+    }));
+    return exportWorkDocx({
+      title: String(tree.title),
+      volumes,
+      cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
+    });
   }
 
   listAuditLogs(workId: string): Record<string, unknown>[] {

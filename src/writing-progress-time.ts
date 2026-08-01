@@ -42,6 +42,22 @@ export function resolveWritingTimeZone(environment: Environment = process.env): 
   }
 }
 
+export function resolveServerTimeZone(
+  environment: Environment = process.env,
+  systemTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+): string {
+  for (const candidate of [environment.TZ?.trim(), systemTimeZone?.trim(), DEFAULT_WRITING_TIME_ZONE]) {
+    if (!candidate) continue;
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format();
+      return candidate;
+    } catch {
+      // 继续尝试服务器运行时解析出的时区或项目默认时区
+    }
+  }
+  return DEFAULT_WRITING_TIME_ZONE;
+}
+
 export function writingDateKey(date: Date, timeZone: string): string {
   return dateKeyFromParts(formatterParts(date, timeZone, false));
 }
@@ -76,6 +92,7 @@ export function buildWritingCalendar(now: Date, days: number, timeZone = resolve
   timeZone: string;
   dateKeys: string[];
   startKey: string;
+  startInclusive: string;
   endExclusive: string;
 } {
   const periodDays = Math.max(1, Math.floor(days));
@@ -86,6 +103,7 @@ export function buildWritingCalendar(now: Date, days: number, timeZone = resolve
     timeZone,
     dateKeys,
     startKey,
+    startInclusive: localDateTimeToUtc(startKey, timeZone).toISOString(),
     endExclusive: localDateTimeToUtc(shiftWritingDateKey(todayKey, 1), timeZone).toISOString()
   };
 }
