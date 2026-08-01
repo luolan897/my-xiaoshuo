@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { Database } from "../../src/database.js";
+import { DATABASE_SCHEMA_VERSION, Database } from "../../src/database.js";
 
 const roots: string[] = [];
 
@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 70 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: DATABASE_SCHEMA_VERSION }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -178,6 +178,7 @@ describe("数据库版本化迁移", () => {
         "agent_tool_call_limit",
         "agent_tool_call_global_multiplier",
         "agent_tools_json",
+        "always_include_setting_info",
         "title_generation_model_id"
       ])
     );

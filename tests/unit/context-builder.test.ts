@@ -127,6 +127,28 @@ describe("AI 上下文组装", () => {
     expect(context).not.toContain("不应出现的种族");
   });
 
+  it("无正文上下文时可通过显式能力注入锁定设定", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work } = await seedChapter(runtime, "不应自动注入的正文");
+    runtime.store.createSetting(String(work.id), {
+      title: "显式注入设定",
+      category: "世界规则",
+      content: "能力触发标记 EXPLICIT_SETTING_CONTEXT",
+      locked: true,
+      status: "confirmed"
+    });
+
+    const context = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "none",
+      includeSettingInfo: true
+    });
+
+    expect(context).toContain("EXPLICIT_SETTING_CONTEXT");
+    expect(context).toContain("<locked_settings>");
+    expect(context).not.toContain("不应自动注入的正文");
+  });
+
   it("设定库范围注入截断目录且不受 includeSettingInfo 关闭影响", async () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);

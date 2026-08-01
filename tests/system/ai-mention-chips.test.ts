@@ -23,12 +23,16 @@ describe("AI 输入框引用气泡", () => {
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
     expect(page.text).toContain('id="ai-prompt" class="ai-prompt" contenteditable="true"');
-    expect(page.text).toContain('aria-label="引用角色、设定或章节"');
+    expect(page.text).toContain('aria-label="引用角色、设定、章节或上下文能力"');
+    expect(page.text).not.toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('id="ai-references"');
     expect(application.text).toContain("function createAiReferenceChip(reference)");
     expect(application.text).toContain('chapter: "章节"');
+    expect(application.text).toContain('"context-settings": "能力"');
+    expect(application.text).toContain('item.kind !== "context-settings" || $("#ai-task").value !== "roleplay"');
     expect(application.text).toContain("volumeTitle: volume.title");
-    expect(application.text).toContain("没有匹配的角色、设定或章节");
+    expect(application.text).toContain("没有匹配的角色、设定、章节或上下文能力");
+    expect(application.text).toContain("conversationScope.includeSettingInfo = false");
     expect(application.text).toContain("range.insertNode(createAiReferenceChip(reference));");
     expect(application.text).toContain("function clearAiPromptComposer()");
     const sendAiSource = application.text.slice(

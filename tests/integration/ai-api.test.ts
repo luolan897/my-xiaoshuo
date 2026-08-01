@@ -483,6 +483,37 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(sentPrompt).not.toContain("跃迁后必须冷却十二小时");
   });
 
+  it("作品全局开关自动注入设定且与主动注入合并为一次", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      alwaysIncludeSettingInfo: true,
+      agentTools: []
+    }).expect(200);
+    const sentContexts: string[] = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      sentContexts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "设定上下文已生效。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    for (const includeSettingInfo of [false, true]) {
+      await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+        taskType: "chat",
+        instruction: "检查设定上下文。",
+        scope: { type: "none", includeSettingInfo },
+        modelId
+      }).expect(201);
+    }
+
+    expect(sentContexts).toHaveLength(2);
+    for (const context of sentContexts) {
+      expect(context).toContain("跃迁后必须冷却十二小时");
+      expect(context.match(/<locked_settings>/gu)).toHaveLength(1);
+    }
+  });
+
   it("无上下文请求将 @ 章节的当前保存正文作为显式上下文发送", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

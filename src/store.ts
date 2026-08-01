@@ -1178,6 +1178,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
+      alwaysIncludeSettingInfo: Number(row?.always_include_setting_info ?? 0) === 1,
       titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
         ? null
         : String(row.title_generation_model_id),
@@ -1198,6 +1199,7 @@ export class Store {
     agentToolCallLimit?: number;
     agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
+    alwaysIncludeSettingInfo?: boolean;
     titleGenerationModelId?: string | null;
   }): Record<string, unknown> {
     this.getWork(workId);
@@ -1217,6 +1219,7 @@ export class Store {
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
     const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
     const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
+    const nextAlwaysIncludeSettingInfo = input.alwaysIncludeSettingInfo ?? Boolean(current.alwaysIncludeSettingInfo);
     const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
       ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
       : input.titleGenerationModelId?.trim() || null;
@@ -1226,8 +1229,8 @@ export class Store {
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
-         agent_tools_json, title_generation_model_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         agent_tools_json, title_generation_model_id, always_include_setting_info, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          daily_token_quota = excluded.daily_token_quota,
@@ -1246,6 +1249,7 @@ export class Store {
          agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
+         always_include_setting_info = excluded.always_include_setting_info,
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
@@ -1265,6 +1269,7 @@ export class Store {
       Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
+      nextAlwaysIncludeSettingInfo ? 1 : 0,
       timestamp
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
@@ -1280,6 +1285,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
+      alwaysIncludeSettingInfo: nextAlwaysIncludeSettingInfo,
       titleGenerationModelId: nextTitleGenerationModelId
     });
     return this.getWorkAiSettings(workId);
