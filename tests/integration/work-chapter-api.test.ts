@@ -192,6 +192,54 @@ describe("作品、导入和章节版本 API", () => {
     expect(saved.body.data.content).toBe("第一段。\n\n第二段。");
   });
 
+  it("创建章节时章节、版本基线与审计在同一事务中提交", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "章节事务作品" }).expect(201);
+    const workId = work.body.data.id as string;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "正文" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "事务正文。"
+    }).expect(201);
+    const chapterId = chapter.body.data.id as string;
+    expect(chapter.body.data.versionNo).toBe(1);
+    expect(runtime.database.get(
+      "SELECT version_no, source FROM chapter_versions WHERE chapter_id = ? AND version_no = 1",
+      chapterId
+    )).toMatchObject({ version_no: 1, source: "manual" });
+    expect(runtime.database.get(
+      "SELECT action FROM audit_logs WHERE work_id = ? AND entity_id = ? AND action = 'chapter.created'",
+      workId,
+      chapterId
+    )).toEqual({ action: "chapter.created" });
+  });
+
+  it("创建章节中途失败时回滚章节与版本写入", () => {
+    const work = runtime.store.createWork({ title: "章节回滚作品" });
+    const volume = runtime.store.createVolume(String(work.id), { title: "卷一" });
+    const originalAudit = runtime.store.audit.bind(runtime.store);
+    runtime.store.audit = () => {
+      throw new Error("forced audit failure");
+    };
+    try {
+      expect(() => runtime.store.createChapter(String(work.id), {
+        volumeId: String(volume.id),
+        title: "失败章",
+        content: "不应保留"
+      })).toThrow(/forced audit failure/u);
+    } finally {
+      runtime.store.audit = originalAudit;
+    }
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapters WHERE work_id = ?",
+      String(work.id)
+    )).toEqual({ count: 0 });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE work_id = ?",
+      String(work.id)
+    )).toEqual({ count: 0 });
+  });
+
   it("作品目录不返回章节正文并按章节加载正文", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "按需加载作品" }).expect(201);
     const workId = work.body.data.id;
@@ -693,6 +741,58 @@ describe("作品、导入和章节版本 API", () => {
     const markdownName = `novel-${workId}.md`;
     expect(Object.keys(archive.files)).toEqual([markdownName]);
     await expect(archive.file(markdownName)?.async("string")).resolves.toContain("# 第一卷\n\n## 第一章 启航\n\n飞船驶离北港。");
+  });
+
+  it("将正文导出为 DOCX，有封面时嵌入首页", async () => {
+    const validPng = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
+      "base64"
+    );
+    const work = await request(runtime.app).post("/api/works").send({ title: "DOCX 导出作品" }).expect(201);
+    const workId = work.body.data.id;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章 启航",
+      content: "飞船驶离北港。"
+    }).expect(201);
+
+    const withoutCover = await request(runtime.app)
+      .get(`/api/works/${workId}/export?format=docx`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/u)
+      .expect("Content-Disposition", `attachment; filename=novel-${workId}.docx`)
+      .expect(200);
+    expect(Buffer.isBuffer(withoutCover.body)).toBe(true);
+    const plainArchive = await JSZip.loadAsync(withoutCover.body as Buffer);
+    const plainDocument = await plainArchive.file("word/document.xml")?.async("string");
+    expect(plainDocument).toContain("DOCX 导出作品");
+    expect(plainDocument).toContain("第一卷");
+    expect(plainDocument).toContain("第一章 启航");
+    expect(plainDocument).toContain("飞船驶离北港。");
+    expect(Object.keys(plainArchive.files).some((name) => name.startsWith("word/media/"))).toBe(false);
+
+    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validPng, "cover.png").expect(200);
+    const withCover = await request(runtime.app)
+      .get(`/api/works/${workId}/export?format=docx`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect(200);
+    const coverArchive = await JSZip.loadAsync(withCover.body as Buffer);
+    expect(Object.keys(coverArchive.files).some((name) => name.startsWith("word/media/"))).toBe(true);
+    const coverDocument = await coverArchive.file("word/document.xml")?.async("string");
+    expect(coverDocument).toMatch(/<a:blip\b/u);
   });
 
   it("删除章节后可列出版本并恢复", async () => {

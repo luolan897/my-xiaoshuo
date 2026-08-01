@@ -87,9 +87,9 @@ describe("智谱 Anthropic 多轮思考兼容", () => {
   });
 
   it("在下一轮恢复流式响应中的 thinking 和 signature", async () => {
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
-    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     const firstUser = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
       role: "user",
       content: "第一轮问题"

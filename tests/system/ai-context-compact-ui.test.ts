@@ -33,9 +33,14 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('divider.innerHTML = "<span>已压缩上下文</span>"');
     expect(application).toContain("renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount)");
     expect(application).toContain('step?.type === "context_compaction"');
-    expect(application).toContain('compaction.dataset.testid = "ai-process-context-compaction"');
-    expect(application).toContain('compaction.innerHTML = "<span>已压缩上下文</span>"');
+    expect(application).toContain('function createAiContextCompactionDivider({ kind = "conversation"');
+    expect(application).toContain('kind: "tool"');
+    expect(application).toContain('divider.className = "ai-context-compaction-divider"');
+    expect(application).not.toContain("ai-process-context-compaction");
     expect(application).toContain('setAiContextMeter(payload.contextUsage);');
+    expect(application).toContain("const displayUsage = resolveAiContextUsage(latestAiContextUsage, usage);");
+    expect(application).toContain("latestAiContextUsage = displayUsage;");
+    expect(application).toContain("function resetAiContextMeter()");
     expect(application).toContain("normalizeAiContextTokenDistribution");
     expect(application).toContain("formatAiContextUsagePercent");
     expect(application).toContain("setAiContextDistributionVisible");
@@ -44,7 +49,8 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(styles).toContain(".ai-context-warning.hidden { display: none; }");
     expect(styles).toContain(".ai-context-compaction-divider { display: grid;");
     expect(styles).toContain(".ai-context-compaction-divider::before, .ai-context-compaction-divider::after");
-    expect(styles).toContain(".ai-process-context-compaction { display: grid;");
-    expect(styles).toContain(".ai-process-context-compaction::before, .ai-process-context-compaction::after");
+    expect(styles).toContain(".ai-feed > .ai-context-compaction-divider { margin: 4px 0 16px; }");
+    expect(styles).toContain(".ai-process-list > .ai-context-compaction-divider { padding: 2px 0; }");
+    expect(styles).not.toContain(".ai-process-context-compaction");
   });
 });

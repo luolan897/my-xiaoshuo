@@ -6,11 +6,11 @@
     <meta name="description" content="面向长篇小说创作的 AI 协作工作台">
     <meta name="theme-color" content="#8b3d2c">
     <title>叙界 · 小说 AI 创作工作台</title>
-    <script src="/theme-init.js?v=20260720-route-skeleton"></script>
+    <script src="/theme-init.js?v=20260801-work-audit-page-v1"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260731-draft-bindings-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260801-merge-pr-291-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -58,7 +58,7 @@
         <p id="auth-error" class="auth-error" role="alert"></p>
       </div>
       <footer class="product-footer auth-product-footer" data-product-footer aria-label="叙界项目信息">
-        <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
+        <span class="product-footer-meta"><span>© <time data-product-footer-year></time></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
         <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
       </footer>
     </section>
@@ -74,7 +74,7 @@
         <button id="mobile-module-tab" class="mobile-module-tab" type="button" aria-label="打开作品模块" aria-expanded="false">模块</button>
         <div id="work-meta" class="work-meta">尚未选择作品</div>
         <div class="top-actions">
-          <span id="save-state" class="save-state">就绪</span>
+          <span id="save-state" class="save-state" role="status" aria-live="polite" aria-label="系统状态：检测中">检测中</span>
           <div id="presence-control" class="presence-control hidden">
             <button id="presence-button" class="presence-button" type="button" aria-expanded="false" aria-controls="presence-panel"><span class="presence-status-dot" aria-hidden="true"></span><span id="presence-count">1 人</span></button>
             <section id="presence-panel" class="presence-panel hidden" aria-label="当前作品在线协作者">
@@ -159,7 +159,7 @@
           </div>
           <div id="book-shelf" class="book-shelf" data-testid="book-shelf"></div>
           <footer class="product-footer" data-product-footer aria-label="叙界项目信息">
-            <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
+            <span class="product-footer-meta"><span>© <time data-product-footer-year></time></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
             <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
           </footer>
         </section>
@@ -186,6 +186,19 @@
           <div id="platform-usage-content" class="module-content usage-page-content"></div>
         </section>
 
+        <section id="work-audit-view" class="shelf-view work-audit-view hidden" aria-labelledby="work-audit-title">
+          <div class="shelf-header work-audit-header">
+            <div><span id="work-audit-eyebrow" class="eyebrow">作品安全</span><h1 id="work-audit-title">操作记录</h1><p>按时间倒序查看作品写入与管理操作，以及完整的操作者、对象和变更详情。</p></div>
+            <div class="settings-detail-actions">
+              <button id="work-audit-return" class="ghost-button settings-parent-button" type="button">返回设置</button>
+              <button id="work-audit-refresh" class="ghost-button" type="button">刷新记录</button>
+            </div>
+          </div>
+          <div class="work-audit-toolbar" aria-live="polite"><p id="work-audit-summary">正在读取操作记录……</p></div>
+          <div id="work-audit-list" class="work-audit-list" aria-live="polite"></div>
+          <div class="work-audit-footer"><button id="work-audit-load-more" class="primary-button hidden" type="button">加载更多记录</button></div>
+        </section>
+
         <section id="settings-hub-view" class="shelf-view hidden" aria-labelledby="settings-hub-title">
           <div class="shelf-header settings-hub-header">
             <div><span class="eyebrow">工作台配置</span><h1 id="settings-hub-title">设置</h1><p>集中管理 AI、显示偏好、内容检索与作品导出。</p></div>
@@ -200,11 +213,11 @@
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
-            <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">ZIP</span><strong>导出正文</strong><small>以 ZIP 下载 Markdown 正文，不包含角色和设定资料</small></button>
+            <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false"><span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择导出 Markdown ZIP 或 DOCX；不包含角色和设定资料</small></button>
           </div>
           <p id="settings-work-note" class="settings-work-note"></p>
           <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
-            <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
+            <span class="product-footer-meta"><span>© <time data-product-footer-year></time></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
             <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
           </footer>
         </section>
@@ -265,7 +278,7 @@
         <div id="ai-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整创作助手宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="ai-heading">
           <button id="ai-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起创作助手" aria-expanded="true">›</button>
-          <div class="ai-heading-title"><span class="status-dot"></span><strong>创作助手</strong></div>
+          <div class="ai-heading-title"><span id="ai-status-dot" class="status-dot" role="status" aria-label="创作助手状态：正常" title="创作助手状态：正常"></span><strong>创作助手</strong></div>
           <div class="ai-heading-actions">
             <span id="ai-conversation-title" title="当前对话">新对话</span>
             <button id="ai-history-toggle" type="button" aria-label="历史记录" aria-controls="ai-history-dialog" aria-expanded="false" aria-haspopup="dialog" title="历史记录"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3.5 2"></path></svg></button>
@@ -346,6 +359,17 @@
         <small>关闭时可横向滚动</small>
       </button>
     </div>
+    <div id="manuscript-export-menu" class="manuscript-export-menu hidden" role="menu" aria-label="导出正文格式">
+      <strong>选择导出格式</strong>
+      <button type="button" role="menuitem" data-export-format="markdown">
+        <span>导出 Markdown</span>
+        <small>打包为 ZIP，内含 Markdown 正文</small>
+      </button>
+      <button type="button" role="menuitem" data-export-format="docx">
+        <span>导出 DOCX</span>
+        <small>Word 正文；有封面时嵌入为首页</small>
+      </button>
+    </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
     <input id="avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
@@ -382,6 +406,18 @@
           <button id="onboarding-next" class="primary-button" type="button">下一步</button>
         </footer>
       </section>
+    </dialog>
+
+    <dialog id="system-restart-dialog" class="dialog system-restart-dialog" aria-labelledby="system-restart-dialog-title" aria-describedby="system-restart-dialog-description">
+      <div class="dialog-header">
+        <div><span class="eyebrow">系统状态</span><h2 id="system-restart-dialog-title" tabindex="-1">系统已重启或升级</h2></div>
+      </div>
+      <div class="dialog-fields">
+        <p id="system-restart-dialog-description" class="system-restart-message">本次登录已经失效，请重新登录。</p>
+      </div>
+      <div class="dialog-actions">
+        <button id="system-restart-confirm" class="primary-button" type="button">我知道了</button>
+      </div>
     </dialog>
 
     <dialog id="form-dialog" class="dialog">
@@ -710,12 +746,6 @@
       </form>
     </dialog>
 
-    <dialog id="work-audit-dialog" class="dialog wide-dialog work-audit-dialog" aria-labelledby="work-audit-title">
-      <div class="dialog-header"><div><span class="eyebrow">作品安全</span><h2 id="work-audit-title">操作记录</h2><p class="dialog-header-meta">按时间倒序展示当前作品的写入与管理操作。</p></div><div class="settings-dialog-header-actions"><button id="work-audit-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="work-audit-close" class="dialog-close" aria-label="关闭操作记录" type="button">×</button></div></div>
-      <div id="work-audit-list" class="work-audit-list"></div>
-      <div class="dialog-actions"><button id="work-audit-refresh" class="ghost-button" type="button">刷新</button><button id="work-audit-load-more" class="primary-button hidden" type="button">加载更多</button></div>
-    </dialog>
-
     <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面与分页</h2></div><div class="settings-dialog-header-actions"><button id="platform-ui-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
       <form id="platform-ui-settings-form">
@@ -843,7 +873,8 @@
         <dl class="ai-tool-call-info">
           <div><dt>函数名称</dt><dd><code id="ai-tool-call-name"></code></dd></div>
           <div><dt>调用时间</dt><dd><time id="ai-tool-call-time"></time></dd></div>
-          <div class="ai-tool-call-description"><dt>函数信息</dt><dd id="ai-tool-call-description"></dd></div>
+          <div><dt>函数信息</dt><dd id="ai-tool-call-description"></dd></div>
+          <div><dt>返回字符数</dt><dd id="ai-tool-call-result-length"></dd></div>
         </dl>
         <section><h3>参数</h3><pre id="ai-tool-call-arguments"></pre></section>
         <section><h3>返回值</h3><pre id="ai-tool-call-result"></pre></section>
@@ -896,6 +927,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260731-draft-bindings-v1"></script>
+    <script type="module" src="/app.js?v=20260801-merge-pr-291-v1"></script>
   </body>
 </html>

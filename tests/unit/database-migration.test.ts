@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 60 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 65 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -121,6 +121,7 @@ describe("数据库版本化迁移", () => {
       "cache_usage_available",
       "token_usage_source"
     ]));
+    expect(first.all("PRAGMA table_info(work_ai_settings)").some((column) => column.name === "daily_token_quota")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_call_traces)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["call_id", "task_id", "initial_messages_json", "rounds_json", "source_refs_json", "created_at", "updated_at"])
     );
@@ -174,6 +175,8 @@ describe("数据库版本化迁移", () => {
         "auto_run_consecutive_failures",
         "book_summary_context_percent",
         "context_compact_threshold",
+        "agent_tool_call_limit",
+        "agent_tool_call_global_multiplier",
         "agent_tools_json",
         "title_generation_model_id"
       ])
@@ -182,7 +185,7 @@ describe("数据库版本化迁移", () => {
       expect.arrayContaining(["attempt_count", "next_attempt_at", "last_attempt_at"])
     );
     expect(first.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).toEqual(
-      expect.arrayContaining(["compacted_summary", "compacted_message_count", "context_warning_at"])
+      expect.arrayContaining(["compacted_summary", "compacted_message_count", "context_warning_at", "agent_tools_json"])
     );
     expect(first.all("PRAGMA table_info(user_api_keys)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["user_id", "key_hash", "key_prefix", "created_at", "rotated_at", "last_used_at"])

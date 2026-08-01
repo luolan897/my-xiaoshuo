@@ -13,8 +13,18 @@ import {
 } from "./ai-protocol.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
+  DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
+  MIN_AGENT_TOOL_CALL_LIMIT,
+  agentToolCallGlobalLimit,
+  agentToolCallQuotaNoticeBudgetChars,
+  agentToolCallQuotaUsedAfterCompact,
+  agentToolCallSoftWarningThreshold,
+  clampAgentToolCallGlobalMultiplier,
   paginateToolResultRecords,
-  structuralToolResultRecords
+  shouldRejectAgentToolCalls,
+  shouldRejectGlobalToolCalls,
+  structuralToolResultRecords,
+  withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
@@ -34,6 +44,7 @@ import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+import { buildWritingCalendar, resolveServerTimeZone } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
@@ -87,6 +98,34 @@ const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
+/** 出站 AI 响应体上限，防止恶意或故障供应商推送超大响应拖垮进程。 */
+export const AI_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+
+export async function readResponseTextLimited(
+  response: Response,
+  maximumBytes = AI_RESPONSE_MAX_BYTES
+): Promise<string> {
+  const declared = response.headers.get("content-length");
+  if (declared && /^\d+$/u.test(declared) && Number(declared) > maximumBytes) {
+    throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${maximumBytes} 字节上限`);
+  }
+  if (!response.body) return response.text();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value?.byteLength) continue;
+    total += value.byteLength;
+    if (total > maximumBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${maximumBytes} 字节上限`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
 const AUTO_RUN_FATAL_CODES = new Set([
   "CREDENTIAL_DECRYPT_FAILED",
   "MODEL_REQUIRED",
@@ -569,7 +608,6 @@ export type AiProcessStep = {
   createdAt: string;
 };
 
-const MAX_AGENT_TOOL_ROUNDS = 6;
 const MAX_AGENT_TOOL_CALLS = 12;
 const MAX_CONFIGURED_AGENT_TOOL_CALLS = 48;
 const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
@@ -1479,7 +1517,35 @@ export class AiManager {
 
   getWorkTokenUsage(workId: string, timezoneOffset: number): Record<string, unknown> {
     this.store.getWork(workId);
-    return this.getTokenUsage(workId, timezoneOffset, false);
+    return {
+      ...this.getTokenUsage(workId, timezoneOffset, false),
+      quota: this.getWorkDailyTokenQuotaStatus(workId)
+    };
+  }
+
+  getWorkDailyTokenQuotaStatus(workId: string, referenceDate = new Date()): Record<string, unknown> {
+    const settings = this.store.getWorkAiSettings(workId);
+    const dailyTokenQuota = settings.dailyTokenQuota === null
+      ? null
+      : Number(settings.dailyTokenQuota);
+    const calendar = buildWritingCalendar(referenceDate, 1, resolveServerTimeZone());
+    const usage = this.store.db.get(
+      `SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS used_tokens
+       FROM ai_calls WHERE work_id = ? AND created_at >= ? AND created_at < ?`,
+      workId,
+      calendar.startInclusive,
+      calendar.endExclusive
+    );
+    const usedTokens = numberValue(usage ?? {}, "used_tokens");
+    return {
+      dailyTokenQuota,
+      usedTokens,
+      remainingTokens: dailyTokenQuota === null ? null : Math.max(0, dailyTokenQuota - usedTokens),
+      reached: dailyTokenQuota !== null && usedTokens >= dailyTokenQuota,
+      dayStartedAt: calendar.startInclusive,
+      resetsAt: calendar.endExclusive,
+      timezone: calendar.timeZone
+    };
   }
 
   async searchWork(
@@ -1841,6 +1907,15 @@ export class AiManager {
       logger.debug("ai.auto_run.drain_started", { workId });
       const settings = this.store.getWorkAiSettings(workId);
       if (!settings.autoRunEnabled || settings.autoRunPaused) return;
+      const tokenQuota = this.getWorkDailyTokenQuotaStatus(workId);
+      if (tokenQuota.reached) {
+        const dailyTokenQuota = Number(tokenQuota.dailyTokenQuota);
+        const resumeAt = String(tokenQuota.resetsAt);
+        this.store.pauseAutoRun(workId, `已达到每日 Token 额度 ${dailyTokenQuota}`, resumeAt);
+        this.scheduleAutoRun(workId);
+        logger.info("ai.auto_run.token_quota_reached", { workId, dailyTokenQuota, resumeAt });
+        return;
+      }
       const dailyTaskLimit = Number(settings.autoRunDailyTaskLimit);
       if (dailyTaskLimit > 0 && this.store.countAutoRunAttemptsToday(workId) >= dailyTaskLimit) {
         const resumeAt = new Date();
@@ -1936,7 +2011,7 @@ export class AiManager {
       })),
       signal
     });
-    const body = await response.text();
+    const body = await readResponseTextLimited(response);
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${body.slice(0, 300)}`);
     let payload: CompletionPayload;
     try {
@@ -2076,10 +2151,10 @@ export class AiManager {
           signal: controller.signal
         });
         if (response.ok) {
-          payload = (await response.json()) as { data?: Array<{ id?: string }> };
+          payload = JSON.parse(await readResponseTextLimited(response)) as { data?: Array<{ id?: string }> };
           break;
         }
-        const message = await response.text();
+        const message = await readResponseTextLimited(response);
         lastFailure = `HTTP ${response.status}: ${message.slice(0, 300)}`;
         if (response.status !== 404 || index === endpoints.length - 1) break;
       }
@@ -2671,10 +2746,11 @@ export class AiManager {
       && titleModelId
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
-    const generated = this.enabledAgentTools(input.workId, "chat").length
+    const chatTools = this.enabledAgentTools(input.workId, "chat", undefined, input.conversationId);
+    const generated = chatTools.length
       ? await this.generate({ ...input, taskType: "chat" })
       : await this.generateStream({ ...input, taskType: "chat" }, onDelta);
-    if (this.enabledAgentTools(input.workId, "chat").length) onDelta(generated.content);
+    if (chatTools.length) onDelta(generated.content);
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -3169,7 +3245,7 @@ export class AiManager {
       : 0;
     const conversationBudgetTokens = Math.max(256, Math.floor(availableInputTokens * 0.32));
     const instructionTokens = estimateAiTokens(input.instruction);
-    const functionTokens = estimateAiTokens(JSON.stringify(this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds)));
+    const functionTokens = estimateAiTokens(JSON.stringify(this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId)));
     const workContextBudgetTokens = Math.max(256, availableInputTokens
       - Math.min(conversationTokens, conversationBudgetTokens)
       - Math.min(instructionTokens, Math.floor(availableInputTokens * 0.25))
@@ -3194,7 +3270,7 @@ export class AiManager {
     const contextPlan = this.buildContextPlan(input, model, budget);
     const context = contextPlan.context;
     const messages = this.buildMessages(input, context);
-    const tools = this.enabledAgentTools(input.workId, input.taskType);
+    const tools = this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const messageTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content ?? ""), 0);
     const systemPromptTokens = estimateAiTokens(messages[0]?.content ?? "");
@@ -3353,7 +3429,7 @@ export class AiManager {
   private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">, context: string): CompletionMessage[] {
     const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
-    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds);
+    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId);
     const toolGuidance = enabledToolIds.length > 0
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
@@ -3433,10 +3509,19 @@ export class AiManager {
     return collapseAiBlankLines(this.buildContextPlan(input, model).context);
   }
 
-  private enabledAgentToolIds(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): AgentToolId[] {
+  private enabledAgentToolIds(
+    workId: string,
+    taskType: TaskType,
+    requestedToolIds?: AgentToolId[],
+    conversationId?: string
+  ): AgentToolId[] {
     if (taskType !== "chat" && requestedToolIds === undefined) return [];
-    const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
+    const sourceTools = conversationId && taskType === "chat"
+      ? this.store.ensureAiConversationAgentTools(conversationId, workId)
+      : this.store.getWorkAiSettings(workId).agentTools;
+    const enabled = new Set((sourceTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
+    // 对话锁定只替换「作品当前设置」作为来源；若调用方显式传入 requestedToolIds（含空数组禁用），仍取交集。
     const requested = requestedToolIds ? new Set(requestedToolIds) : null;
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
     return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
@@ -3444,8 +3529,13 @@ export class AiManager {
       && this.canReadWithAgentTool(permissions, toolId));
   }
 
-  private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): Record<string, unknown>[] {
-    return this.enabledAgentToolIds(workId, taskType, requestedToolIds).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+  private enabledAgentTools(
+    workId: string,
+    taskType: TaskType,
+    requestedToolIds?: AgentToolId[],
+    conversationId?: string
+  ): Record<string, unknown>[] {
+    return this.enabledAgentToolIds(workId, taskType, requestedToolIds, conversationId).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private canReadWithAgentTool(permissions: WorkModulePermissions, toolId: AgentToolId): boolean {
@@ -3464,7 +3554,8 @@ export class AiManager {
   private async executeAgentTool(
     workId: string,
     toolCall: CompletionToolCall,
-    maximumResultChars = AGENT_TOOL_RESULT_MAX_CHARS
+    maximumResultChars = AGENT_TOOL_RESULT_MAX_CHARS,
+    allowedToolIds?: ReadonlySet<AgentToolId>
   ): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -3495,7 +3586,7 @@ export class AiManager {
       : name === "search_drafts" ? searchDraftsArguments
       : null;
     const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
-    const enabledTools = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
+    const enabledTools = allowedToolIds ?? new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
     if (!schema || !toolId || !enabledTools.has(toolId) || !this.canReadWithAgentTool(permissions, toolId)) {
@@ -3745,6 +3836,44 @@ export class AiManager {
     };
   }
 
+  private constrainParametersForDailyTokenQuota(
+    workId: string,
+    messages: CompletionMessage[],
+    parameters: Record<string, unknown>,
+    tools: Record<string, unknown>[] = [],
+    additionalUsedTokens = 0
+  ): Record<string, unknown> {
+    const status = this.getWorkDailyTokenQuotaStatus(workId);
+    if (status.dailyTokenQuota === null) return parameters;
+    const dailyTokenQuota = Number(status.dailyTokenQuota);
+    const usedTokens = Number(status.usedTokens) + Math.max(0, additionalUsedTokens);
+    const remainingTokens = Math.max(0, dailyTokenQuota - usedTokens);
+    const estimatedInputTokens = estimateAiTokens(JSON.stringify(messages))
+      + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
+    if (remainingTokens <= estimatedInputTokens) {
+      throw new AppError(
+        429,
+        "DAILY_TOKEN_QUOTA_EXCEEDED",
+        `本书今日剩余 Token 额度不足以发起本次请求（已用 ${usedTokens.toLocaleString("zh-CN")} / ${dailyTokenQuota.toLocaleString("zh-CN")}）`,
+        {
+          dailyTokenQuota,
+          usedTokens,
+          remainingTokens,
+          estimatedInputTokens,
+          resetsAt: status.resetsAt,
+          timezone: status.timezone
+        }
+      );
+    }
+    return {
+      ...parameters,
+      max_tokens: Math.min(
+        Number(parameters.max_tokens) || DEFAULT_MAX_TOKENS,
+        remainingTokens - estimatedInputTokens
+      )
+    };
+  }
+
   private generateTaggedJson(input: GenerateInput): Promise<GenerateResult> {
     const userRequirement = "将最终 JSON 放在唯一一对 <json> 和 </json> 标签中；标签外不要输出任何内容，也不要使用 Markdown 代码块。";
     const systemRequirement = "结构化响应要求：最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。";
@@ -3765,7 +3894,10 @@ export class AiManager {
     let effectiveInput = input;
     let context = this.buildContext(effectiveInput, model);
     let messages = this.buildMessages(effectiveInput, context);
-    let tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds);
+    const allowedToolIds = new Set(this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId));
+    let tools = input.disableTools
+      ? []
+      : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId);
     let parameters: Record<string, unknown>;
     try {
       parameters = this.constrainParametersForContext(model, messages, requestedParameters, tools);
@@ -3776,6 +3908,7 @@ export class AiManager {
       context = this.buildContext(effectiveInput, model);
       messages = this.buildMessages(effectiveInput, context);
       tools = [];
+      allowedToolIds.clear();
       try {
         parameters = this.constrainParametersForContext(model, messages, requestedParameters);
       } catch (fallbackError) {
@@ -3788,6 +3921,7 @@ export class AiManager {
         modelId: stringValue(model, "id")
       });
     }
+    parameters = this.constrainParametersForDailyTokenQuota(input.workId, messages, parameters, tools);
     const completionMessages: CompletionMessage[] = [...messages];
     const callId = id("call");
     const timestamp = now();
@@ -3889,7 +4023,13 @@ export class AiManager {
         const requestParameters = options.parameters ?? parameters;
         const purpose = options.purpose ?? "generation";
         const requestTools = toolChoice === "auto" ? tools : [];
-        const roundParameters = this.constrainParametersForContext(model, requestMessages, requestParameters, requestTools);
+        const roundParameters = this.constrainParametersForDailyTokenQuota(
+          input.workId,
+          requestMessages,
+          this.constrainParametersForContext(model, requestMessages, requestParameters, requestTools),
+          requestTools,
+          trackedInputTokens + trackedOutputTokens
+        );
         const traceRound: AiCallTraceRound = {
           round: traceRounds.length + 1,
           requestedAt: now(),
@@ -3939,7 +4079,7 @@ export class AiManager {
                 })),
                   signal: controller.signal
                 });
-                return { ok: response.ok, status: response.status, body: await response.text() };
+                return { ok: response.ok, status: response.status, body: await readResponseTextLimited(response) };
               } finally {
                 clearTimeout(timeout);
                 input.signal?.removeEventListener("abort", forwardAbort);
@@ -4019,6 +4159,19 @@ export class AiManager {
       let toolContextStartIndex = baseMessageCount;
       let compactedToolContextMessage: CompletionMessage | null = null;
       const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+      const configuredToolCallLimit = Math.min(
+        MAX_CONFIGURED_AGENT_TOOL_CALLS,
+        Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
+      );
+      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, MAX_CONFIGURED_AGENT_TOOL_CALLS));
+      const agentToolCallGlobalMultiplier = clampAgentToolCallGlobalMultiplier(
+        this.store.getWorkAiSettings(input.workId).agentToolCallGlobalMultiplier ?? DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER
+      );
+      const globalToolCallLimit = agentToolCallGlobalLimit(agentToolCallLimit, agentToolCallGlobalMultiplier);
+      let toolCallQuotaUsed = 0;
+      let globalToolCallUsed = 0;
+      let toolContextCompactCount = 0;
+      // 配额与全局熔断只控制循环是否继续，不得改写 tools 定义、tool_choice 或系统前缀（否则破坏 prompt cache）。
       const compactToolContext = async (additionalMessages: CompletionMessage[] = [], round = 1): Promise<void> => {
         const existingToolContext = completionMessages.slice(toolContextStartIndex);
         const sourceMessages = [
@@ -4074,13 +4227,20 @@ export class AiManager {
           ...messages.slice(compactedMessageIndex)
         );
         toolContextStartIndex = completionMessages.length;
+        toolCallQuotaUsed = agentToolCallQuotaUsedAfterCompact(agentToolCallLimit);
+        toolContextCompactCount += 1;
         const sourceChars = JSON.stringify(sourceMessages).length;
         const contextUsage = this.completionContextUsage(effectiveInput, model, completionMessages, tools);
         logger.info("ai.tool_context.compacted", {
           callId,
           sourceMessageCount: sourceMessages.length,
           sourceChars,
-          summaryChars: summary.length
+          summaryChars: summary.length,
+          toolCallQuotaUsed,
+          agentToolCallLimit,
+          globalToolCallUsed,
+          globalToolCallLimit,
+          toolContextCompactCount
         });
         const step: AiProcessStep = {
           id: id("process"),
@@ -4112,13 +4272,17 @@ export class AiManager {
         if (!hasRawToolResults) return false;
         const currentTokens = estimateAiTokens(JSON.stringify([...completionMessages, assistantMessage]))
           + estimateAiTokens(JSON.stringify(tools));
-        const maximumNewToolTokens = Math.ceil(AGENT_TOOL_RESULT_MAX_CHARS * 1.1) * Math.max(1, toolCallCount);
+        // 新工具结果可能附带 toolCallQuotaNotice，预估体积时一并计入，避免低估后触发上下文溢出。
+        const noticeBudgetChars = Math.max(
+          agentToolCallQuotaNoticeBudgetChars(1, agentToolCallLimit),
+          agentToolCallQuotaNoticeBudgetChars(agentToolCallSoftWarningThreshold(agentToolCallLimit), agentToolCallLimit)
+        );
+        const maximumNewToolTokens = Math.ceil((AGENT_TOOL_RESULT_MAX_CHARS + noticeBudgetChars) * 1.1) * Math.max(1, toolCallCount);
         return currentTokens + maximumNewToolTokens + TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS >= contextWindow;
       };
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];
       const executedToolCalls: AgentToolCallResult[] = [];
-      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? MAX_AGENT_TOOL_CALLS, 1, MAX_CONFIGURED_AGENT_TOOL_CALLS));
       const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
         const reasoning = currentChoice?.message?.reasoning_content;
         if (reasoning?.trim()) {
@@ -4138,7 +4302,21 @@ export class AiManager {
         const round = toolRound + 1;
         recordChoiceProcess(choice, round, true);
         const toolCalls = choice.message.tool_calls;
-        if (executedToolCalls.length + toolCalls.length > agentToolCallLimit) {
+        if (shouldRejectGlobalToolCalls(globalToolCallUsed, toolCalls.length, globalToolCallLimit)) {
+          logger.warn("ai.tool_call.global_limit_reached", {
+            callId,
+            workId: input.workId,
+            agentToolCallLimit,
+            globalLimit: globalToolCallLimit,
+            actualCalls: globalToolCallUsed,
+            requestedCalls: toolCalls.length,
+            compactCount: toolContextCompactCount,
+            turnQuotaUsed: toolCallQuotaUsed,
+            toolsCalled: executedToolCalls.map((item) => item.name)
+          });
+          throw new Error(`AI exceeded the global tool call limit of ${globalToolCallLimit} in one response cycle.`);
+        }
+        if (shouldRejectAgentToolCalls(toolCallQuotaUsed, toolCalls.length, agentToolCallLimit)) {
           throw new Error(`AI requested more than ${agentToolCallLimit} tool calls in one response cycle.`);
         }
         const normalizedToolCalls = toolCalls.map((toolCall) => ({
@@ -4162,7 +4340,7 @@ export class AiManager {
         const maximumResultChars = toolResultMaximumChars(assistantToolMessage, toolCalls.length);
         const currentRoundMessages: CompletionMessage[] = [assistantToolMessage];
         for (const toolCall of toolCalls) {
-          const execution = await this.executeAgentTool(input.workId, toolCall, maximumResultChars);
+          const execution = await this.executeAgentTool(input.workId, toolCall, maximumResultChars, allowedToolIds);
           logger.info("ai.tool_call.completed", {
             callId,
             toolName: execution.name,
@@ -4171,6 +4349,10 @@ export class AiManager {
             maximumResultChars
           });
           executedToolCalls.push(execution);
+          toolCallQuotaUsed += 1;
+          globalToolCallUsed += 1;
+          const remainingToolCalls = Math.max(0, agentToolCallLimit - toolCallQuotaUsed);
+          execution.result = withAgentToolCallQuotaNotice(execution.result, remainingToolCalls, agentToolCallLimit);
           toolTraceRound?.toolExecutions.push(execution);
           saveTrace();
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });
@@ -4186,18 +4368,8 @@ export class AiManager {
           await compactToolContext(currentRoundMessages, round);
         }
         toolRound += 1;
-        const forceFinalAnswer = toolRound >= MAX_AGENT_TOOL_ROUNDS;
-        if (forceFinalAnswer) {
-          completionMessages.push({
-            role: "user",
-            content: "工具调用阶段已经结束，不得再请求任何工具。请立即根据已有工具结果生成最终答案，并严格遵守最初用户消息要求的输出格式。"
-          });
-        }
-        payload = await requestCompletion(forceFinalAnswer ? "none" : "auto");
+        payload = await requestCompletion("auto");
         choice = payload.choices?.[0];
-        if (forceFinalAnswer && choice?.message?.tool_calls?.length) {
-          throw new Error(`AI returned tool calls after tool_choice was set to none at the ${MAX_AGENT_TOOL_ROUNDS}-round safety limit.`);
-        }
       }
       recordChoiceProcess(choice, toolRound + 1, false);
       const content = choice?.message?.content;
@@ -4281,7 +4453,7 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         error: aiErrorForLog(error)
       });
-      if (error instanceof AppError && error.code === "CONTEXT_WINDOW_EXCEEDED") {
+      if (error instanceof AppError && (error.code === "CONTEXT_WINDOW_EXCEEDED" || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED")) {
         throw new AppError(error.status, error.code, error.message, {
           callId,
           ...(error.details && typeof error.details === "object" ? error.details : {}),
@@ -4307,6 +4479,7 @@ export class AiManager {
       if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
       throw initialContextWindowError(error, provider, model);
     }
+    parameters = this.constrainParametersForDailyTokenQuota(input.workId, messages, parameters);
     const callId = id("call");
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
@@ -4376,7 +4549,7 @@ export class AiManager {
                 })),
                 signal: controller.signal
               });
-              if (!response.ok) return { ok: false as const, status: response.status, body: await response.text() };
+              if (!response.ok) return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
               const streamed = await this.readCompletionStream(
                 response,
                 protocol,
@@ -4638,8 +4811,16 @@ export class AiManager {
         appendContent(delta);
       }
     };
+    let receivedBytes = 0;
     while (true) {
       const chunk = await reader.read();
+      if (chunk.value?.byteLength) {
+        receivedBytes += chunk.value.byteLength;
+        if (receivedBytes > AI_RESPONSE_MAX_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${AI_RESPONSE_MAX_BYTES} 字节上限`);
+        }
+      }
       buffer += decoder.decode(chunk.value, { stream: !chunk.done });
       const events = buffer.split(/\r?\n\r?\n/u);
       buffer = events.pop() ?? "";

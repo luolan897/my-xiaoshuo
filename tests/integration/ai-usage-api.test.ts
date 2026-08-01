@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime, createWork } from "../helpers.js";
 
@@ -11,6 +11,7 @@ describe("AI Token 用量统计 API", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     runtime.close();
   });
 
@@ -46,6 +47,19 @@ describe("AI Token 用量统计 API", () => {
     insertCall("call-1", String(firstWork.id), 100, 20, 40, 100, "reported", "2026-07-26T16:30:00.000Z");
     insertCall("call-2", String(firstWork.id), 30, 10, 0, 0, "estimated", "2026-07-27T05:00:00.000Z");
     insertCall("call-3", String(secondWork.id), 200, 50, 100, 200, "reported", "2026-07-27T08:00:00.000Z");
+    vi.stubEnv("TZ", "Asia/Shanghai");
+    await request(runtime.app)
+      .patch(`/api/works/${firstWork.id}/ai-settings`)
+      .send({ dailyTokenQuota: 10_000 })
+      .expect(200);
+    expect(runtime.ai.getWorkDailyTokenQuotaStatus(String(firstWork.id), new Date("2026-07-27T05:00:00.000Z"))).toMatchObject({
+      dailyTokenQuota: 10_000,
+      usedTokens: 160,
+      remainingTokens: 9_840,
+      dayStartedAt: "2026-07-26T16:00:00.000Z",
+      resetsAt: "2026-07-27T16:00:00.000Z",
+      timezone: "Asia/Shanghai"
+    });
 
     const platform = await request(runtime.app)
       .get("/api/platform/ai/usage?timezoneOffset=480")
@@ -80,6 +94,13 @@ describe("AI Token 用量统计 API", () => {
       estimatedRequestCount: 1
     });
     expect(work.body.data).not.toHaveProperty("works");
+    expect(work.body.data.quota).toMatchObject({
+      dailyTokenQuota: 10_000,
+      usedTokens: 0,
+      remainingTokens: 10_000,
+      reached: false,
+      timezone: "Asia/Shanghai"
+    });
   });
 
   it("拒绝越界时区偏移", async () => {

@@ -1,6 +1,7 @@
 import { DRAFT_SETTING_MODULES, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
@@ -38,6 +39,31 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
 
 export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+export const WORK_AGENT_TOOL_IDS = [
+  "story_index",
+  "read_chapters",
+  "grep",
+  "search_story_entities",
+  "read_character_sections",
+  "search_drafts"
+] as const;
+export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
+const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+
+export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? json<unknown[]>(value, DEFAULT_WORK_AGENT_TOOLS)
+      : DEFAULT_WORK_AGENT_TOOLS;
+  const enabled = new Set<WorkAgentToolId>();
+  for (const item of source) {
+    if (typeof item !== "string") continue;
+    const toolId = item === "query_story_knowledge" ? "search_story_entities" : item;
+    if (WORK_AGENT_TOOL_IDS.includes(toolId as WorkAgentToolId)) enabled.add(toolId as WorkAgentToolId);
+  }
+  return WORK_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
+}
 export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
 
 type PlatformPageSizes = {
@@ -1104,6 +1130,9 @@ export class Store {
     return {
       workId,
       systemPrompt: String(row?.system_prompt ?? ""),
+      dailyTokenQuota: row?.daily_token_quota === null || row?.daily_token_quota === undefined
+        ? null
+        : Math.max(10_000, Number(row.daily_token_quota)),
       autoRunEnabled: Number(row?.auto_run_enabled ?? 0) === 1,
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
@@ -1115,9 +1144,9 @@ export class Store {
       autoRunConsecutiveFailures: Math.max(0, Number(row?.auto_run_consecutive_failures ?? 0) || 0),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
-        .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
-        .filter((tool, index, tools) => tools.indexOf(tool) === index),
+      agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
+      agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
+      agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
       titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
         ? null
         : String(row.title_generation_model_id),
@@ -1127,6 +1156,7 @@ export class Store {
 
   updateWorkAiSettings(workId: string, input: {
     systemPrompt?: string;
+    dailyTokenQuota?: number | null;
     autoRunEnabled?: boolean;
     autoRunConcurrency?: number;
     autoRunBatchLimit?: number;
@@ -1134,6 +1164,8 @@ export class Store {
     autoRunFailureThreshold?: number;
     bookSummaryContextPercent?: number;
     contextCompactThreshold?: number;
+    agentToolCallLimit?: number;
+    agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
     titleGenerationModelId?: string | null;
   }): Record<string, unknown> {
@@ -1141,6 +1173,9 @@ export class Store {
     const current = this.getWorkAiSettings(workId);
     const timestamp = now();
     const nextPrompt = input.systemPrompt ?? String(current.systemPrompt);
+    const nextDailyTokenQuota = input.dailyTokenQuota === undefined
+      ? (current.dailyTokenQuota === null ? null : Number(current.dailyTokenQuota))
+      : input.dailyTokenQuota;
     const nextEnabled = input.autoRunEnabled ?? Boolean(current.autoRunEnabled);
     const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
@@ -1148,19 +1183,23 @@ export class Store {
     const nextFailureThreshold = input.autoRunFailureThreshold ?? Number(current.autoRunFailureThreshold);
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
-    const nextAgentTools = input.agentTools ?? current.agentTools as string[];
+    const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
+    const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
+    const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
     const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
       ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
       : input.titleGenerationModelId?.trim() || null;
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+         work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
-         context_compact_threshold, agent_tools_json, title_generation_model_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
+         agent_tools_json, title_generation_model_id, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
+         daily_token_quota = excluded.daily_token_quota,
          auto_run_enabled = excluded.auto_run_enabled,
          auto_run_concurrency = excluded.auto_run_concurrency,
          auto_run_batch_limit = excluded.auto_run_batch_limit,
@@ -1172,11 +1211,14 @@ export class Store {
          auto_run_consecutive_failures = excluded.auto_run_consecutive_failures,
          book_summary_context_percent = excluded.book_summary_context_percent,
          context_compact_threshold = excluded.context_compact_threshold,
+         agent_tool_call_limit = excluded.agent_tool_call_limit,
+         agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
+      nextDailyTokenQuota,
       nextEnabled ? 1 : 0,
       Math.min(8, Math.max(1, nextConcurrency)),
       Math.min(200, Math.max(1, nextBatchLimit)),
@@ -1188,12 +1230,15 @@ export class Store {
       Math.max(0, Number(current.autoRunConsecutiveFailures) || 0),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
+      Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
       timestamp
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
       systemPromptChanged: input.systemPrompt !== undefined,
+      dailyTokenQuota: nextDailyTokenQuota,
       autoRunEnabled: nextEnabled,
       autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
@@ -1201,6 +1246,8 @@ export class Store {
       autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
+      agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
       titleGenerationModelId: nextTitleGenerationModelId
     });
@@ -1353,11 +1400,21 @@ export class Store {
   }
 
   getWorkCover(workId: string): { mimeType: string; content: Buffer; byteLength: number; sha256: string; updatedAt: string } {
+    const cover = this.findWorkCover(workId);
+    if (!cover) throw notFound("作品封面");
+    return cover;
+  }
+
+  findWorkCover(workId: string): { mimeType: "image/jpeg" | "image/png" | "image/webp"; content: Buffer; byteLength: number; sha256: string; updatedAt: string } | null {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_covers WHERE work_id = ?", workId);
-    if (!row) throw notFound("作品封面");
+    if (!row) return null;
+    const mimeType = requiredString(row, "mime_type");
+    if (mimeType !== "image/jpeg" && mimeType !== "image/png" && mimeType !== "image/webp") {
+      throw new AppError(500, "INVALID_COVER_MIME", "作品封面类型无效");
+    }
     return {
-      mimeType: requiredString(row, "mime_type"),
+      mimeType,
       content: Buffer.from(row.content as Uint8Array),
       byteLength: numberValue(row, "byte_length"),
       sha256: requiredString(row, "sha256"),
@@ -1777,22 +1834,24 @@ export class Store {
   }
 
   createChapter(workId: string, input: { volumeId: string; title: string; content?: string; chapterType?: ChapterType }): Record<string, unknown> {
-    this.getWork(workId);
-    const volume = this.getVolume(input.volumeId);
-    if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
-    const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId);
-    const chapterId = this.insertChapter(
-      workId,
-      input.volumeId,
-      input.title,
-      input.content ?? "",
-      numberValue(last ?? {}, "value") + 1,
-      "manual",
-      null,
-      input.chapterType ?? "正文"
-    );
-    this.audit(workId, "chapter.created", "chapter", chapterId);
-    return this.getChapter(chapterId);
+    return this.db.transaction(() => {
+      this.getWork(workId);
+      const volume = this.getVolume(input.volumeId);
+      if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
+      const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId);
+      const chapterId = this.insertChapter(
+        workId,
+        input.volumeId,
+        input.title,
+        input.content ?? "",
+        numberValue(last ?? {}, "value") + 1,
+        "manual",
+        null,
+        input.chapterType ?? "正文"
+      );
+      this.audit(workId, "chapter.created", "chapter", chapterId);
+      return this.getChapter(chapterId);
+    });
   }
 
   getChapter(chapterId: string): Record<string, unknown> {
@@ -6203,11 +6262,13 @@ export class Store {
     this.getWork(workId);
     const conversationId = id("conversation");
     const timestamp = now();
+    const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
     this.db.run(
-      "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO ai_conversations (id, work_id, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
       conversationId,
       workId,
       title.trim() || "新对话",
+      JSON.stringify(agentTools),
       timestamp,
       timestamp,
       currentRequestActor()?.userId ?? null
@@ -6413,12 +6474,15 @@ export class Store {
     const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
         title.slice(0, 200),
         forkSummary,
         forkCompactedCount,
+        conversation.agent_tools_json == null
+          ? JSON.stringify(normalizeWorkAgentTools(this.getWorkAiSettings(requiredString(conversation, "work_id")).agentTools))
+          : String(conversation.agent_tools_json),
         timestamp,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -6451,9 +6515,33 @@ export class Store {
       compactedMessageCount: numberValue(row, "compacted_message_count"),
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
+      agentTools: row.agent_tools_json == null || row.agent_tools_json === undefined
+        ? null
+        : normalizeWorkAgentTools(row.agent_tools_json),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
+  }
+
+  /** 锁定本对话可用工具集；已锁定则保持不变，避免中途改作品设置破坏 prompt cache。 */
+  ensureAiConversationAgentTools(conversationId: string, workId: string): WorkAgentToolId[] {
+    const conversation = this.db.get("SELECT id, work_id, agent_tools_json FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) {
+      throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    }
+    if (conversation.agent_tools_json != null && conversation.agent_tools_json !== undefined) {
+      return normalizeWorkAgentTools(conversation.agent_tools_json);
+    }
+    const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
+    this.db.run(
+      "UPDATE ai_conversations SET agent_tools_json = ?, updated_at = ? WHERE id = ? AND agent_tools_json IS NULL",
+      JSON.stringify(agentTools),
+      now(),
+      conversationId
+    );
+    const locked = this.db.get("SELECT agent_tools_json FROM ai_conversations WHERE id = ?", conversationId);
+    return normalizeWorkAgentTools(locked?.agent_tools_json ?? agentTools);
   }
 
   private mapAiConversationMessage(row: Row): Record<string, unknown> {
@@ -7966,6 +8054,23 @@ export class Store {
       }
     }
     return lines.join("\n").trimEnd() + "\n";
+  }
+
+  async exportDocx(workId: string): Promise<Buffer> {
+    const tree = this.getWorkTree(workId);
+    const cover = this.findWorkCover(workId);
+    const volumes = (tree.volumes as Record<string, unknown>[]).map((volume) => ({
+      title: String(volume.title),
+      chapters: (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
+        title: String(chapter.title),
+        content: String(chapter.content ?? "")
+      }))
+    }));
+    return exportWorkDocx({
+      title: String(tree.title),
+      volumes,
+      cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
+    });
   }
 
   listAuditLogs(workId: string): Record<string, unknown>[] {

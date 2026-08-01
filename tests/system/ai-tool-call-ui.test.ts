@@ -15,6 +15,7 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain('id="ai-tool-call-name"');
     expect(page).toContain('id="ai-tool-call-time"');
     expect(page).toContain('id="ai-tool-call-description"');
+    expect(page).toContain('<dt>返回字符数</dt><dd id="ai-tool-call-result-length"></dd>');
     expect(page).toContain('id="ai-tool-call-arguments"');
     expect(page).toContain('id="ai-tool-call-result"');
     expect(application).toContain('eventName === "tool_call"');
@@ -22,7 +23,9 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('`调用了 ${name} 工具`');
     expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null)");
     expect(application).toContain('step?.type === "context_compaction"');
-    expect(application).toContain('compaction.setAttribute("role", "separator")');
+    expect(application).toContain('createAiContextCompactionDivider({');
+    expect(application).toContain('kind: "tool"');
+    expect(application).toContain('divider.setAttribute("role", "separator")');
     expect(application).toContain("function formatAiProcessDuration(value)");
     expect(application).toContain("function resolveAiProcessDuration(metadata, steps, completedAt)");
     expect(application).toContain('` · 耗时 ${duration}`');
@@ -35,6 +38,8 @@ describe("AI 工具调用记录界面", () => {
     expect(application.match(/scrollAiFeedToBottom\(\);/gu)?.length).toBeGreaterThanOrEqual(7);
     expect(application).toContain('return "历史记录未保存"');
     expect(application).toContain('new Intl.DateTimeFormat("zh-CN"');
+    expect(application).toContain('formatAiToolCallResult(toolCall?.result)');
+    expect(application).toContain('`${resultDetails.characterCount.toLocaleString("zh-CN")} 字符`');
     expect(styles).toContain(".ai-tool-call-summary::after { content: \"查看详情\";");
     expect(styles).toContain(".ai-process-details > summary");
     expect(styles).toContain(".ai-process-step-body");
