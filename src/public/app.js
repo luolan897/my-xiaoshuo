@@ -10599,6 +10599,7 @@ $("#form-dialog").addEventListener("close", () => {
   formDialogVditors.forEach(destroyVditorEditor);
   formDialogVditors = [];
   void discardPendingMarkdownAttachments();
+  closeManuscriptExportMenu();
   if (relationshipPresenceId && !$("#form-dialog").open) setRelationshipPresence(null);
 });
 $("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));
