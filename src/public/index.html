@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260801-merged-ui-v3">
+    <link rel="stylesheet" href="/styles.css?v=20260801-restart-dirty-guard-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -390,9 +390,17 @@
       </div>
       <div class="dialog-fields">
         <p id="system-restart-dialog-description" class="system-restart-message">本次登录已经失效，请重新登录。</p>
+        <section id="system-restart-discard-confirmation" class="system-restart-discard-confirmation hidden" role="alertdialog" aria-labelledby="system-restart-discard-title" aria-describedby="system-restart-discard-description">
+          <strong id="system-restart-discard-title">放弃未保存修改</strong>
+          <p id="system-restart-discard-description">检测到尚未保存的编辑内容。确定放弃这些内容并重新登录吗？</p>
+          <div class="system-restart-confirmation-actions">
+            <button id="system-restart-discard-cancel" class="ghost-button" type="button">继续编辑</button>
+            <button id="system-restart-discard-confirm" class="primary-button" type="button">放弃并重新登录</button>
+          </div>
+        </section>
       </div>
       <div class="dialog-actions">
-        <button id="system-restart-confirm" class="primary-button" type="button">我知道了</button>
+        <button id="system-restart-confirm" class="primary-button" type="button" aria-controls="system-restart-discard-confirmation" aria-expanded="false">我知道了</button>
       </div>
     </dialog>
 
@@ -909,6 +917,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-merged-ui-v3"></script>
+    <script type="module" src="/app.js?v=20260801-restart-dirty-guard-v1"></script>
   </body>
 </html>

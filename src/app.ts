@@ -722,32 +722,55 @@ function redactAiCallContext(record: Record<string, unknown>, permissions: WorkM
 
 const proseRestrictedPlaceholder = "（正文读取权限受限）";
 
-/** 无正文读取权限时移除建议中的原文片段，避免通过 AI 接口绕过 prose=none。 */
+function redactContinuationGuard(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  if (permissions.prose !== "none") return record;
+  return {
+    ...record,
+    issues: [],
+    contextRefs: {},
+    failure: null,
+    restricted: true
+  };
+}
+
+/** 无正文读取权限时移除建议中的原文、指令和检查证据，避免通过 AI 接口绕过 prose=none。 */
 function redactSuggestion(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
   if (permissions.prose !== "none") return record;
-  if (record.sourceText === undefined || record.sourceText === null || record.sourceText === "") return record;
-  return { ...record, sourceText: "", restricted: true };
+  const guard = recordValue(record.guard);
+  return {
+    ...record,
+    instruction: proseRestrictedPlaceholder,
+    sourceText: "",
+    ...(guard ? { guard: redactContinuationGuard(guard, permissions) } : {}),
+    restricted: true
+  };
 }
 
 function redactAiConversationMessage(item: unknown, permissions: WorkModulePermissions): unknown {
   if (permissions.prose !== "none") return item;
   const message = recordValue(item);
-  if (!message || typeof message.content !== "string" || message.content.length === 0) return item;
-  return { ...message, content: proseRestrictedPlaceholder, restricted: true };
+  if (!message) return item;
+  return {
+    ...message,
+    content: proseRestrictedPlaceholder,
+    citations: [],
+    metadata: { restricted: true },
+    restricted: true
+  };
 }
 
 /** 无正文读取权限时隐藏对话预览与消息正文，避免历史对话泄露章节原文。 */
 function redactAiConversation(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
   if (permissions.prose !== "none") return record;
-  const result = { ...record };
-  let restricted = false;
+  const result: Record<string, unknown> = {
+    ...record,
+    title: proseRestrictedPlaceholder
+  };
   if (typeof result.preview === "string" && result.preview.length > 0) {
     result.preview = proseRestrictedPlaceholder;
-    restricted = true;
   }
   if (Array.isArray(result.messages)) {
     result.messages = result.messages.map((item) => redactAiConversationMessage(item, permissions));
-    restricted = true;
   }
   const messagesPage = recordValue(result.messagesPage);
   if (messagesPage && Array.isArray(messagesPage.items)) {
@@ -755,9 +778,8 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
       ...messagesPage,
       items: messagesPage.items.map((item) => redactAiConversationMessage(item, permissions))
     };
-    restricted = true;
   }
-  return restricted ? { ...result, restricted: true } : result;
+  return { ...result, restricted: true };
 }
 
 /** SSE 错误事件只暴露 AppError 的公开信息，避免透传内部异常 message。 */
@@ -780,7 +802,7 @@ export function publicAiStreamError(error: unknown): {
       code: error.code,
       message: error.message,
       status: error.status,
-      ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
+      ...(error.status < 500 && typeof details?.failure === "string" ? { failure: details.failure } : {}),
       ...(typeof details?.callId === "string" ? { callId: details.callId } : {}),
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
       ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
@@ -2197,6 +2219,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
       }
       const conversationId = String(conversation.id);
+      const permissions = requestPermissions(request, request.params.workId);
       const prepared = await ai.prepareConversationContext({
         conversationId,
         workId: request.params.workId,
@@ -2207,10 +2230,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       });
       sendEvent("context", {
         ...prepared,
-        conversation: {
+        conversation: redactAiConversation({
           ...store.getAiConversationSummary(conversationId),
           contextWarningPending: prepared.action === "warn"
-        }
+        }, permissions)
       });
       if (prepared.action === "warn") return;
       const userMessage = input.currentMessageId
@@ -2221,7 +2244,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           citations
         });
       const currentMessageId = input.currentMessageId ?? String(userMessage?.id ?? "");
-      if (userMessage) sendEvent("user_message", { message: userMessage });
+      if (userMessage) sendEvent("user_message", { message: redactAiConversationMessage(userMessage, permissions) });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: instructionWithCitations(input.instruction, citations),
@@ -2275,19 +2298,27 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/suggestions/:suggestionId/guards", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination
+    const suggestion = ai.getSuggestion(request.params.suggestionId);
+    const permissions = requestPermissions(request, String(suggestion.workId));
+    data(response, mapRecords(pagination
       ? store.listContinuationGuardsPage(request.params.suggestionId, pagination)
-      : store.listContinuationGuards(request.params.suggestionId));
+      : store.listContinuationGuards(request.params.suggestionId), (guard) => redactContinuationGuard(guard, permissions)));
   });
   app.post("/api/suggestions/:suggestionId/guard", async (request, response) => {
     const input = parse(z.object({ content: z.string().max(2_000_000).optional() }), request.body ?? {});
-    data(response, await ai.runSuggestionGuard(request.params.suggestionId, input.content), 201);
+    const suggestion = ai.getSuggestion(request.params.suggestionId);
+    const permissions = requestPermissions(request, String(suggestion.workId));
+    data(response, redactContinuationGuard(await ai.runSuggestionGuard(request.params.suggestionId, input.content), permissions), 201);
   });
   app.post("/api/suggestions/:suggestionId/accept", (request, response) => {
     const input = parse(z.object({ content: z.string().max(2_000_000).optional() }), request.body ?? {});
     data(response, ai.acceptSuggestion(request.params.suggestionId, input.content));
   });
-  app.post("/api/suggestions/:suggestionId/reject", (request, response) => data(response, ai.rejectSuggestion(request.params.suggestionId)));
+  app.post("/api/suggestions/:suggestionId/reject", (request, response) => {
+    const suggestion = ai.rejectSuggestion(request.params.suggestionId);
+    const permissions = requestPermissions(request, String(suggestion.workId));
+    data(response, redactSuggestion(suggestion, permissions));
+  });
   app.get("/api/works/:workId/ai-calls", (request, response) => {
     const pagination = parsePagination(request.query);
     const permissions = requestPermissions(request, request.params.workId);

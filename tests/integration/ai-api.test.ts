@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
-import { estimateAiTokens } from "../../src/ai.js";
+import { AI_RESPONSE_MAX_BYTES, estimateAiTokens } from "../../src/ai.js";
 import { createTestRuntime } from "../helpers.js";
 
 describe("AI 供应商、模型与建议 API", () => {
@@ -177,6 +177,21 @@ describe("AI 供应商、模型与建议 API", () => {
       availableModels: ["mock-novel-model"],
       provider: { connectionStatus: "success" }
     });
+  });
+
+  it("连接测试拒绝成功状态下的超大模型列表响应", async () => {
+    const { providerId } = await configureAi();
+    fetchMock.mockImplementation(async () => new Response("{}", {
+      status: 200,
+      headers: { "Content-Length": String(AI_RESPONSE_MAX_BYTES + 1) }
+    }));
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({
+      ok: false,
+      provider: { connectionStatus: "failed" }
+    });
+    expect(tested.body.data.error).toContain("AI 供应商响应超过");
   });
 
   it("可以单独测试指定模型并使用该模型标识符", async () => {
@@ -1112,7 +1127,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
 
-  it("侧栏问答失败时通过 SSE 返回上游错误详情", async () => {
+  it("侧栏问答失败时通过 SSE 返回受控错误信息", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     fetchMock.mockImplementation(async (input, init) => {
@@ -1139,9 +1154,12 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain(`"providerId":"${providerId}"`);
     expect(streamed.text).toContain('"modelId":"mock-novel-model"');
     expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
-    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-s*****lue\\"}}"');
+    expect(streamed.text).not.toContain('"failure"');
+    expect(streamed.text).not.toContain("上游参数无效");
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
+    const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
+    expect(calls.body.data[0].failure).toContain("上游参数无效：Bearer sk-s*****lue");
   });
 
   it("流式成功响应不会向浏览器或记录回显供应商密钥", async () => {

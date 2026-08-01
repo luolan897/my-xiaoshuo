@@ -10198,12 +10198,35 @@ $("#onboarding-dialog").addEventListener("cancel", (event) => {
 });
 $("#system-restart-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
+  if (!$("#system-restart-discard-confirmation").classList.contains("hidden")) hideSystemRestartDiscardConfirmation();
 });
-$("#system-restart-confirm").addEventListener("click", () => {
+function hasUnsavedEditorChanges() {
+  return state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty;
+}
+
+function reloadAfterSystemRestart() {
   systemRestartReloading = true;
   window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
   window.location.reload();
+}
+
+function hideSystemRestartDiscardConfirmation() {
+  $("#system-restart-discard-confirmation").classList.add("hidden");
+  const button = $("#system-restart-confirm");
+  button.disabled = false;
+  button.setAttribute("aria-expanded", "false");
+  button.focus();
+}
+
+$("#system-restart-confirm").addEventListener("click", () => {
+  if (!hasUnsavedEditorChanges()) return reloadAfterSystemRestart();
+  $("#system-restart-discard-confirmation").classList.remove("hidden");
+  $("#system-restart-confirm").disabled = true;
+  $("#system-restart-confirm").setAttribute("aria-expanded", "true");
+  $("#system-restart-discard-cancel").focus();
 });
+$("#system-restart-discard-cancel").addEventListener("click", hideSystemRestartDiscardConfirmation);
+$("#system-restart-discard-confirm").addEventListener("click", reloadAfterSystemRestart);
 $("#onboarding-dialog").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
@@ -11348,7 +11371,7 @@ document.addEventListener("visibilitychange", () => {
   void refreshSystemHealth();
 });
 window.addEventListener("beforeunload", (event) => {
-  if (!systemRestartReloading && (state.dirty || entityEditorDirty || characterSectionEditorDirty)) event.preventDefault();
+  if (!systemRestartReloading && hasUnsavedEditorChanges()) event.preventDefault();
 });
 window.addEventListener("online", () => {
   updateSystemHealth({ status: "checking" });

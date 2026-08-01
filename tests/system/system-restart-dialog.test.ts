@@ -36,19 +36,29 @@ describe("系统重启登录提示", () => {
     }
   });
 
-  it("提供不可关闭且只能确认刷新的重启弹窗", async () => {
+  it("提供不可关闭且会保护未保存内容的重启弹窗", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
     expect(page.text).toContain('id="system-restart-dialog" class="dialog system-restart-dialog"');
     expect(page.text).toContain('id="system-restart-dialog-title" tabindex="-1">系统已重启或升级</h2>');
-    expect(page.text).toContain('id="system-restart-confirm" class="primary-button" type="button">我知道了</button>');
+    expect(page.text).toContain('id="system-restart-confirm" class="primary-button" type="button" aria-controls="system-restart-discard-confirmation" aria-expanded="false">我知道了</button>');
+    expect(page.text).toContain('id="system-restart-discard-confirmation" class="system-restart-discard-confirmation hidden" role="alertdialog"');
+    expect(page.text).toContain('id="system-restart-discard-cancel" class="ghost-button" type="button">继续编辑</button>');
+    expect(page.text).toContain('id="system-restart-discard-confirm" class="primary-button" type="button">放弃并重新登录</button>');
     expect(page.text).not.toContain('aria-label="关闭系统重启提示"');
     expect(application.text).toContain('$("#system-restart-dialog").addEventListener("cancel", (event) => {');
+    expect(application.text).toContain("function hasUnsavedEditorChanges()");
+    expect(application.text).toContain("function hideSystemRestartDiscardConfirmation()");
+    expect(application.text).toContain('$("#system-restart-discard-cancel").focus();');
+    expect(application.text).toContain('$("#system-restart-discard-cancel").addEventListener("click", hideSystemRestartDiscardConfirmation);');
+    expect(application.text).toContain('$("#system-restart-discard-confirm").addEventListener("click", reloadAfterSystemRestart);');
+    expect(application.text).toContain("if (!systemRestartReloading && hasUnsavedEditorChanges()) event.preventDefault();");
     expect(application.text).toContain('window.history.replaceState(null, "", serializePageRoute({ view: "login" }));');
     expect(application.text).toContain("window.location.reload();");
     expect(application.text).toContain('document.addEventListener("visibilitychange", () => {');
     expect(styles.text).toContain(".system-restart-dialog { width: min(500px, 92vw); }");
+    expect(styles.text).toContain(".system-restart-discard-confirmation { display: grid;");
   });
 });
