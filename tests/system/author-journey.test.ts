@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260801-export-menu-v1');
-    expect(page.text).toContain('/styles.css?v=20260801-export-menu-v1');
+    expect(page.text).toContain('/app.js?v=20260801-docx-export-menu-v1');
+    expect(page.text).toContain('/styles.css?v=20260801-docx-export-menu-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -329,6 +329,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
+    expect(application.text).toContain('class="usage-calendar-tooltip" role="tooltip" hidden');
+    expect(application.text).toContain('cell.addEventListener("mouseenter", () => showTooltip(cell))');
+    expect(application.text).toContain('cell.addEventListener("click", () => showTooltip(cell))');
+    expect(styles.text).toContain('.usage-calendar-tooltip { position: absolute;');
     expect(aiUsage.text).toContain("export function buildUsageCalendar");
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
@@ -814,6 +818,13 @@ describe("作者完整创作流程", () => {
     expect(modelConfig.text).toContain("maxTokens: model?.preset?.max_tokens ?? 32000");
     expect(application.text).toContain('async function renderPlatformAiConfig()');
     expect(application.text).toContain('async function renderBookAiSettings()');
+    expect(application.text).toContain('id="agent-tool-call-limit"');
+    expect(application.text).toContain('id="agent-tool-call-global-multiplier"');
+    expect(application.text).toContain('class="settings-layout-toggle agent-tool-call-global-multiplier-toggle"');
+    expect(application.text).toContain('Agent 工具调用上限');
+    expect(application.text).toContain('不会因 Compact 重置的熔断阀');
+    expect(application.text).toContain('href="https://scriverse.top/docs/global-tool-call-limit.html"');
+    expect(application.text).toContain('了解原理与推荐设置');
     expect(application.text).not.toContain("ai-context-usage");
     expect(application.text).toContain("setAiContextMeter(payload.contextUsage)");
     expect(application.text).toContain('addEventListener("contextmenu"');

@@ -1,10 +1,87 @@
 export const AGENT_TOOL_RESULT_MAX_CHARS = 10_000;
+export const MIN_AGENT_TOOL_CALL_LIMIT = 5;
+export const MAX_AGENT_TOOL_CALL_LIMIT = 48;
+export const AGENT_TOOL_CALL_SOFT_WARNING_FLOOR = 3;
+export const DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 3;
+export const MIN_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 1;
+export const MAX_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 6;
 
 export type AgentToolResultPagination = {
   cursor: number;
   nextCursor: number | null;
   maxChars: number;
 };
+
+export type AgentToolCallQuotaNotice = string;
+
+export function agentToolCallSoftWarningThreshold(limit: number): number {
+  if (!Number.isFinite(limit) || limit <= 0) return AGENT_TOOL_CALL_SOFT_WARNING_FLOOR;
+  return Math.max(AGENT_TOOL_CALL_SOFT_WARNING_FLOOR, Math.floor(limit * 0.2) + 1);
+}
+
+export function agentToolCallQuotaUsedAfterCompact(limit: number): number {
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.floor(limit * 0.2);
+}
+
+export function clampAgentToolCallGlobalMultiplier(value: unknown): number {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER;
+  return Math.min(
+    MAX_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
+    Math.max(MIN_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER, numeric)
+  );
+}
+
+/** 单次响应周期内的全局工具调用上限；计数器只增不减，不受 compact 影响。 */
+export function agentToolCallGlobalLimit(limit: number, multiplier: number): number {
+  const safeLimit = Math.max(1, Math.floor(Number(limit) || 0));
+  const safeMultiplier = clampAgentToolCallGlobalMultiplier(multiplier);
+  return safeLimit * safeMultiplier;
+}
+
+export function shouldRejectGlobalToolCalls(globalUsed: number, requestedCount: number, globalLimit: number): boolean {
+  if (!Number.isFinite(globalUsed) || !Number.isFinite(requestedCount) || !Number.isFinite(globalLimit)) return true;
+  if (requestedCount <= 0) return false;
+  return globalUsed + requestedCount > globalLimit;
+}
+
+export function buildAgentToolCallQuotaNotice(remaining: number, limit: number): AgentToolCallQuotaNotice | null {
+  if (!Number.isFinite(remaining) || remaining <= 0) return null;
+  if (remaining === 1) {
+    return "[critical] 重要提示：现在没有可用的工具调用次数了。请立即根据已有工具结果直接总结作答，不得再请求任何工具。若继续发起工具调用，系统将拒绝并报错。";
+  }
+  if (remaining <= agentToolCallSoftWarningThreshold(limit)) {
+    return `[warning] 提醒：本轮工具调用配额即将用尽，当前剩余 ${remaining} 次。请尽快收敛并准备最终答案，避免继续大规模检索。`;
+  }
+  return null;
+}
+
+/** 估算把 toolCallQuotaNotice 并入工具结果后，额外占用的字符数（用于 compact 体积预估）。 */
+export function agentToolCallQuotaNoticeBudgetChars(remaining: number, limit: number): number {
+  const notice = buildAgentToolCallQuotaNotice(remaining, limit);
+  if (!notice) return 0;
+  return Math.max(0, serializedToolResultChars({ toolCallQuotaNotice: notice }) - 2);
+}
+
+export function withAgentToolCallQuotaNotice(
+  result: Record<string, unknown>,
+  remaining: number,
+  limit: number
+): Record<string, unknown> {
+  const notice = buildAgentToolCallQuotaNotice(remaining, limit);
+  if (!notice) return result;
+  return { ...result, toolCallQuotaNotice: notice };
+}
+
+export function shouldRejectAgentToolCalls(executedCount: number, requestedCount: number, limit: number): boolean {
+  if (!Number.isFinite(executedCount) || !Number.isFinite(requestedCount) || !Number.isFinite(limit)) return true;
+  if (requestedCount <= 0) return false;
+  if (executedCount + requestedCount > limit) return true;
+  // 最后一档配额保留给硬拒绝：在倒数第一次配额注入 critical 后，再请求工具即失败。
+  if (executedCount >= limit - 1) return true;
+  return false;
+}
 
 type StructuralFragment = {
   value: unknown;

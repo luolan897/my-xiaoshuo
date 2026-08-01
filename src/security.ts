@@ -29,6 +29,34 @@ export type RuntimeSecurityOptions = {
 type RateEntry = { count: number; resetAt: number };
 const maximumRateEntries = 10_000;
 
+/**
+ * Express 默认路由大小写不敏感，但 request.path 保留原始大小写。
+ * 安全中间件统一用小写路径做匹配，避免 /API/... 一类变体绕过鉴权与限速。
+ */
+export function normalizeApiPath(pathname: string): string {
+  return pathname.toLocaleLowerCase("en-US");
+}
+
+/** 强制保持大小写不敏感路由，并拒绝后续改成大小写敏感。 */
+export function enforceCaseInsensitiveRouting(app: { set: (setting: string, value?: unknown) => unknown }): void {
+  app.set("case sensitive routing", false);
+  const originalSet = app.set.bind(app) as {
+    (setting: string): unknown;
+    (setting: string, value: unknown): unknown;
+  };
+  app.set = function lockedCaseInsensitiveRouting(setting: string, value?: unknown) {
+    // Express 用单参数 app.set(name) 读取配置；不能把它改写成写入。
+    if (arguments.length < 2) return originalSet(setting);
+    if (String(setting).toLocaleLowerCase("en-US") === "case sensitive routing") {
+      if (value) {
+        throw new Error("Case-sensitive routing is disabled; API security matches paths case-insensitively");
+      }
+      return originalSet(setting, false);
+    }
+    return originalSet(setting, value);
+  } as typeof app.set;
+}
+
 const digest = (value: string): Buffer => createHash("sha256").update(value).digest();
 const constantTimeEqual = (left: string, right: string): boolean => timingSafeEqual(digest(left), digest(right));
 
@@ -37,7 +65,22 @@ export function verifySetupToken(expected: string | undefined, provided: string 
 }
 
 function requestKey(request: Request): string {
-  return request.ip || request.socket.remoteAddress || "unknown";
+  const peer = request.socket.remoteAddress || "unknown";
+  const trustProxy = request.app?.get?.("trust proxy");
+  const trustsForwarded = trustProxy === true
+    || (typeof trustProxy === "number" && trustProxy > 0)
+    || (Array.isArray(trustProxy) && trustProxy.length > 0)
+    || (typeof trustProxy === "string" && trustProxy !== "false" && trustProxy.length > 0);
+  // 未启用 trust proxy 时忽略 X-Forwarded-For，始终按直连对端计限速。
+  if (!trustsForwarded) return peer;
+  return request.ip || peer;
+}
+
+/** 禁止 trust proxy=true（信任整条转发链）；至少收敛为单跳。 */
+export function resolveTrustProxySetting(trustProxy: boolean | number | undefined): boolean | number | undefined {
+  if (trustProxy === undefined) return undefined;
+  if (trustProxy === true) return 1;
+  return trustProxy;
 }
 
 function consumeRate(entries: Map<string, RateEntry>, key: string, limit: number, windowMs: number, entryLimit = maximumRateEntries): { allowed: boolean; retryAfter: number } {
@@ -81,7 +124,7 @@ export function createBasicAuthMiddleware(options: BasicAuthOptions): RequestHan
   const failureWindowMs = options.failureWindowMs ?? 15 * 60_000;
   const failures = new Map<string, RateEntry>();
   return (request, response, next) => {
-    if (request.path === "/api/health") return next();
+    if (normalizeApiPath(request.path) === "/api/health") return next();
     const key = requestKey(request);
     const credentials = parseBasicCredentials(request.get("authorization"));
     const valid = credentials
@@ -114,7 +157,7 @@ export function createSecurityHeadersMiddleware(): RequestHandler {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("X-Frame-Options", "DENY");
     response.setHeader("X-Permitted-Cross-Domain-Policies", "none");
-    response.setHeader("Cache-Control", request.path.startsWith("/api/") ? "no-store" : "private, no-cache");
+    response.setHeader("Cache-Control", normalizeApiPath(request.path).startsWith("/api/") ? "no-store" : "private, no-cache");
     response.vary("Authorization");
     if (request.secure) response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     next();
@@ -152,7 +195,8 @@ export function createSameOriginMiddleware(): RequestHandler {
 export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
-    if (!request.path.startsWith("/api/") || request.path === "/api/health") return next();
+    const path = normalizeApiPath(request.path);
+    if (!path.startsWith("/api/") || path === "/api/health") return next();
     const rate = consumeRate(entries, requestKey(request), limit, windowMs, entryLimit);
     if (rate.allowed) return next();
     logger.warn("security.request.blocked", { control: "api_rate_limit", retryAfterSeconds: rate.retryAfter });
@@ -164,9 +208,10 @@ export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000, ent
 export function createAuthenticationRateLimitMiddleware(limit = 10, windowMs = 15 * 60_000): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
-    const authenticationWrite = request.method === "POST" && ["/api/auth/login", "/api/auth/register"].includes(request.path);
+    const path = normalizeApiPath(request.path);
+    const authenticationWrite = request.method === "POST" && ["/api/auth/login", "/api/auth/register"].includes(path);
     if (!authenticationWrite) return next();
-    const rate = consumeRate(entries, `${requestKey(request)}:${request.path}`, limit, windowMs);
+    const rate = consumeRate(entries, `${requestKey(request)}:${path}`, limit, windowMs);
     if (rate.allowed) return next();
     logger.warn("security.request.blocked", { control: "authentication_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
@@ -177,10 +222,11 @@ export function createAuthenticationRateLimitMiddleware(limit = 10, windowMs = 1
 export function createUploadRateLimitMiddleware(limit = 30, windowMs = 10 * 60_000, entryLimit = maximumRateEntries): RequestHandler {
   const entries = new Map<string, RateEntry>();
   return (request, response, next) => {
+    const path = normalizeApiPath(request.path);
     const uploadWrite = (request.method === "POST" || request.method === "PUT") && (
-      request.path === "/api/auth/avatar"
-      || request.path === "/api/works/import"
-      || /^\/api\/works\/[^/]+\/(?:import|cover|attachments)$/u.test(request.path)
+      path === "/api/auth/avatar"
+      || path === "/api/works/import"
+      || /^\/api\/works\/[^/]+\/(?:import|cover|attachments)$/u.test(path)
     );
     if (!uploadWrite) return next();
     const actorKey = request.authUser?.userId ?? requestKey(request);
@@ -189,6 +235,55 @@ export function createUploadRateLimitMiddleware(limit = 30, windowMs = 10 * 60_0
     logger.warn("security.request.blocked", { control: "upload_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
     response.status(429).json({ error: { code: "UPLOAD_RATE_LIMITED", message: "文件上传过于频繁，请稍后重试" } });
+  };
+}
+
+export function createCaptchaRateLimitMiddleware(limit = 20, windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    if (request.method !== "GET" || normalizeApiPath(request.path) !== "/api/auth/captcha") return next();
+    const rate = consumeRate(entries, requestKey(request), limit, windowMs, entryLimit);
+    if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "captcha_rate_limit", retryAfterSeconds: rate.retryAfter });
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "CAPTCHA_RATE_LIMITED", message: "验证码请求过于频繁，请稍后重试" } });
+  };
+}
+
+type ExpensiveApiKind = "ai" | "export" | "search";
+
+function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null {
+  if (method === "GET" && /^\/api\/works\/[^/]+\/export$/u.test(path)) return "export";
+  if (method === "GET" && /^\/api\/works\/[^/]+\/search$/u.test(path)) return "search";
+  if (method !== "POST") return null;
+  if (
+    /^\/api\/works\/[^/]+\/(?:suggestions|chat\/stream|tasks)(?:\/|$)/u.test(path)
+    || /^\/api\/suggestions\/[^/]+\/guard$/u.test(path)
+    || /^\/api\/ai-conversations\/[^/]+\/(?:compact|context\/prepare)$/u.test(path)
+    || /^\/api\/tasks\/[^/]+\/(?:retry|cancel|relationship-changes\/apply)$/u.test(path)
+  ) {
+    return "ai";
+  }
+  return null;
+}
+
+const expensiveApiLimits: Record<ExpensiveApiKind, number> = {
+  ai: 30,
+  export: 10,
+  search: 60
+};
+
+export function createExpensiveApiRateLimitMiddleware(windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    const kind = expensiveApiKind(request.method, normalizeApiPath(request.path));
+    if (!kind) return next();
+    const actorKey = request.authUser?.userId ?? requestKey(request);
+    const rate = consumeRate(entries, `${kind}:${actorKey}`, expensiveApiLimits[kind], windowMs, entryLimit);
+    if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "expensive_api_rate_limit", kind, retryAfterSeconds: rate.retryAfter });
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "EXPENSIVE_API_RATE_LIMITED", message: "该操作请求过于频繁，请稍后重试" } });
   };
 }
 

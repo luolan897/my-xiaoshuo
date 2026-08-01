@@ -1377,6 +1377,171 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(JSON.stringify(response.body.data)).not.toContain("setting_secret");
   });
 
+  it("AI 建议与对话按成员正文权限脱敏", async () => {
+    const owner = await register(runtime, "ai_redact_owner");
+    const collaborator = await register(runtime, "ai_redact_reader");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 脱敏作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "none",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "write",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+
+    const provider = await owner.agent.post("/api/platform/ai/providers")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "脱敏供应商", baseUrl: "https://example.com", apiKey: "redact-key", status: "enabled" })
+      .expect(201);
+    const model = await owner.agent.post(`/api/providers/${provider.body.data.id}/models`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ displayName: "脱敏模型", modelId: "redact-model" })
+      .expect(201);
+    const callId = "call_redact_suggestion";
+    const suggestionId = "suggestion_redact_source";
+    const guardId = "guard_redact_evidence";
+    const conversationId = "conversation_redact_messages";
+    const now = new Date().toISOString();
+    runtime.database.run(
+      `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
+       status, input_chars, created_at) VALUES (?, ?, 'rewrite', ?, ?, '{}', '{}', 'completed', 1, ?)`,
+      callId,
+      workId,
+      provider.body.data.id,
+      model.body.data.id,
+      now
+    );
+    runtime.database.run(
+      `INSERT INTO ai_suggestions (id, call_id, work_id, chapter_id, chapter_version, task_type, instruction,
+       source_text, content, action, status, created_at) VALUES (?, ?, ?, NULL, NULL, 'rewrite', ?, ?, '建议正文', 'replace', 'pending', ?)`,
+      suggestionId,
+      callId,
+      workId,
+      "TOP_SECRET_SUGGESTION_INSTRUCTION",
+      "TOP_SECRET_SOURCE_TEXT",
+      now
+    );
+    runtime.database.run(
+      `INSERT INTO continuation_guard_runs (id, suggestion_id, call_id, chapter_version, content_hash, status,
+       issues_json, context_refs_json, failure, created_at) VALUES (?, ?, ?, 1, 'guard-hash', 'warning', ?, ?, ?, ?)`,
+      guardId,
+      suggestionId,
+      callId,
+      JSON.stringify([{ description: "TOP_SECRET_GUARD_ISSUE", candidateQuote: "TOP_SECRET_CANDIDATE_QUOTE" }]),
+      JSON.stringify({ chapter: "TOP_SECRET_GUARD_CONTEXT" }),
+      "TOP_SECRET_GUARD_FAILURE",
+      now
+    );
+    runtime.database.run(
+      `INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, created_at, updated_at)
+       VALUES (?, ?, 'TOP_SECRET_CHAT_TITLE', '', 0, ?, ?)`,
+      conversationId,
+      workId,
+      now,
+      now
+    );
+    runtime.database.run(
+      `INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at)
+       VALUES (?, ?, 'assistant', ?, ?, ?, ?)`,
+      "message_redact_1",
+      conversationId,
+      "包含 TOP_SECRET_CHAT_PROSE 的回复",
+      JSON.stringify([{ chapterId: "chapter_secret", text: "TOP_SECRET_CITATION_TEXT" }]),
+      JSON.stringify({
+        toolCalls: [{ result: { excerpt: "TOP_SECRET_TOOL_RESULT" } }],
+        processSteps: [{ content: "TOP_SECRET_PROCESS_STEP" }]
+      }),
+      now
+    );
+
+    const suggestion = await collaborator.agent.get(`/api/suggestions/${suggestionId}`).expect(200);
+    expect(suggestion.body.data.sourceText).toBe("");
+    expect(suggestion.body.data.instruction).toBe("（正文读取权限受限）");
+    expect(suggestion.body.data.guard).toMatchObject({ issues: [], contextRefs: {}, failure: null, restricted: true });
+    expect(suggestion.body.data.restricted).toBe(true);
+    expect(JSON.stringify(suggestion.body.data)).not.toContain("TOP_SECRET_");
+
+    const suggestions = await collaborator.agent.get(`/api/works/${workId}/suggestions`).expect(200);
+    expect(JSON.stringify(suggestions.body.data)).not.toContain("TOP_SECRET_");
+
+    const guards = await collaborator.agent.get(`/api/suggestions/${suggestionId}/guards`).expect(200);
+    expect(guards.body.data[0]).toMatchObject({ issues: [], contextRefs: {}, failure: null, restricted: true });
+    expect(JSON.stringify(guards.body.data)).not.toContain("TOP_SECRET_");
+
+    const conversation = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(conversation.body.data.title).toBe("（正文读取权限受限）");
+    expect(conversation.body.data.messages[0].content).toBe("（正文读取权限受限）");
+    expect(conversation.body.data.messages[0].citations).toEqual([]);
+    expect(conversation.body.data.messages[0].metadata).toEqual({ restricted: true });
+    expect(JSON.stringify(conversation.body.data)).not.toContain("TOP_SECRET_");
+
+    const conversations = await collaborator.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
+    expect(conversations.body.data.items[0].title).toBe("（正文读取权限受限）");
+    expect(conversations.body.data.items[0].preview).toBe("（正文读取权限受限）");
+    expect(JSON.stringify(conversations.body.data)).not.toContain("TOP_SECRET_");
+
+    const postedMessage = await collaborator.agent.post(`/api/ai-conversations/${conversationId}/messages`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({
+        role: "user",
+        content: "TOP_SECRET_POSTED_MESSAGE",
+        citations: [{ chapterId: "chapter_secret", chapterTitle: "第一章", startLine: 1, endLine: 1, text: "TOP_SECRET_POSTED_CITATION" }],
+        metadata: { modelDisplayName: "TOP_SECRET_POSTED_METADATA" }
+      })
+      .expect(201);
+    expect(postedMessage.body.data).toMatchObject({
+      content: "（正文读取权限受限）",
+      citations: [],
+      metadata: { restricted: true },
+      restricted: true
+    });
+    expect(JSON.stringify(postedMessage.body.data)).not.toContain("TOP_SECRET_");
+
+    for (const attempt of [
+      collaborator.agent.post(`/api/suggestions/${suggestionId}/guard`).set("X-CSRF-Token", collaborator.csrfToken).send({ content: "候选内容" }),
+      collaborator.agent.post(`/api/ai-conversations/${conversationId}/context/prepare`).set("X-CSRF-Token", collaborator.csrfToken).send({ scope: { type: "none" }, instruction: "继续" }),
+      collaborator.agent.post(`/api/ai-conversations/${conversationId}/compact`).set("X-CSRF-Token", collaborator.csrfToken).send({ scope: { type: "none" } }),
+      collaborator.agent.post(`/api/ai-conversations/${conversationId}/fork`).set("X-CSRF-Token", collaborator.csrfToken).send({ messageId: "message_redact_1" }),
+      collaborator.agent.post(`/api/works/${workId}/chat/stream`).set("X-CSRF-Token", collaborator.csrfToken).send({
+        instruction: "复述先前历史",
+        scope: { type: "none" },
+        conversationId
+      })
+    ]) {
+      const denied = await attempt.expect(403);
+      expect(denied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    }
+
+    const rejected = await collaborator.agent.post(`/api/suggestions/${suggestionId}/reject`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(200);
+    expect(rejected.body.data).toMatchObject({
+      instruction: "（正文读取权限受限）",
+      sourceText: "",
+      restricted: true
+    });
+    expect(JSON.stringify(rejected.body.data)).not.toContain("TOP_SECRET_");
+  });
+
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {
     const owner = await register(runtime, "member_owner");
     const collaborator = await register(runtime, "member_transaction_target");
@@ -1443,7 +1608,42 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(promoted.body.data.role).toBe("admin");
     const disabled = await admin.agent.patch(`/api/users/${writer.user.userId}`).set("X-CSRF-Token", admin.csrfToken).send({ status: "disabled" }).expect(200);
     expect(disabled.body.data.status).toBe("disabled");
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM user_sessions WHERE user_id = ? AND revoked_at IS NULL",
+      writer.user.userId
+    )).toEqual({ count: 0 });
     await writer.agent.get("/api/works").expect(401);
+  });
+
+  it("大小写变体 API 路径不能绕过鉴权、作品授权或管理员校验", async () => {
+    const admin = await register(runtime, "case_admin");
+    const writer = await register(runtime, "case_writer");
+    const outsider = await register(runtime, "case_outsider");
+    const work = await admin.agent.post("/api/works").set("X-CSRF-Token", admin.csrfToken).send({ title: "大小写作品" }).expect(201);
+    const workId = work.body.data.id as string;
+    await admin.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", admin.csrfToken).send({
+      userId: writer.user.userId,
+      role: "editor"
+    }).expect(201);
+
+    await request(runtime.app).get(`/API/WORKS/${workId}`).expect(401);
+    await request(runtime.app).get(`/api/WORKS/${workId}`).expect(401);
+    await outsider.agent.get(`/API/WORKS/${workId}`).expect(403);
+    await outsider.agent.get(`/api/WORKS/${workId}`).expect(403);
+    await writer.agent.get(`/API/WORKS/${workId}`).expect(200);
+    await writer.agent.get(`/api/WORKS/${workId}`).expect(200);
+
+    const escalateUpper = await writer.agent.patch(`/API/USERS/${writer.user.userId}`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({ role: "admin" })
+      .expect(403);
+    expect(escalateUpper.body.error.code).toBe("ADMIN_REQUIRED");
+    const escalateMixed = await writer.agent.patch(`/api/USERS/${writer.user.userId}`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({ role: "admin" })
+      .expect(403);
+    expect(escalateMixed.body.error.code).toBe("ADMIN_REQUIRED");
+    expect(runtime.database.get("SELECT role FROM users WHERE id = ?", writer.user.userId)?.role).toBe("user");
   });
 
   it("管理员可统一设置界面与分模块分页，普通用户只能读取", async () => {

@@ -1116,6 +1116,8 @@ export class Store {
       autoRunConsecutiveFailures: Math.max(0, Number(row?.auto_run_consecutive_failures ?? 0) || 0),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
+      agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
+      agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
         .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
         .filter((tool, index, tools) => tools.indexOf(tool) === index),
@@ -1135,6 +1137,8 @@ export class Store {
     autoRunFailureThreshold?: number;
     bookSummaryContextPercent?: number;
     contextCompactThreshold?: number;
+    agentToolCallLimit?: number;
+    agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
     titleGenerationModelId?: string | null;
   }): Record<string, unknown> {
@@ -1149,6 +1153,8 @@ export class Store {
     const nextFailureThreshold = input.autoRunFailureThreshold ?? Number(current.autoRunFailureThreshold);
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
+    const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
+    const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
     const nextAgentTools = input.agentTools ?? current.agentTools as string[];
     const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
       ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
@@ -1158,8 +1164,9 @@ export class Store {
          work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
-         context_compact_threshold, agent_tools_json, title_generation_model_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
+         agent_tools_json, title_generation_model_id, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          auto_run_enabled = excluded.auto_run_enabled,
@@ -1173,6 +1180,8 @@ export class Store {
          auto_run_consecutive_failures = excluded.auto_run_consecutive_failures,
          book_summary_context_percent = excluded.book_summary_context_percent,
          context_compact_threshold = excluded.context_compact_threshold,
+         agent_tool_call_limit = excluded.agent_tool_call_limit,
+         agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
          updated_at = excluded.updated_at`,
@@ -1189,6 +1198,8 @@ export class Store {
       Math.max(0, Number(current.autoRunConsecutiveFailures) || 0),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
+      Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
       timestamp
@@ -1202,6 +1213,8 @@ export class Store {
       autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
+      agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
       titleGenerationModelId: nextTitleGenerationModelId
     });
@@ -1788,22 +1801,24 @@ export class Store {
   }
 
   createChapter(workId: string, input: { volumeId: string; title: string; content?: string; chapterType?: ChapterType }): Record<string, unknown> {
-    this.getWork(workId);
-    const volume = this.getVolume(input.volumeId);
-    if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
-    const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId);
-    const chapterId = this.insertChapter(
-      workId,
-      input.volumeId,
-      input.title,
-      input.content ?? "",
-      numberValue(last ?? {}, "value") + 1,
-      "manual",
-      null,
-      input.chapterType ?? "正文"
-    );
-    this.audit(workId, "chapter.created", "chapter", chapterId);
-    return this.getChapter(chapterId);
+    return this.db.transaction(() => {
+      this.getWork(workId);
+      const volume = this.getVolume(input.volumeId);
+      if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
+      const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", input.volumeId);
+      const chapterId = this.insertChapter(
+        workId,
+        input.volumeId,
+        input.title,
+        input.content ?? "",
+        numberValue(last ?? {}, "value") + 1,
+        "manual",
+        null,
+        input.chapterType ?? "正文"
+      );
+      this.audit(workId, "chapter.created", "chapter", chapterId);
+      return this.getChapter(chapterId);
+    });
   }
 
   getChapter(chapterId: string): Record<string, unknown> {

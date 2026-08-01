@@ -113,6 +113,8 @@ describe("分析任务自动运行", () => {
       autoRunConsecutiveFailures: 0,
       bookSummaryContextPercent: 50,
       contextCompactThreshold: 85,
+      agentToolCallLimit: 12,
+      agentToolCallGlobalMultiplier: 3,
       agentTools: ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"]
     });
 
@@ -134,12 +136,40 @@ describe("分析任务自动运行", () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       contextCompactThreshold: 91
     }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 49
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 4
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 0
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallGlobalMultiplier: 0
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallGlobalMultiplier: 7
+    }).expect(400);
     const updated = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       bookSummaryContextPercent: 35,
-      contextCompactThreshold: 90
+      contextCompactThreshold: 90,
+      agentToolCallLimit: 48,
+      agentToolCallGlobalMultiplier: 4
     }).expect(200);
     expect(updated.body.data.bookSummaryContextPercent).toBe(35);
     expect(updated.body.data.contextCompactThreshold).toBe(90);
+    expect(updated.body.data.agentToolCallLimit).toBe(48);
+    expect(updated.body.data.agentToolCallGlobalMultiplier).toBe(4);
+
+    const minimumMultiplier = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallGlobalMultiplier: 1
+    }).expect(200);
+    expect(minimumMultiplier.body.data.agentToolCallGlobalMultiplier).toBe(1);
+    const maximumMultiplier = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallGlobalMultiplier: 6
+    }).expect(200);
+    expect(maximumMultiplier.body.data.agentToolCallGlobalMultiplier).toBe(6);
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
     expect(tasks.body.data.items.length).toBeGreaterThanOrEqual(5);
