@@ -102,6 +102,7 @@ describe("分析任务自动运行", () => {
 
     const defaults = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
     expect(defaults.body.data).toMatchObject({
+      dailyTokenQuota: null,
       autoRunEnabled: false,
       autoRunConcurrency: 2,
       autoRunBatchLimit: 20,
@@ -120,6 +121,9 @@ describe("分析任务自动运行", () => {
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       autoRunConcurrency: 0
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      dailyTokenQuota: 9_999
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       autoRunBatchLimit: 201
@@ -152,15 +156,22 @@ describe("分析任务自动运行", () => {
       agentToolCallGlobalMultiplier: 7
     }).expect(400);
     const updated = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      dailyTokenQuota: 10_000,
       bookSummaryContextPercent: 35,
       contextCompactThreshold: 90,
       agentToolCallLimit: 48,
       agentToolCallGlobalMultiplier: 4
     }).expect(200);
+    expect(updated.body.data.dailyTokenQuota).toBe(10_000);
     expect(updated.body.data.bookSummaryContextPercent).toBe(35);
     expect(updated.body.data.contextCompactThreshold).toBe(90);
     expect(updated.body.data.agentToolCallLimit).toBe(48);
     expect(updated.body.data.agentToolCallGlobalMultiplier).toBe(4);
+
+    const unlimited = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      dailyTokenQuota: null
+    }).expect(200);
+    expect(unlimited.body.data.dailyTokenQuota).toBeNull();
 
     const minimumMultiplier = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       agentToolCallGlobalMultiplier: 1

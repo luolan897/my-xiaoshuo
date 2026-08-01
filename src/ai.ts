@@ -44,6 +44,7 @@ import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
 import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+import { buildWritingCalendar, resolveServerTimeZone } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
   RelationshipApproximateMatchLimitError,
@@ -1517,7 +1518,35 @@ export class AiManager {
 
   getWorkTokenUsage(workId: string, timezoneOffset: number): Record<string, unknown> {
     this.store.getWork(workId);
-    return this.getTokenUsage(workId, timezoneOffset, false);
+    return {
+      ...this.getTokenUsage(workId, timezoneOffset, false),
+      quota: this.getWorkDailyTokenQuotaStatus(workId)
+    };
+  }
+
+  getWorkDailyTokenQuotaStatus(workId: string, referenceDate = new Date()): Record<string, unknown> {
+    const settings = this.store.getWorkAiSettings(workId);
+    const dailyTokenQuota = settings.dailyTokenQuota === null
+      ? null
+      : Number(settings.dailyTokenQuota);
+    const calendar = buildWritingCalendar(referenceDate, 1, resolveServerTimeZone());
+    const usage = this.store.db.get(
+      `SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS used_tokens
+       FROM ai_calls WHERE work_id = ? AND created_at >= ? AND created_at < ?`,
+      workId,
+      calendar.startInclusive,
+      calendar.endExclusive
+    );
+    const usedTokens = numberValue(usage ?? {}, "used_tokens");
+    return {
+      dailyTokenQuota,
+      usedTokens,
+      remainingTokens: dailyTokenQuota === null ? null : Math.max(0, dailyTokenQuota - usedTokens),
+      reached: dailyTokenQuota !== null && usedTokens >= dailyTokenQuota,
+      dayStartedAt: calendar.startInclusive,
+      resetsAt: calendar.endExclusive,
+      timezone: calendar.timeZone
+    };
   }
 
   async searchWork(
@@ -1879,6 +1908,15 @@ export class AiManager {
       logger.debug("ai.auto_run.drain_started", { workId });
       const settings = this.store.getWorkAiSettings(workId);
       if (!settings.autoRunEnabled || settings.autoRunPaused) return;
+      const tokenQuota = this.getWorkDailyTokenQuotaStatus(workId);
+      if (tokenQuota.reached) {
+        const dailyTokenQuota = Number(tokenQuota.dailyTokenQuota);
+        const resumeAt = String(tokenQuota.resetsAt);
+        this.store.pauseAutoRun(workId, `已达到每日 Token 额度 ${dailyTokenQuota}`, resumeAt);
+        this.scheduleAutoRun(workId);
+        logger.info("ai.auto_run.token_quota_reached", { workId, dailyTokenQuota, resumeAt });
+        return;
+      }
       const dailyTaskLimit = Number(settings.autoRunDailyTaskLimit);
       if (dailyTaskLimit > 0 && this.store.countAutoRunAttemptsToday(workId) >= dailyTaskLimit) {
         const resumeAt = new Date();
@@ -3783,6 +3821,44 @@ export class AiManager {
     };
   }
 
+  private constrainParametersForDailyTokenQuota(
+    workId: string,
+    messages: CompletionMessage[],
+    parameters: Record<string, unknown>,
+    tools: Record<string, unknown>[] = [],
+    additionalUsedTokens = 0
+  ): Record<string, unknown> {
+    const status = this.getWorkDailyTokenQuotaStatus(workId);
+    if (status.dailyTokenQuota === null) return parameters;
+    const dailyTokenQuota = Number(status.dailyTokenQuota);
+    const usedTokens = Number(status.usedTokens) + Math.max(0, additionalUsedTokens);
+    const remainingTokens = Math.max(0, dailyTokenQuota - usedTokens);
+    const estimatedInputTokens = estimateAiTokens(JSON.stringify(messages))
+      + (tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0);
+    if (remainingTokens <= estimatedInputTokens) {
+      throw new AppError(
+        429,
+        "DAILY_TOKEN_QUOTA_EXCEEDED",
+        `本书今日剩余 Token 额度不足以发起本次请求（已用 ${usedTokens.toLocaleString("zh-CN")} / ${dailyTokenQuota.toLocaleString("zh-CN")}）`,
+        {
+          dailyTokenQuota,
+          usedTokens,
+          remainingTokens,
+          estimatedInputTokens,
+          resetsAt: status.resetsAt,
+          timezone: status.timezone
+        }
+      );
+    }
+    return {
+      ...parameters,
+      max_tokens: Math.min(
+        Number(parameters.max_tokens) || DEFAULT_MAX_TOKENS,
+        remainingTokens - estimatedInputTokens
+      )
+    };
+  }
+
   private generateTaggedJson(input: GenerateInput): Promise<GenerateResult> {
     const userRequirement = "将最终 JSON 放在唯一一对 <json> 和 </json> 标签中；标签外不要输出任何内容，也不要使用 Markdown 代码块。";
     const systemRequirement = "结构化响应要求：最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。";
@@ -3826,6 +3902,7 @@ export class AiManager {
         modelId: stringValue(model, "id")
       });
     }
+    parameters = this.constrainParametersForDailyTokenQuota(input.workId, messages, parameters, tools);
     const completionMessages: CompletionMessage[] = [...messages];
     const callId = id("call");
     const timestamp = now();
@@ -3927,7 +4004,13 @@ export class AiManager {
         const requestParameters = options.parameters ?? parameters;
         const purpose = options.purpose ?? "generation";
         const requestTools = toolChoice === "auto" ? tools : [];
-        const roundParameters = this.constrainParametersForContext(model, requestMessages, requestParameters, requestTools);
+        const roundParameters = this.constrainParametersForDailyTokenQuota(
+          input.workId,
+          requestMessages,
+          this.constrainParametersForContext(model, requestMessages, requestParameters, requestTools),
+          requestTools,
+          trackedInputTokens + trackedOutputTokens
+        );
         const traceRound: AiCallTraceRound = {
           round: traceRounds.length + 1,
           requestedAt: now(),
@@ -4360,7 +4443,7 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         error: aiErrorForLog(error)
       });
-      if (error instanceof AppError && error.code === "CONTEXT_WINDOW_EXCEEDED") {
+      if (error instanceof AppError && (error.code === "CONTEXT_WINDOW_EXCEEDED" || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED")) {
         throw new AppError(error.status, error.code, error.message, {
           callId,
           ...(error.details && typeof error.details === "object" ? error.details : {}),
@@ -4386,6 +4469,7 @@ export class AiManager {
       if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
       throw initialContextWindowError(error, provider, model);
     }
+    parameters = this.constrainParametersForDailyTokenQuota(input.workId, messages, parameters);
     const callId = id("call");
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
