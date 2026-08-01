@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
-import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-lock-v2";
+import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-setting-mention-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
@@ -1285,7 +1285,7 @@ function aiReferenceKey(reference) {
 }
 
 function aiReferenceKindLabel(reference) {
-  return ({ character: "角色", setting: "设定", chapter: "章节" })[reference.kind] ?? "引用";
+  return ({ character: "角色", setting: "设定", chapter: "章节", "context-settings": "能力" })[reference.kind] ?? "引用";
 }
 
 function createAiReferenceChip(reference) {
@@ -1872,15 +1872,12 @@ function syncAiTaskOptions() {
   $("#ai-scope").setAttribute("aria-hidden", String(roleplaySelected));
   $("#ai-roleplay-character").classList.toggle("hidden", !roleplaySelected);
   $("#ai-roleplay-character").setAttribute("aria-hidden", String(!roleplaySelected));
-  $(".ai-include-setting-info").classList.toggle("hidden", roleplaySelected);
-  $(".ai-include-setting-info").setAttribute("aria-hidden", String(roleplaySelected));
   $("#ai-task").disabled = state.aiPromptSent;
   $("#ai-task").title = state.aiPromptSent ? "对话开始后不能切换任务类型" : "";
   $("#ai-scope").disabled = roleplaySelected || state.aiPromptSent;
   $("#ai-scope").title = state.aiPromptSent
     ? "对话开始后不能切换上下文引用"
     : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
-  syncAiIncludeSettingInfoControl();
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -1899,7 +1896,6 @@ function applyAiConversationContextScope(scope) {
     : normalizedScope.type === "chapter" && normalizedScope.includeBookSummary ? "chapter-summary"
     : normalizedScope.type === "chapter" ? "chapter"
     : "none";
-  $("#ai-include-setting-info").checked = normalizedScope.includeSettingInfo !== false;
   syncAiTaskOptions();
 }
 
@@ -2046,10 +2042,11 @@ function updateAiMentionMenu() {
     ...chapter,
     volumeTitle: volume.title
   }))) ?? [];
-  const options = listAiMentionOptions(state.characters, state.settings, chapters, match.query);
+  const options = listAiMentionOptions(state.characters, state.settings, chapters, match.query)
+    .filter((item) => item.kind !== "context-settings" || $("#ai-task").value !== "roleplay");
   menu.innerHTML = options.length
     ? options.map((item) => `<button class="ai-mention-option" type="button" role="option" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
-    : '<p class="ai-mention-empty">没有匹配的角色、设定或章节</p>';
+    : '<p class="ai-mention-empty">没有匹配的角色、设定、章节或上下文能力</p>';
   menu.classList.remove("hidden");
 }
 
@@ -7472,22 +7469,6 @@ async function ensureAiModelsLoaded() {
   }
 }
 
-function syncAiIncludeSettingInfoControl() {
-  const scopeType = $("#ai-scope").value;
-  const checkbox = $("#ai-include-setting-info");
-  const proseScopes = new Set(["chapter", "chapter-summary", "volume", "book"]);
-  const enabled = proseScopes.has(scopeType);
-  const roleplaySelected = $("#ai-task").value === "roleplay";
-  checkbox.disabled = roleplaySelected || state.aiPromptSent || !enabled;
-  checkbox.title = state.aiPromptSent
-    ? "对话开始后不能切换上下文选项"
-    : enabled
-    ? "在正文上下文中注入锁定设定、组织/种族简表等"
-    : scopeType === "settings-catalog"
-      ? "设定库范围会直接注入设定目录，无需此选项"
-      : "仅在选择正文类上下文范围时可用";
-}
-
 function currentAiRequestScope() {
   if (!state.work) return null;
   const selectedTaskType = $("#ai-task").value;
@@ -7495,6 +7476,7 @@ function currentAiRequestScope() {
   const taskType = roleplaySelected ? "chat" : selectedTaskType;
   if (state.aiPromptSent) {
     const conversationScope = JSON.parse(JSON.stringify(state.aiContextScope ?? { type: "none" }));
+    conversationScope.includeSettingInfo = false;
     const scope = mergeAiReferenceScope(conversationScope, state.aiReferences);
     return { taskType, scope, conversationScope, selection: typeof conversationScope.selection === "string" ? conversationScope.selection : "" };
   }
@@ -7511,10 +7493,7 @@ function currentAiRequestScope() {
     : scopeType === "settings-catalog" ? { type: "settings-catalog" }
     : { type: "chapter", chapterId: state.chapter?.id };
   if (includeBookSummary) conversationScope.includeBookSummary = true;
-  const proseScopes = new Set(["chapter", "chapter-summary", "volume", "book"]);
-  if (proseScopes.has(scopeType) || taskType === "polish") {
-    conversationScope.includeSettingInfo = $("#ai-include-setting-info").checked;
-  }
+  conversationScope.includeSettingInfo = false;
   const scope = mergeAiReferenceScope(conversationScope, state.aiReferences);
   return { taskType, scope, conversationScope, selection };
 }
@@ -11618,11 +11597,8 @@ $("#ai-scope").addEventListener("change", (event) => {
     return toast("当前对话已经开始，请新建对话后再切换上下文引用", "error");
   }
   event.currentTarget.title = "";
-  syncAiIncludeSettingInfoControl();
   setAiContextMeter(null);
 });
-$("#ai-include-setting-info").addEventListener("change", () => setAiContextMeter(null));
-syncAiIncludeSettingInfoControl();
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);

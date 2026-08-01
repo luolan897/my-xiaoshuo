@@ -12,6 +12,7 @@ export function findAiMention(value, cursor = value.length) {
 export function listAiMentionOptions(characters, settings, chapters, query = "", limit = 12) {
   const keyword = String(query).trim().toLocaleLowerCase("zh-CN");
   const groups = [
+    [{ kind: "context-settings", kindLabel: "能力", id: "include-setting-info", name: "注入上下文设定" }],
     characters.map((item) => ({ kind: "character", kindLabel: "角色", id: String(item.id), name: String(item.name) })),
     settings.map((item) => ({ kind: "setting", kindLabel: "设定", id: String(item.id), name: String(item.title) })),
     chapters.map((item) => ({
@@ -47,10 +48,12 @@ export function buildAiReferenceScope(references) {
   const chapterIds = [...new Set(references.filter((item) => item.kind === "chapter").map((item) => item.id))];
   const characterIds = [...new Set(references.filter((item) => item.kind === "character").map((item) => item.id))];
   const settingIds = [...new Set(references.filter((item) => item.kind === "setting").map((item) => item.id))];
+  const includeSettingInfo = references.some((item) => item.kind === "context-settings" && item.id === "include-setting-info");
   return {
     ...(chapterIds.length ? { chapterIds } : {}),
     ...(characterIds.length ? { characterIds } : {}),
-    ...(settingIds.length ? { settingIds } : {})
+    ...(settingIds.length ? { settingIds } : {}),
+    ...(includeSettingInfo ? { includeSettingInfo: true } : {})
   };
 }
 
@@ -61,5 +64,6 @@ export function mergeAiReferenceScope(scope, references) {
     const values = [...new Set([...(Array.isArray(scope?.[key]) ? scope[key] : []), ...(referenceScope[key] ?? [])])];
     if (values.length) merged[key] = values;
   }
+  if (referenceScope.includeSettingInfo === true) merged.includeSettingInfo = true;
   return merged;
 }

@@ -1383,10 +1383,10 @@ export class ContextBuilder {
     const includeAutomaticContext = scope.type !== "none" && scope.suppressAutomaticContext !== true;
     const settingsOnly = scope.type === "settings";
     const isProseScope = PROSE_CONTEXT_SCOPE_TYPES.has(scope.type);
-    const includeSettingInfo = includeAutomaticContext
-      && isProseScope
-      && !settingsOnly
-      && scope.includeSettingInfo !== false;
+    const includeSettingInfo = !settingsOnly && scope.suppressAutomaticContext !== true && (
+      scope.includeSettingInfo === true
+      || (includeAutomaticContext && isProseScope && scope.includeSettingInfo !== false)
+    );
     const constraints: string[] = includeAutomaticContext
       ? [wrapAiContextRegion("work", `作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`)]
       : [];
@@ -3983,9 +3983,10 @@ export class AiManager {
     const injected = conversationId
       ? this.store.getAiConversationInjectedEntities(conversationId, workId)
       : { characters: [], races: [], organizations: [] } satisfies AiInjectedEntities;
-    const proseSettingInfoOn = PROSE_CONTEXT_SCOPE_TYPES.has(scope.type)
-      && scope.suppressAutomaticContext !== true
-      && scope.includeSettingInfo !== false;
+    const proseSettingInfoOn = scope.suppressAutomaticContext !== true && (scope.includeSettingInfo === true || (
+      PROSE_CONTEXT_SCOPE_TYPES.has(scope.type)
+      && scope.includeSettingInfo !== false
+    ));
     const matches = matchKeywordEntities(this.store, workId, instruction, {
       excludeCharacterIds: [
         ...(scope.characterIds ?? []),

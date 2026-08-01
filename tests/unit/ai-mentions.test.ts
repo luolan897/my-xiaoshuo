@@ -7,9 +7,12 @@ describe("AI @ 引用", () => {
   const settings = [{ id: "setting-1", title: "跃迁限制" }];
   const chapters = [{ id: "chapter-1", title: "第一章 泰坦密谈", volumeTitle: "前传" }];
 
-  it("在空查询中同时展示角色、设定和章节", () => {
+  it("在空查询中优先展示上下文能力并同时展示角色、设定和章节", () => {
     const options = listAiMentionOptions(characters, settings, chapters);
-    expect(options.map((item: { kind: string }) => item.kind)).toEqual(["character", "setting", "chapter"]);
+    expect(options.map((item: { kind: string }) => item.kind)).toEqual(["context-settings", "character", "setting", "chapter"]);
+    expect(listAiMentionOptions(characters, settings, chapters, "注入")).toEqual([
+      { kind: "context-settings", kindLabel: "能力", id: "include-setting-info", name: "注入上下文设定" }
+    ]);
   });
 
   it("按标题搜索章节并生成去重后的章节引用范围", () => {
@@ -34,5 +37,11 @@ describe("AI @ 引用", () => {
       chapterIds: ["chapter-old", "chapter-new"],
       settingIds: ["setting-1"]
     });
+  });
+
+  it("通过上下文能力显式开启本轮设定注入", () => {
+    expect(mergeAiReferenceScope({ type: "none", includeSettingInfo: false }, [
+      { kind: "context-settings", id: "include-setting-info" }
+    ])).toEqual({ type: "none", includeSettingInfo: true });
   });
 });
