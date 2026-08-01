@@ -28,6 +28,6 @@ describe("写作进度时区", () => {
   it("额度日历优先使用后端 TZ，并在未配置时使用系统时区", () => {
     expect(resolveServerTimeZone({ TZ: "America/New_York" }, "Europe/Berlin")).toBe("America/New_York");
     expect(resolveServerTimeZone({}, "Europe/Berlin")).toBe("Europe/Berlin");
-    expect(resolveServerTimeZone({ TZ: "Invalid/Zone" }, "Invalid/System")).toBe("UTC");
+    expect(resolveServerTimeZone({ TZ: "Invalid/Zone" }, "Invalid/System")).toBe("Asia/Shanghai");
   });
 });

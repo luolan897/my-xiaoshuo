@@ -46,16 +46,16 @@ export function resolveServerTimeZone(
   environment: Environment = process.env,
   systemTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 ): string {
-  for (const candidate of [environment.TZ?.trim(), systemTimeZone?.trim(), "UTC"]) {
+  for (const candidate of [environment.TZ?.trim(), systemTimeZone?.trim(), DEFAULT_WRITING_TIME_ZONE]) {
     if (!candidate) continue;
     try {
       new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format();
       return candidate;
     } catch {
-      // 继续尝试服务器运行时解析出的时区或 UTC
+      // 继续尝试服务器运行时解析出的时区或项目默认时区
     }
   }
-  return "UTC";
+  return DEFAULT_WRITING_TIME_ZONE;
 }
 
 export function writingDateKey(date: Date, timeZone: string): string {
