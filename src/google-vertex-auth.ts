@@ -6,6 +6,7 @@ export const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/clou
 
 const TOKEN_EXPIRY_SKEW_MS = 60_000;
 const JWT_LIFETIME_SECONDS = 3_600;
+const GOOGLE_VERTEX_REGIONAL_HOST_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?-aiplatform\.googleapis\.com$/u;
 
 export type GoogleServiceAccount = {
   type: "service_account";
@@ -18,6 +19,30 @@ type CachedToken = {
   accessToken: string;
   expiresAtMs: number;
 };
+
+export function isOfficialGoogleVertexBaseUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === "https:"
+      && !url.username
+      && !url.password
+      && (url.port === "" || url.port === "443")
+      && (hostname === "aiplatform.googleapis.com" || GOOGLE_VERTEX_REGIONAL_HOST_PATTERN.test(hostname));
+  } catch {
+    return false;
+  }
+}
+
+export function assertOfficialGoogleVertexBaseUrl(raw: string): void {
+  if (!isOfficialGoogleVertexBaseUrl(raw)) {
+    throw new AppError(
+      400,
+      "INVALID_VERTEX_BASE_URL",
+      "Google Vertex 接口地址必须使用 aiplatform.googleapis.com 或官方区域 *-aiplatform.googleapis.com 域名"
+    );
+  }
+}
 
 function base64UrlEncode(value: string | Buffer): string {
   const buffer = typeof value === "string" ? Buffer.from(value, "utf8") : value;

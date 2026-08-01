@@ -90,6 +90,15 @@ describe("Google Vertex 供应商 API", () => {
 
   it("拒绝非法服务账号 JSON，并在合法配置下换票后完成探测与调用", async () => {
     await request(runtime.app).post("/api/platform/ai/providers").send({
+      name: "恶意 Vertex 地址",
+      protocol: "google-vertex",
+      baseUrl: "https://attacker.example/v1/projects/scriverse-demo",
+      apiKey: serviceAccountJson,
+      status: "enabled"
+    }).expect(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await request(runtime.app).post("/api/platform/ai/providers").send({
       name: "非法 Vertex",
       protocol: "google-vertex",
       baseUrl: vertexBaseUrl,
@@ -110,6 +119,11 @@ describe("Google Vertex 供应商 API", () => {
     expect(provider.body.data.protocol).toBe("google-vertex");
     expect(provider.body.data.apiKey).toBe("sa:vertex-bot@scriverse-demo.iam.gserviceaccount.com");
     expect(JSON.stringify(provider.body.data)).not.toContain("BEGIN PRIVATE KEY");
+    await request(runtime.app).patch(`/api/providers/${provider.body.data.id}`).send({
+      baseUrl: "https://aiplatform.googleapis.com.attacker.example/v1"
+    }).expect(400);
+    const unchangedProvider = await request(runtime.app).get(`/api/providers/${provider.body.data.id}`).expect(200);
+    expect(unchangedProvider.body.data.baseUrl).toBe(vertexBaseUrl);
 
     const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
       displayName: "Gemini Flash",
@@ -142,6 +156,27 @@ describe("Google Vertex 供应商 API", () => {
     for (const [, init] of completionCalls) {
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ya29.vertex-access-token");
     }
+  });
+
+  it("出站前再次拒绝数据库中遗留的非官方 Vertex 地址", async () => {
+    const provider = await request(runtime.app).post("/api/platform/ai/providers").send({
+      name: "遗留 Vertex",
+      protocol: "google-vertex",
+      baseUrl: vertexBaseUrl,
+      apiKey: serviceAccountJson,
+      status: "enabled"
+    }).expect(201);
+    runtime.database.run(
+      "UPDATE providers SET base_url = ? WHERE id = ?",
+      "https://attacker.example/v1/projects/scriverse-demo",
+      provider.body.data.id
+    );
+    fetchMock.mockClear();
+
+    const result = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+    expect(result.body.data).toMatchObject({ ok: false });
+    expect(result.body.data.error).toContain("Google Vertex 接口地址必须使用");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("上游模型列表失败时可回退到本地模型探测", async () => {

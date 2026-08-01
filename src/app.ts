@@ -17,7 +17,7 @@ import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
-import { parseGoogleServiceAccount } from "./google-vertex-auth.js";
+import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
@@ -348,9 +348,16 @@ const providerBaseSchema = z.object({
 });
 
 function refineProviderApiKey(
-  value: { protocol?: (typeof AI_PROVIDER_PROTOCOLS)[number]; apiKey?: string },
+  value: { protocol?: (typeof AI_PROVIDER_PROTOCOLS)[number]; baseUrl?: string; apiKey?: string },
   ctx: z.RefinementCtx
 ): void {
+  if (value.protocol === "google-vertex" && value.baseUrl && !isOfficialGoogleVertexBaseUrl(value.baseUrl)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["baseUrl"],
+      message: "Google Vertex 接口地址必须使用官方 aiplatform.googleapis.com 或 *-aiplatform.googleapis.com 域名"
+    });
+  }
   if (!value.apiKey) return;
   const protocol = value.protocol ?? "openai-chat-completions";
   if (protocol === "google-vertex") {

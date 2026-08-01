@@ -32,6 +32,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import {
+  assertOfficialGoogleVertexBaseUrl,
   fetchGoogleOAuthAccessToken,
   GoogleVertexTokenCache,
   maskServiceAccountHint,
@@ -2335,8 +2336,9 @@ export class AiManager {
   }
 
   private async resolveProviderAccessToken(row: ProviderRow): Promise<{ accessToken: string; credentialSecret: string }> {
-    const credentialSecret = this.decryptKey(row);
     const protocol = providerProtocol(row);
+    if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(stringValue(row, "base_url"));
+    const credentialSecret = this.decryptKey(row);
     if (protocol !== "google-vertex") {
       return { accessToken: credentialSecret, credentialSecret };
     }
@@ -2382,6 +2384,7 @@ export class AiManager {
     const timestamp = now();
     const protocol = input.protocol ?? "openai-chat-completions";
     const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
+    if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
        connection_status, concurrency_limit, rpm_limit, note, created_at, updated_at)
@@ -2422,6 +2425,9 @@ export class AiManager {
 
   updateProvider(providerId: string, input: Partial<ProviderInput>): Record<string, unknown> {
     const row = this.getProviderRow(providerId);
+    const nextProtocol = input.protocol ?? providerProtocol(row);
+    const nextBaseUrl = input.baseUrl ? normalizeProviderBaseUrl(input.baseUrl) : stringValue(row, "base_url");
+    if (nextProtocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(nextBaseUrl);
     let encryptedKey = stringValue(row, "encrypted_key");
     let keyIv = stringValue(row, "key_iv");
     let keyTag = stringValue(row, "key_tag");
@@ -2432,7 +2438,6 @@ export class AiManager {
       encryptedKey = encrypted.encrypted;
       keyIv = encrypted.iv;
       keyTag = encrypted.tag;
-      const nextProtocol = input.protocol ?? providerProtocol(row);
       keyHint = providerCredentialHint(nextProtocol, input.apiKey);
       connectionStatus = "unchecked";
       this.vertexTokenCache.clear(providerId);
@@ -2446,8 +2451,8 @@ export class AiManager {
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
        status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
-      input.baseUrl ? normalizeProviderBaseUrl(input.baseUrl) : stringValue(row, "base_url"),
-      input.protocol ?? providerProtocol(row),
+      nextBaseUrl,
+      nextProtocol,
       encryptedKey,
       keyIv,
       keyTag,
