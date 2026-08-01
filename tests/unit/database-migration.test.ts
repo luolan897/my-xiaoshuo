@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 64 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 65 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -121,6 +121,7 @@ describe("数据库版本化迁移", () => {
       "cache_usage_available",
       "token_usage_source"
     ]));
+    expect(first.all("PRAGMA table_info(work_ai_settings)").some((column) => column.name === "daily_token_quota")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_call_traces)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["call_id", "task_id", "initial_messages_json", "rounds_json", "source_refs_json", "created_at", "updated_at"])
     );

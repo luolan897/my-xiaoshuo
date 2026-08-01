@@ -46,6 +46,10 @@ describe("AI Token 用量统计 API", () => {
     insertCall("call-1", String(firstWork.id), 100, 20, 40, 100, "reported", "2026-07-26T16:30:00.000Z");
     insertCall("call-2", String(firstWork.id), 30, 10, 0, 0, "estimated", "2026-07-27T05:00:00.000Z");
     insertCall("call-3", String(secondWork.id), 200, 50, 100, 200, "reported", "2026-07-27T08:00:00.000Z");
+    await request(runtime.app)
+      .patch(`/api/works/${firstWork.id}/ai-settings`)
+      .send({ dailyTokenQuota: 10_000 })
+      .expect(200);
 
     const platform = await request(runtime.app)
       .get("/api/platform/ai/usage?timezoneOffset=480")
@@ -80,6 +84,13 @@ describe("AI Token 用量统计 API", () => {
       estimatedRequestCount: 1
     });
     expect(work.body.data).not.toHaveProperty("works");
+    expect(work.body.data.quota).toMatchObject({
+      dailyTokenQuota: 10_000,
+      usedTokens: 0,
+      remainingTokens: 10_000,
+      reached: false,
+      timezone: "UTC"
+    });
   });
 
   it("拒绝越界时区偏移", async () => {

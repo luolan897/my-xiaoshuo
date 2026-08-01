@@ -320,11 +320,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260801-ai-global-limit-restart-v2');
-    expect(page.text).toContain('/styles.css?v=20260801-ai-global-limit-restart-v2');
+    expect(page.text).toContain('/app.js?v=20260801-daily-token-quota');
+    expect(page.text).toContain('/styles.css?v=20260801-daily-token-quota');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
+    expect(application.text).toContain('id="daily-token-quota" type="number" min="10000"');
+    expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');
     expect(application.text).toContain('/page-route.js?v=20260731-work-comments-v2');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');

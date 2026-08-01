@@ -1104,6 +1104,9 @@ export class Store {
     return {
       workId,
       systemPrompt: String(row?.system_prompt ?? ""),
+      dailyTokenQuota: row?.daily_token_quota === null || row?.daily_token_quota === undefined
+        ? null
+        : Math.max(10_000, Number(row.daily_token_quota)),
       autoRunEnabled: Number(row?.auto_run_enabled ?? 0) === 1,
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
@@ -1129,6 +1132,7 @@ export class Store {
 
   updateWorkAiSettings(workId: string, input: {
     systemPrompt?: string;
+    dailyTokenQuota?: number | null;
     autoRunEnabled?: boolean;
     autoRunConcurrency?: number;
     autoRunBatchLimit?: number;
@@ -1145,6 +1149,9 @@ export class Store {
     const current = this.getWorkAiSettings(workId);
     const timestamp = now();
     const nextPrompt = input.systemPrompt ?? String(current.systemPrompt);
+    const nextDailyTokenQuota = input.dailyTokenQuota === undefined
+      ? (current.dailyTokenQuota === null ? null : Number(current.dailyTokenQuota))
+      : input.dailyTokenQuota;
     const nextEnabled = input.autoRunEnabled ?? Boolean(current.autoRunEnabled);
     const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
@@ -1160,14 +1167,15 @@ export class Store {
       : input.titleGenerationModelId?.trim() || null;
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+         work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
          agent_tools_json, title_generation_model_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
+         daily_token_quota = excluded.daily_token_quota,
          auto_run_enabled = excluded.auto_run_enabled,
          auto_run_concurrency = excluded.auto_run_concurrency,
          auto_run_batch_limit = excluded.auto_run_batch_limit,
@@ -1186,6 +1194,7 @@ export class Store {
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
+      nextDailyTokenQuota,
       nextEnabled ? 1 : 0,
       Math.min(8, Math.max(1, nextConcurrency)),
       Math.min(200, Math.max(1, nextBatchLimit)),
@@ -1205,6 +1214,7 @@ export class Store {
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
       systemPromptChanged: input.systemPrompt !== undefined,
+      dailyTokenQuota: nextDailyTokenQuota,
       autoRunEnabled: nextEnabled,
       autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
