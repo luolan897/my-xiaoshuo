@@ -74,7 +74,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 67 }, (_, index) => ({ version: index + 1 })));
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: 70 }, (_, index) => ({ version: index + 1 })));
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at"]));
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -191,9 +191,13 @@ describe("数据库版本化迁移", () => {
         "context_warning_at",
         "agent_tools_json",
         "injected_entities_json",
-        "system_clock_text"
+        "system_clock_text",
+        "roleplay_character_id",
+        "task_type",
+        "context_scope_json"
       ])
     );
+    expect(first.all("PRAGMA index_list(ai_conversations)").some((index) => index.name === "idx_ai_conversations_roleplay_character")).toBe(true);
     expect(first.all("PRAGMA table_info(user_api_keys)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["user_id", "key_hash", "key_prefix", "created_at", "rotated_at", "last_used_at"])
     );
@@ -219,6 +223,14 @@ describe("数据库版本化迁移", () => {
       `INSERT INTO analysis_tasks (id, work_id, task_type, status, created_at, updated_at)
        VALUES ('task-running', 'work-old', 'book-analysis', 'running', '2025-01-01', '2025-01-01')`
     );
+    first.run(
+      `INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, context_scope_json, title, created_at, updated_at)
+       VALUES ('conversation-chat-old', 'work-old', NULL, NULL, NULL, '旧问答', '2025-01-01', '2025-01-01'),
+              ('conversation-roleplay-old', 'work-old', 'character-a', NULL, NULL, '旧角色扮演', '2025-01-01', '2025-01-01')`
+    );
+    first.run("DELETE FROM schema_migrations WHERE version = 68");
+    first.run("DELETE FROM schema_migrations WHERE version = 69");
+    first.run("DELETE FROM schema_migrations WHERE version = 70");
     first.close();
 
     const second = new Database(filename);
@@ -227,6 +239,10 @@ describe("数据库版本化迁移", () => {
     expect(second.get("SELECT COUNT(*) AS count FROM races")?.count).toBe(1);
     expect(second.get("SELECT status FROM ai_calls WHERE id = 'call-running'")?.status).toBe("failed");
     expect(second.get("SELECT status FROM analysis_tasks WHERE id = 'task-running'")?.status).toBe("partial");
+    expect(second.all("SELECT id, task_type, context_scope_json FROM ai_conversations ORDER BY id")).toEqual([
+      { id: "conversation-chat-old", task_type: "chat", context_scope_json: '{"type":"none"}' },
+      { id: "conversation-roleplay-old", task_type: "roleplay", context_scope_json: '{"type":"none"}' }
+    ]);
     second.close();
   });
 

@@ -1116,6 +1116,184 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(generationToolSnapshots[0]).toContain("story_index");
   });
 
+  it("角色扮演对话只提供自身回忆工具并持久化角色卡", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const role = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "林舟",
+      profile: { summary: "北港领航员" },
+      currentState: { location: "北港" }
+    }).expect(201);
+    await request(runtime.app).post(`/api/characters/${role.body.data.id}/sections`).send({
+      sectionType: "background",
+      title: "旧日记忆",
+      contentMarkdown: "林舟记得十二岁那年第一次看见星舰。",
+      summary: "第一次看见星舰"
+    }).expect(201);
+    const otherRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "顾潮",
+      profile: { secret: "这段其他角色的私密档案不得被读取" }
+    }).expect(201);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
+      content: "林舟启动了飞船。\n\n顾潮独自藏起了只有自己知道的密钥。"
+    }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const roleplay = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: role.body.data.id
+    }).expect(200);
+    expect(roleplay.body.data.taskType).toBe("roleplay");
+    expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
+    const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
+    const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: foreignCharacter.body.data.id
+    }).expect(400);
+    expect(mismatch.body.error.code).toBe("ROLEPLAY_CHARACTER_WORK_MISMATCH");
+
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role?: string; content?: string }>;
+        tools?: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }>;
+      };
+      expect(body.messages[0]?.content).toContain("你现在扮演角色“林舟”");
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self"]);
+      expect(JSON.stringify(body.tools)).not.toContain("characterId");
+      if (completionCount === 1) {
+        expect(JSON.stringify(body.messages)).not.toContain("顾潮独自藏起");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
+          { id: "self-memory", type: "function", function: { name: "recall_self", arguments: JSON.stringify({ categories: ["profile", "sections", "chapters"] }) } },
+          { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } }
+        ] } }] }), { status: 200 });
+      }
+      const toolMessages = body.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
+      expect(toolMessages[0]).toContain("北港领航员");
+      expect(toolMessages[0]).toContain("第一次看见星舰");
+      expect(toolMessages[0]).toContain("林舟启动了飞船");
+      expect(toolMessages[0]).not.toContain("其他角色的私密档案");
+      expect(toolMessages[0]).not.toContain("只有自己知道的密钥");
+      expect(toolMessages[1]).toContain("TOOL_NOT_AVAILABLE");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "我记得第一次看见星舰，也记得自己在北港启动了飞船。" } }] }), { status: 200 });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "你记得什么？",
+      scope: { type: "book" },
+      modelId,
+      conversationId: conversation.body.data.id
+    }).expect(200);
+    expect(streamed.text).toContain('"name":"recall_self"');
+    expect(streamed.text).toContain('"name":"story_index"');
+    expect(streamed.text).toContain('"status":"failed"');
+    expect(streamed.text).toContain("我记得第一次看见星舰");
+
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    expect(reloaded.body.data.taskType).toBe("roleplay");
+    expect(reloaded.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
+      messageId: reloaded.body.data.messages.at(-1).id
+    }).expect(201);
+    expect(forked.body.data.taskType).toBe("roleplay");
+    expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    const lockedRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: otherRole.body.data.id
+    }).expect(409);
+    expect(lockedRole.body.error.code).toBe("ROLEPLAY_CHARACTER_LOCKED");
+    const exitLockedRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
+      characterId: null
+    }).expect(409);
+    expect(exitLockedRole.body.error.code).toBe("ROLEPLAY_CHARACTER_LOCKED");
+
+    const ordinaryConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${ordinaryConversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "普通问答已经开始"
+    }).expect(201);
+    const started = await request(runtime.app).patch(`/api/ai-conversations/${ordinaryConversation.body.data.id}/roleplay`).send({
+      characterId: role.body.data.id
+    }).expect(409);
+    expect(started.body.error.code).toBe("ROLEPLAY_CONVERSATION_STARTED");
+  });
+
+  it("对话开始后锁定问答、角色扮演、续写和润色任务类型", async () => {
+    const taskTypes = ["chat", "roleplay", "continue", "polish"] as const;
+    const draftConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+      taskType: "chat"
+    }).expect(201);
+    for (const taskType of taskTypes) {
+      const changed = await request(runtime.app).patch(`/api/ai-conversations/${draftConversation.body.data.id}/task-type`).send({
+        taskType
+      }).expect(200);
+      expect(changed.body.data.taskType).toBe(taskType);
+    }
+
+    for (const initialTaskType of taskTypes) {
+      const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+        taskType: initialTaskType
+      }).expect(201);
+      await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
+        role: "user",
+        content: `已开始 ${initialTaskType} 对话`
+      }).expect(201);
+      const unchanged = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/task-type`).send({
+        taskType: initialTaskType
+      }).expect(200);
+      expect(unchanged.body.data.taskType).toBe(initialTaskType);
+      for (const nextTaskType of taskTypes.filter((taskType) => taskType !== initialTaskType)) {
+        const locked = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/task-type`).send({
+          taskType: nextTaskType
+        }).expect(409);
+        expect(locked.body.error.code).toBe("AI_CONVERSATION_TASK_LOCKED");
+      }
+    }
+
+    await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "analysis" }).expect(400);
+  });
+
+  it("对话开始后锁定实际上下文引用并在分支中保留", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+      taskType: "chat"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/context-scope`).send({
+      scope: { type: "book" }
+    }).expect(200);
+    const selected = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/context-scope`).send({
+      scope: { type: "chapter", chapterId, includeBookSummary: true }
+    }).expect(200);
+    expect(selected.body.data.contextScope).toEqual({ type: "chapter", chapterId, includeBookSummary: true });
+    const message = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "已开始固定章节上下文的对话"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/context-scope`).send({
+      scope: { type: "chapter", chapterId, includeBookSummary: true }
+    }).expect(200);
+    const locked = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/context-scope`).send({
+      scope: { type: "book" }
+    }).expect(409);
+    expect(locked.body.error.code).toBe("AI_CONVERSATION_CONTEXT_LOCKED");
+
+    const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
+      messageId: message.body.data.id
+    }).expect(201);
+    expect(forked.body.data.contextScope).toEqual({ type: "chapter", chapterId, includeBookSummary: true });
+
+    const otherWork = await request(runtime.app).post("/api/works").send({ title: "上下文越界作品" }).expect(201);
+    const otherVolume = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/volumes`).send({ title: "越界卷" }).expect(201);
+    const otherChapter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/chapters`).send({
+      volumeId: otherVolume.body.data.id,
+      title: "越界章节",
+      content: "不得引用"
+    }).expect(201);
+    const draft = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${draft.body.data.id}/context-scope`).send({
+      scope: { type: "chapter", chapterId: otherChapter.body.data.id }
+    }).expect(400);
+    expect(mismatch.body.error.code).toBe("CHAPTER_WORK_MISMATCH");
+  });
+
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

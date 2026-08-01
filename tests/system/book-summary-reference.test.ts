@@ -28,7 +28,7 @@ describe("全书概要上下文引用", () => {
     expect(page.text).toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260801-ai-setting-context-google-vertex-typography-v1');
+    expect(page.text).toContain('/app.js?v=20260801-ai-roleplay-chat-merge-v1');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');
@@ -54,11 +54,11 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
     expect(application.text).toContain('const requiresChapter = taskType === "polish" || taskType === "continue" || (scopeType !== "none" && scopeType !== "settings-catalog");');
     expect(application.text).toContain('syncAiIncludeSettingInfoControl');
-    expect(application.text).toContain('scope.includeSettingInfo = $("#ai-include-setting-info").checked');
+    expect(application.text).toContain('conversationScope.includeSettingInfo = $("#ai-include-setting-info").checked');
     expect(application.text).toContain('if (!state.work) return toast("请先选择作品", "error");');
     expect(application.text).toContain('scopeType === "none" ? { type: "none"');
+    expect(application.text).toContain("if (includeBookSummary) conversationScope.includeBookSummary = true;");
     expect(application.text).toContain('scopeType === "settings-catalog" ? { type: "settings-catalog" }');
-    expect(application.text).toContain("if (includeBookSummary) scope.includeBookSummary = true;");
     expect(application.text).toContain('body.append("expectedVersionNo", String(state.work.versionNo));');
     expect(styles.text).not.toContain(".ai-book-summary-reference");
     expect(styles.text).toContain(".prompt-options .ai-include-setting-info");

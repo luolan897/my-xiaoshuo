@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 66;
+export const DATABASE_SCHEMA_VERSION = 70;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -502,6 +502,9 @@ export class Database {
       CREATE TABLE IF NOT EXISTS ai_conversations (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL,
+        task_type TEXT CHECK(task_type IN ('chat', 'roleplay', 'continue', 'polish')),
+        context_scope_json TEXT,
         title TEXT NOT NULL DEFAULT '新对话',
         compacted_summary TEXT NOT NULL DEFAULT '',
         compacted_message_count INTEGER NOT NULL DEFAULT 0,
@@ -2673,6 +2676,54 @@ export class Database {
           this.run("ALTER TABLE ai_conversations ADD COLUMN system_clock_text TEXT NOT NULL DEFAULT ''");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (67, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(68)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!columns.has("roleplay_character_id")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN roleplay_character_id TEXT REFERENCES characters(id) ON DELETE SET NULL");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_conversations_roleplay_character ON ai_conversations(roleplay_character_id)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (68, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(69)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!columns.has("task_type")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN task_type TEXT CHECK(task_type IN ('chat', 'roleplay', 'continue', 'polish'))");
+        }
+        this.run("UPDATE ai_conversations SET task_type = CASE WHEN roleplay_character_id IS NOT NULL THEN 'roleplay' ELSE 'chat' END WHERE task_type IS NULL");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (69, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(70)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!columns.has("context_scope_json")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN context_scope_json TEXT");
+        }
+        this.run("UPDATE ai_conversations SET context_scope_json = '{\"type\":\"none\"}' WHERE context_scope_json IS NULL");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (70, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

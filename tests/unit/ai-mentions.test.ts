@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildAiReferenceScope, listAiMentionOptions } from "../../src/public/ai-mentions.js";
+import { buildAiReferenceScope, listAiMentionOptions, mergeAiReferenceScope } from "../../src/public/ai-mentions.js";
 
 describe("AI @ 引用", () => {
   const characters = [{ id: "character-1", name: "哥斯拉" }];
@@ -21,5 +21,18 @@ describe("AI @ 引用", () => {
       { kind: "chapter", id: "chapter-1" },
       { kind: "character", id: "character-1" }
     ])).toEqual({ chapterIds: ["chapter-1"], characterIds: ["character-1"] });
+  });
+
+  it("将每轮新增引用合并到已锁定的基础上下文", () => {
+    expect(mergeAiReferenceScope({ type: "chapter", chapterId: "chapter-base", chapterIds: ["chapter-old"] }, [
+      { kind: "chapter", id: "chapter-old" },
+      { kind: "chapter", id: "chapter-new" },
+      { kind: "setting", id: "setting-1" }
+    ])).toEqual({
+      type: "chapter",
+      chapterId: "chapter-base",
+      chapterIds: ["chapter-old", "chapter-new"],
+      settingIds: ["setting-1"]
+    });
   });
 });

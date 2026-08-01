@@ -1015,6 +1015,10 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/(?:works\/[^/]+\/(?:tasks|ai-calls)|tasks\/[^/]+)(?:\/|$)/u.test(pathname)) {
     return write ? { write: ["ai-analysis"] } : { read: ["ai-analysis"] };
   }
+  const conversationRoleplayWrite = /^\/api\/ai-conversations\/[^/]+\/roleplay$/u.test(pathname);
+  if (write && conversationRoleplayWrite) {
+    return { read: ["characters"], write: ["ai-chat"] };
+  }
   const conversationHistoryWrite = /^\/api\/ai-conversations\/[^/]+\/(?:fork|context\/prepare|compact)$/u.test(pathname)
     || (/^\/api\/works\/[^/]+\/chat\/stream$/u.test(pathname) && typeof requestBodyRecord(request).conversationId === "string");
   if (write && conversationHistoryWrite) {
