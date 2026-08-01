@@ -146,10 +146,10 @@ describe("分析任务自动运行", () => {
       agentToolCallLimit: 0
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      agentToolCallGlobalMultiplier: 1
+      agentToolCallGlobalMultiplier: 0
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      agentToolCallGlobalMultiplier: 11
+      agentToolCallGlobalMultiplier: 7
     }).expect(400);
     const updated = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       bookSummaryContextPercent: 35,
@@ -161,6 +161,15 @@ describe("分析任务自动运行", () => {
     expect(updated.body.data.contextCompactThreshold).toBe(90);
     expect(updated.body.data.agentToolCallLimit).toBe(48);
     expect(updated.body.data.agentToolCallGlobalMultiplier).toBe(4);
+
+    const minimumMultiplier = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallGlobalMultiplier: 1
+    }).expect(200);
+    expect(minimumMultiplier.body.data.agentToolCallGlobalMultiplier).toBe(1);
+    const maximumMultiplier = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallGlobalMultiplier: 6
+    }).expect(200);
+    expect(maximumMultiplier.body.data.agentToolCallGlobalMultiplier).toBe(6);
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
     expect(tasks.body.data.items.length).toBeGreaterThanOrEqual(5);

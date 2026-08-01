@@ -3,8 +3,8 @@ export const MIN_AGENT_TOOL_CALL_LIMIT = 5;
 export const MAX_AGENT_TOOL_CALL_LIMIT = 48;
 export const AGENT_TOOL_CALL_SOFT_WARNING_FLOOR = 3;
 export const DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 3;
-export const MIN_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 2;
-export const MAX_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 10;
+export const MIN_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 1;
+export const MAX_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 6;
 
 export type AgentToolResultPagination = {
   cursor: number;

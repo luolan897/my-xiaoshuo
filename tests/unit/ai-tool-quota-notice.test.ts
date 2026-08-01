@@ -28,9 +28,10 @@ describe("AI 工具调用配额提醒", () => {
 
   it("全局上限默认按调用上限的 3 倍计算，且独立于 compact 重置", () => {
     expect(agentToolCallGlobalLimit(15, 3)).toBe(45);
-    expect(agentToolCallGlobalLimit(12, 3)).toBe(36);
-    expect(clampAgentToolCallGlobalMultiplier(1)).toBe(2);
-    expect(clampAgentToolCallGlobalMultiplier(11)).toBe(10);
+    expect(agentToolCallGlobalLimit(12, 1)).toBe(12);
+    expect(agentToolCallGlobalLimit(12, 6)).toBe(72);
+    expect(clampAgentToolCallGlobalMultiplier(0)).toBe(1);
+    expect(clampAgentToolCallGlobalMultiplier(7)).toBe(6);
     expect(shouldRejectGlobalToolCalls(44, 1, 45)).toBe(false);
     expect(shouldRejectGlobalToolCalls(45, 1, 45)).toBe(true);
     expect(shouldRejectGlobalToolCalls(43, 3, 45)).toBe(true);

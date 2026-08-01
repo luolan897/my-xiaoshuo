@@ -1116,7 +1116,7 @@ export class Store {
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
-      agentToolCallGlobalMultiplier: Math.min(10, Math.max(2, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
+      agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
         .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
         .filter((tool, index, tools) => tools.indexOf(tool) === index),
@@ -1198,7 +1198,7 @@ export class Store {
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
       Math.min(48, Math.max(5, nextAgentToolCallLimit)),
-      Math.min(10, Math.max(2, nextAgentToolCallGlobalMultiplier)),
+      Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
       timestamp
@@ -1213,7 +1213,7 @@ export class Store {
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
       agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
-      agentToolCallGlobalMultiplier: Math.min(10, Math.max(2, nextAgentToolCallGlobalMultiplier)),
+      agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
       titleGenerationModelId: nextTitleGenerationModelId
     });
