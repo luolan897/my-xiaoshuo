@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "*": false,
+      "main": true
+    }
+  },
   "framework": null,
   "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ./",
   "buildCommand": "npm run build:static",

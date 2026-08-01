@@ -183,6 +183,7 @@ test("两本预制作品都设置了项目内封面", async () => {
   assert.match(server, /demoCoverCacheControl/);
   assert.match(server, /isDemoCover/);
   assert.equal(demoCoverCacheControl(), "public, max-age=31536000, immutable");
+  assert.deepEqual(vercel.git?.deploymentEnabled, { "*": false, main: true });
   assert.equal(vercel.headers?.[0]?.source, "/demo-covers/(.*)");
   assert.equal(vercel.headers?.[0]?.headers?.[0]?.value, "public, max-age=31536000, immutable");
   assert.deepEqual(Object.keys(coverVersions).sort(), ["city-blank", "silent-tide"]);
