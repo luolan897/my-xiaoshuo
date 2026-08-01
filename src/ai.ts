@@ -607,7 +607,6 @@ export type AiProcessStep = {
   createdAt: string;
 };
 
-const MAX_AGENT_TOOL_ROUNDS = 6;
 const MAX_AGENT_TOOL_CALLS = 12;
 const MAX_CONFIGURED_AGENT_TOOL_CALLS = 48;
 const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
@@ -4265,18 +4264,8 @@ export class AiManager {
           await compactToolContext(currentRoundMessages, round);
         }
         toolRound += 1;
-        const forceFinalAnswer = toolRound >= MAX_AGENT_TOOL_ROUNDS;
-        if (forceFinalAnswer) {
-          completionMessages.push({
-            role: "user",
-            content: "工具调用阶段已经结束，不得再请求任何工具。请立即根据已有工具结果生成最终答案，并严格遵守最初用户消息要求的输出格式。"
-          });
-        }
-        payload = await requestCompletion(forceFinalAnswer ? "none" : "auto");
+        payload = await requestCompletion("auto");
         choice = payload.choices?.[0];
-        if (forceFinalAnswer && choice?.message?.tool_calls?.length) {
-          throw new Error(`AI returned tool calls after tool_choice was set to none at the ${MAX_AGENT_TOOL_ROUNDS}-round safety limit.`);
-        }
       }
       recordChoiceProcess(choice, toolRound + 1, false);
       const content = choice?.message?.content;
