@@ -1361,6 +1361,38 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(suggestions.body.data[0].content).toBe("安全前缀 sk-s*****lue 安全后缀");
   });
 
+  it("收到 OpenAI 流式 DONE 标记后不等待供应商关闭连接", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    let cancelled = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"已结束"},"finish_reason":"stop"}]}\n\n'));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+        },
+        cancel() {
+          cancelled = true;
+        }
+      });
+      return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "测试 DONE 结束标记",
+      scope: { type: "none" },
+      modelId
+    }).timeout({ deadline: 1_000 }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"已结束"}');
+    expect(streamed.text).toContain("event: complete");
+    expect(cancelled).toBe(true);
+  });
+
   it("首轮上下文超限时不请求模型并提示减少上下文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
