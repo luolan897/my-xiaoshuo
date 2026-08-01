@@ -1,4 +1,4 @@
-import { DRAFT_SETTING_MODULES, type DraftSettingModule, type ParsedNovel } from "./domain.js";
+import { DRAFT_SETTING_MODULES, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
@@ -6448,6 +6448,43 @@ export class Store {
     return this.getAiConversationSummary(conversationId);
   }
 
+  setAiConversationContextScope(conversationId: string, scope: ContextScope): Record<string, unknown> {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const workId = requiredString(conversation, "work_id");
+    const assertWork = (record: Record<string, unknown>, code: string, label: string): void => {
+      if (String(record.workId) !== workId) throw new AppError(400, code, `${label}不属于当前作品`);
+    };
+    if (scope.chapterId) assertWork(this.getChapter(scope.chapterId), "CHAPTER_WORK_MISMATCH", "章节");
+    if (scope.volumeId) assertWork(this.getVolume(scope.volumeId), "VOLUME_WORK_MISMATCH", "卷");
+    for (const chapterId of scope.chapterIds ?? []) assertWork(this.getChapter(chapterId), "CHAPTER_WORK_MISMATCH", "章节");
+    for (const characterId of scope.characterIds ?? []) assertWork(this.getCharacter(characterId), "CHARACTER_WORK_MISMATCH", "角色");
+    for (const settingId of scope.settingIds ?? []) assertWork(this.getSetting(settingId), "SETTING_WORK_MISMATCH", "设定");
+    const previousScope = json<ContextScope>(optionalString(conversation, "context_scope_json") ?? "", { type: "none" });
+    const serializedScope = JSON.stringify(scope);
+    if (JSON.stringify(previousScope) === serializedScope) return this.getAiConversationSummary(conversationId);
+    const messageCount = Number(this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
+      conversationId
+    )?.count ?? 0);
+    if (messageCount > 0) {
+      throw new AppError(409, "AI_CONVERSATION_CONTEXT_LOCKED", "对话开始后不能切换上下文引用");
+    }
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversations SET context_scope_json = ?, updated_at = ? WHERE id = ?",
+        serializedScope,
+        now(),
+        conversationId
+      );
+      this.audit(workId, "ai-conversation.context-scope-updated", "ai-conversation", conversationId, {
+        previousScope,
+        scope
+      });
+    });
+    return this.getAiConversationSummary(conversationId);
+  }
+
   addAiConversationMessage(conversationId: string, input: AiConversationMessageInput): Record<string, unknown> {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
@@ -6506,11 +6543,12 @@ export class Store {
     const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
         optionalString(conversation, "roleplay_character_id"),
         optionalString(conversation, "task_type"),
+        optionalString(conversation, "context_scope_json"),
         title.slice(0, 200),
         forkSummary,
         forkCompactedCount,
@@ -6551,6 +6589,7 @@ export class Store {
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
       taskType: optionalString(row, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat"),
+      contextScope: json<ContextScope>(optionalString(row, "context_scope_json") ?? "", { type: "none" }),
       roleplayCharacter: roleplayCharacter ? {
         id: requiredString(roleplayCharacter, "id"),
         name: requiredString(roleplayCharacter, "name"),

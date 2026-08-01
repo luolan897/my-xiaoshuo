@@ -1095,6 +1095,48 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "analysis" }).expect(400);
   });
 
+  it("对话开始后锁定实际上下文引用并在分支中保留", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+      taskType: "chat"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/context-scope`).send({
+      scope: { type: "book" }
+    }).expect(200);
+    const selected = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/context-scope`).send({
+      scope: { type: "chapter", chapterId, includeBookSummary: true }
+    }).expect(200);
+    expect(selected.body.data.contextScope).toEqual({ type: "chapter", chapterId, includeBookSummary: true });
+    const message = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "已开始固定章节上下文的对话"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/context-scope`).send({
+      scope: { type: "chapter", chapterId, includeBookSummary: true }
+    }).expect(200);
+    const locked = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/context-scope`).send({
+      scope: { type: "book" }
+    }).expect(409);
+    expect(locked.body.error.code).toBe("AI_CONVERSATION_CONTEXT_LOCKED");
+
+    const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
+      messageId: message.body.data.id
+    }).expect(201);
+    expect(forked.body.data.contextScope).toEqual({ type: "chapter", chapterId, includeBookSummary: true });
+
+    const otherWork = await request(runtime.app).post("/api/works").send({ title: "上下文越界作品" }).expect(201);
+    const otherVolume = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/volumes`).send({ title: "越界卷" }).expect(201);
+    const otherChapter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/chapters`).send({
+      volumeId: otherVolume.body.data.id,
+      title: "越界章节",
+      content: "不得引用"
+    }).expect(201);
+    const draft = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${draft.body.data.id}/context-scope`).send({
+      scope: { type: "chapter", chapterId: otherChapter.body.data.id }
+    }).expect(400);
+    expect(mismatch.body.error.code).toBe("CHAPTER_WORK_MISMATCH");
+  });
+
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

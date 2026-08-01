@@ -111,6 +111,7 @@ const state = {
   aiReferences: [],
   aiPromptSent: false,
   aiTaskType: "chat",
+  aiContextScope: { type: "none" },
   aiConversationId: null,
   aiConversations: [],
   aiRoleplayCharacter: null,
@@ -1800,6 +1801,7 @@ async function openAiConversation(conversationId, hideHistory = true) {
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
   applyAiConversationTaskType(conversation.taskType);
+  applyAiConversationContextScope(conversation.contextScope);
   applyAiRoleplayCharacter(conversation.roleplayCharacter);
   resetAiContextMeter();
   $("#ai-conversation-title").textContent = conversation.title;
@@ -1827,6 +1829,7 @@ async function createNewAiConversation(taskType = "chat") {
   state.aiConversationId = conversation.id;
   state.aiPromptSent = false;
   applyAiConversationTaskType(conversation.taskType);
+  applyAiConversationContextScope(conversation.contextScope);
   applyAiRoleplayCharacter(conversation.roleplayCharacter);
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
@@ -1871,8 +1874,10 @@ function syncAiTaskOptions() {
   $("#ai-roleplay-character").setAttribute("aria-hidden", String(!roleplaySelected));
   $("#ai-task").disabled = state.aiPromptSent;
   $("#ai-task").title = state.aiPromptSent ? "对话开始后不能切换任务类型" : "";
-  $("#ai-scope").disabled = roleplaySelected;
-  $("#ai-scope").title = roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
+  $("#ai-scope").disabled = roleplaySelected || state.aiPromptSent;
+  $("#ai-scope").title = state.aiPromptSent
+    ? "对话开始后不能切换上下文引用"
+    : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -1880,6 +1885,17 @@ function applyAiConversationTaskType(taskType) {
   state.aiTaskType = normalizedTaskType;
   $("#ai-task").value = normalizedTaskType;
   $("#ai-task").dataset.previousValue = normalizedTaskType;
+  syncAiTaskOptions();
+}
+
+function applyAiConversationContextScope(scope) {
+  const normalizedScope = scope && typeof scope === "object" ? JSON.parse(JSON.stringify(scope)) : { type: "none" };
+  state.aiContextScope = normalizedScope;
+  $("#ai-scope").value = normalizedScope.type === "book" ? "book"
+    : normalizedScope.type === "volume" ? "volume"
+    : normalizedScope.type === "chapter" && normalizedScope.includeBookSummary ? "chapter-summary"
+    : normalizedScope.type === "chapter" ? "chapter"
+    : "none";
   syncAiTaskOptions();
 }
 
@@ -1934,6 +1950,17 @@ async function persistAiConversationTaskType(taskType) {
   upsertAiConversationSummary(conversation);
   applyAiConversationTaskType(conversation.taskType);
   applyAiRoleplayCharacter(conversation.roleplayCharacter);
+  return conversation;
+}
+
+async function persistAiConversationContextScope(scope) {
+  const conversationId = await ensureAiConversation();
+  const conversation = await api(`/api/ai-conversations/${conversationId}/context-scope`, {
+    method: "PATCH",
+    body: { scope }
+  });
+  upsertAiConversationSummary(conversation);
+  applyAiConversationContextScope(conversation.contextScope);
   return conversation;
 }
 
@@ -2003,6 +2030,7 @@ function syncAiReferencesWithPrompt() {
 
 function updateAiMentionMenu() {
   syncAiReferencesWithPrompt();
+  if (state.aiPromptSent) return hideAiMentionMenu();
   const prompt = $("#ai-prompt");
   const match = findAiMention(aiPromptTextBeforeCursor());
   if (!match) return hideAiMentionMenu();
@@ -2023,6 +2051,7 @@ function updateAiMentionMenu() {
 }
 
 function selectAiMention(button) {
+  if (state.aiPromptSent) return toast("当前对话的上下文引用已锁定，请新建对话后再添加引用", "error");
   if (!aiMentionMatch || !aiMentionRange) return;
   const prompt = $("#ai-prompt");
   const reference = {
@@ -2055,6 +2084,7 @@ function selectAiMention(button) {
 
 function addSelectedLinesAsCitation() {
   if (!state.chapter || !chapterLineSelection) return;
+  if (state.aiPromptSent) return toast("当前对话的上下文引用已锁定，请新建对话后再引用正文", "error");
   const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
   const citation = {
     id: `${state.chapter.id}:${selection.safeStart}:${selection.safeEnd}`,
@@ -3926,6 +3956,7 @@ function resetWorkScopedUiCaches() {
   renderAiQuickActions();
   resetAiFeed();
   applyAiConversationTaskType("chat");
+  applyAiConversationContextScope({ type: "none" });
   applyAiRoleplayCharacter(null);
   $("#ai-conversation-title").textContent = "新对话";
   $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
@@ -7224,6 +7255,10 @@ function currentAiRequestScope() {
   const selectedTaskType = $("#ai-task").value;
   const roleplaySelected = selectedTaskType === "roleplay";
   const taskType = roleplaySelected ? "chat" : selectedTaskType;
+  if (state.aiPromptSent) {
+    const scope = JSON.parse(JSON.stringify(state.aiContextScope ?? { type: "none" }));
+    return { taskType, scope, selection: typeof scope.selection === "string" ? scope.selection : "" };
+  }
   const scopeType = roleplaySelected ? "none" : $("#ai-scope").value;
   const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";
   if (requiresChapter && !state.chapter) return null;
@@ -9681,8 +9716,9 @@ async function sendAi() {
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
   try {
     await persistAiConversationTaskType($("#ai-task").value);
+    await persistAiConversationContextScope(requestScope.scope);
   } catch (error) {
-    return toast(`任务类型锁定失败：${error.message}`, "error");
+    return toast(`对话配置锁定失败：${error.message}`, "error");
   }
   setAiAssistantStatus("ready");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
@@ -11253,7 +11289,14 @@ $("#ai-task").addEventListener("change", async (event) => {
   }
   setAiContextMeter(null);
 });
-$("#ai-scope").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-scope").addEventListener("change", (event) => {
+  if (state.aiPromptSent) {
+    applyAiConversationContextScope(state.aiContextScope);
+    return toast("当前对话已经开始，请新建对话后再切换上下文引用", "error");
+  }
+  event.currentTarget.title = "";
+  setAiContextMeter(null);
+});
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
