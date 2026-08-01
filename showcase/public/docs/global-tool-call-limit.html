@@ -328,6 +328,13 @@
       两项设置都在本书 AI 设置中独立保存，只影响当前作品，不会改动其他书的配额。
     </p>
 
+    <h2>和 Prompt Cache 的关系</h2>
+    <p>
+      调用上限与全局倍数<strong>不会</strong>改动 Agent 请求的 prompt cache 前缀：不增删工具定义、不调整工具顺序、不改
+      <code>tool_choice</code>，也不因剩余次数改写系统提示。配额提醒只写在当次工具结果（请求后缀）里；真正会重建 cache 的是工具上下文
+      <strong>Compact</strong>（压缩摘要插入消息序列后，后续前缀必然变化）。
+    </p>
+
     <h2>和「调用上限」提醒的关系</h2>
     <p>
       当前轮剩余次数进入软提醒区间时，工具结果会附带 <code>[warning]</code> / <code>[critical]</code> 提示，引导模型尽快总结。

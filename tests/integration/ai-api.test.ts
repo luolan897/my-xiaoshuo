@@ -916,32 +916,71 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("工具连续调用达到安全轮次后强制模型生成最终回答", async () => {
+  it("工具配额限制不改动 prompt cache 前缀的 tools 定义与系统消息", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    let completionCount = 0;
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 5,
+      agentToolCallGlobalMultiplier: 1
+    }).expect(200);
+
+    const generationToolSnapshots: string[] = [];
+    const generationSystemSnapshots: string[] = [];
+    const generationToolChoices: Array<string | undefined> = [];
+    let generationCount = 0;
     fetchMock.mockImplementation(async (input, init) => {
-      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
-      completionCount += 1;
-      const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }>; tools?: unknown[]; tool_choice?: string };
-      if (!body.tools) {
-        expect(body.tool_choice).toBeUndefined();
-        expect(body.messages?.at(-1)?.content).toContain("严格遵守最初用户消息要求的输出格式");
-        return new Response(JSON.stringify({ choices: [{ message: { content: "已基于六轮工具结果回答。" } }] }), { status: 200 });
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       }
-      return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: `round-${completionCount}`, type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as {
+        messages?: Array<{ role?: string; content?: string }>;
+        tools?: unknown[];
+        tool_choice?: string;
+      };
+      const isCompaction = body.messages?.[0]?.content?.includes("压缩已完成的 AI 工具调用上下文");
+      if (isCompaction) {
+        expect(body.tools).toBeUndefined();
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "压缩摘要仅用于测试。" } }]
+        }), { status: 200 });
+      }
+      generationCount += 1;
+      generationToolSnapshots.push(JSON.stringify(body.tools ?? null));
+      generationSystemSnapshots.push(JSON.stringify(
+        (body.messages ?? []).filter((message) => message.role === "system")
+      ));
+      generationToolChoices.push(body.tool_choice);
+      expect(body.tools?.length).toBeGreaterThan(0);
+      expect(body.tool_choice).toBe("auto");
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [{
+              id: `quota-round-${generationCount}`,
+              type: "function",
+              function: { name: "story_index", arguments: "{\"limit\":1}" }
+            }]
+          }
+        }]
+      }), { status: 200 });
     });
 
     const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
-      instruction: "反复检查后给出结论。",
+      instruction: "反复查询目录直到得出结论。",
       scope: { type: "chapter", chapterId },
       modelId
-    }).expect(201);
+    }).expect(502);
 
-    expect(response.body.data.content).toBe("已基于六轮工具结果回答。");
-    expect(response.body.data.toolCalls).toHaveLength(6);
-    expect(completionCount).toBe(7);
+    expect(response.body.error).toMatchObject({ code: "AI_CALL_FAILED", message: "AI 调用失败" });
+    const failureText = JSON.stringify(response.body.error);
+    expect(failureText).toMatch(/more than 5 tool calls|global tool call limit/iu);
+    expect(generationCount).toBeGreaterThan(1);
+    expect(new Set(generationToolSnapshots).size).toBe(1);
+    expect(new Set(generationSystemSnapshots).size).toBe(1);
+    expect(generationToolChoices.every((choice) => choice === "auto")).toBe(true);
+    expect(generationToolSnapshots[0]).toContain("story_index");
   });
 
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {

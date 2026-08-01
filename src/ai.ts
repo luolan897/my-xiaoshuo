@@ -4068,6 +4068,7 @@ export class AiManager {
       let toolCallQuotaUsed = 0;
       let globalToolCallUsed = 0;
       let toolContextCompactCount = 0;
+      // 配额与全局熔断只控制循环是否继续，不得改写 tools 定义、tool_choice 或系统前缀（否则破坏 prompt cache）。
       const compactToolContext = async (additionalMessages: CompletionMessage[] = [], round = 1): Promise<void> => {
         const existingToolContext = completionMessages.slice(toolContextStartIndex);
         const sourceMessages = [
